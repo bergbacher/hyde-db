@@ -5,8 +5,9 @@ node_modules/
 dist/
 *.tsbuildinfo
 
-# Packed tarballs (npm pack / pnpm pack, used by the end-to-end tests)
+# Packed tarballs (npm pack / pnpm pack) and the end-to-end staging directory
 *.tgz
+.e2e/
 
 # Test and coverage output
 coverage/
