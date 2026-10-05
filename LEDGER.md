@@ -1,0 +1,105 @@
+# Ledger
+
+Single source of truth for the product in this repository. Every non-fact is marked: **A** assumption, **D** decision, **C** constraint, **Q** open question. Records are never deleted; they change state. Documents (specs, README) are views generated from this file.
+
+**Intent:** A production-ready npm package, built test-first from `prisma-ai-views` 0.1.0, that lets AI tools query a Prisma-managed PostgreSQL database while exposing only the columns that annotations in the Prisma schema allow. — by: Rubens
+
+## Records
+
+| ID | Statement | State | Basis | By |
+|---|---|---|---|---|
+| A1 | Base apply SQL runs `DROP SCHEMA IF EXISTS <schema> CASCADE` without checking that the generator created the schema. | verified | source: base `src/core.js:223` | Claude |
+| A2 | `ai_reader` can override its role-level `default_transaction_read_only` and `statement_timeout` with `SET`. | open | source: PostgreSQL docs; unverified here | Claude |
+| A3 | `ai_reader` can execute functions in `public`, including `SECURITY DEFINER` ones, through PUBLIC's default `USAGE` and `EXECUTE` grants. | open | source: PostgreSQL defaults; unverified here | Claude |
+| A4 | Base leak check covers tables, partitioned tables, views, materialized views and foreign tables; not sequences or functions. | verified | source: base `src/core.js:261` | Claude |
+| A5 | Base sensitive-name pattern matches inside unrelated names: `isPrivate` (vat), `footprint` (otp), `passenger` (pass), `discarded` (card), `flat` (lat). | verified | source: base `src/core.js:24`, run 2026-10-05 | Claude |
+| A6 | Base tests check one example schema without a database; `@prisma/prisma-schema-wasm` is unpinned (`*`). | verified | source: base `test/run.js`, `package.json` | Claude |
+| A7 | npm names `hyde-db` and `prisma-ai-views` are unclaimed. | verified | source: npm registry, 2026-10-05 | Claude |
+| A8 | Prisma's npm `latest` tag is 8.0.0-rc.20; `prev` is 7.10.0. | verified | source: npm registry, 2026-10-05 | Claude |
+| A9 | PGlite does not fully reproduce PostgreSQL roles and privileges. | open | source: none | Claude |
+| A10 | The generator protocol and DMMF shape the package uses are compatible across Prisma 6, 7 and 8. | falsified | source: none; falsified for Prisma 8 by A18; holds for 6 and 7 (A19) | Claude |
+| A11 | PostgreSQL 14–18 are the maintained majors. | verified | source: Docker Hub `postgres` tags, 2026-10-05 | Claude |
+| A12 | CommonJS code on Node ≥20.19 can `require()` an ESM-only package. | open | source: Node.js release notes; unverified here | Claude |
+| A13 | Base checks the AI schema name only against `sourceSchema`, not against models' `@@schema` values; a multi-schema model living in `ai` would be dropped by apply. | verified | source: base `src/core.js:82,113,223` | Claude |
+| A14 | `ai_reader` can connect to other databases in the same cluster through PUBLIC's default `CONNECT` privilege, where the leak check does not run. | open | source: PostgreSQL defaults; unverified here | Claude |
+| A15 | On PostgreSQL ≤14, and on clusters upgraded from it, PUBLIC holds `CREATE` on schema `public`. | open | source: PostgreSQL 15 release notes; unverified here | Claude |
+| A16 | Base treats any `strict` value other than `true`/`"true"` as `false`, keeps unknown config keys without complaint, and throws on the first invalid config value. | verified | source: base `src/core.js:35-55` | Claude |
+| A17 | Base silently ignores `@ai.visible` on `Unsupported` fields. | verified | source: base `src/core.js:131` | Claude |
+| A18 | Prisma 8.0.0-rc.20 is a new CLI with no `generate` command and no generator protocol; Prisma's docs: "In Prisma 8, there is no code generation step". | verified | source: npm `prisma@8.0.0-rc.20` metadata; prisma/orm `docs/reference/community-generator-migration-analysis.md`; run 2026-10-05 | Claude |
+| A19 | Prisma 6.19.3 and 7.10.0 use the same generator protocol (requests on stdin, responses on stderr, one JSON object per line) and the same DMMF datamodel shape; a dependency-free implementation of the protocol runs under both. | verified | source: prisma/orm tags 6.19.3 and 7.10.0 (`generatorHandler.ts`, `GeneratorProcess.ts`, `dmmf.ts`); end-to-end run 2026-10-05 | Claude |
+| A20 | Prisma passes a generator's stdout to the terminal; non-JSON stderr lines appear only when the generator exits non-zero; a JSON-RPC error shows only its message. | verified | source: `GeneratorProcess.ts`; end-to-end run 2026-10-05 | Claude |
+| A21 | DMMF omits `@ignore` fields, `@@ignore` models and every `Unsupported(...)` field; `view` blocks appear in `models` with no distinguishing flag. | verified | source: prisma-engines `datamodel_ast_builder.rs`; runtime check 2026-10-05 | Claude |
+| A22 | Generator config values arrive as strings or nested string arrays; `env("X")` arrives as the literal `"X"`. | verified | source: `packages/generator/src/configuration.ts`; end-to-end run 2026-10-05 | Claude |
+| A23 | `@prisma/generator-helper` is CommonJS-only (an ESM named import fails on Node 22.21) and pins `@prisma/debug`, `@prisma/dmmf` and `@prisma/generator` to its exact version. | verified | source: npm tarball 7.10.0; runtime check 2026-10-05 | Claude |
+| A24 | `engines.node`: Prisma 6.19.3 `>=18.18`; Prisma 7.10.0 `^20.19 \|\| ^22.12 \|\| >=24.0`; Prisma 8.0.0-rc.20 `>=22.18.0`. | verified | source: npm registry, 2026-10-05 | Claude |
+| A25 | TypeScript 7.0 ships no JavaScript compiler API; with `isolatedDeclarations` on, tsdown emits declarations through oxc without TypeScript 7 warnings. | verified | source: `typescript@7.0.2` tarball; TypeScript 7.0 announcement (2026-07-08); experiment 2026-10-05 | Claude |
+| A26 | Vitest 5 needs Node `^22.12 \|\| ^24 \|\| >=26`; testcontainers 12.2 declares Node ≥22.22; tsdown 0.23 declares `^22.18 \|\| ^24.11 \|\| >=26`. | verified | source: npm metadata; experiment 2026-10-05 | Claude |
+| A27 | npm trusted publishing needs npm ≥11.5.1 (Node 24 bundles 11.19, Node 22 bundles 10.9), adds provenance automatically, and cannot perform a package's first publish. | verified | source: docs.npmjs.com/trusted-publishers; npm 11.21 `npm-trust.md`; GitHub changelog 2025-07-31 | Claude |
+| A28 | Without Docker, Testcontainers throws "Could not find a working container runtime strategy" within milliseconds and Vitest exits 1. | verified | source: experiment 2026-10-05 | Claude |
+| A29 | node-postgres runs multi-statement scripts (DO blocks, BEGIN/COMMIT) through the simple protocol and exposes SQLSTATE as `err.code`; postgres.js needs `max: 1` for a raw `BEGIN`. | verified | source: experiment on PostgreSQL 14 and 18, 2026-10-05 | Claude |
+| A30 | `prisma db execute --file` runs the generated apply script unchanged under Prisma 6 and 7. | open | source: none; the end-to-end layer tests it | Claude |
+| D1 | Security claims are proven by integration tests that apply the generated SQL to a real PostgreSQL and query as `ai_reader`. | active | reason: A2, A3, A9; chosen over PGlite and unit-only tests; answers part of Q1 | Rubens |
+| D2 | The package supports Prisma 6, 7 and 8; CI runs the test suite against each major. | superseded by D30 | reason: covers Prisma 6 users and the upcoming 8 (A8); relies on A10; answers Q3 | Rubens |
+| D3 | The package is published on npm as `hyde-db`; the generator block reads `provider = "hyde-db"`. | active | reason: matches the repository name and works as a brand; chosen over `prisma-ai-views` and a scoped name; A7; answers Q2 | Rubens |
+| D4 | The first release keeps the base feature set and only hardens it; row filtering, Prisma `view` blocks and non-PostgreSQL databases stay out of scope. | superseded by D34 | reason: the base feature set meets the Intent; additions widen the attack surface (row filters take SQL input); answers Q4 | Rubens |
+| D5 | Strict TypeScript, ESM-only. The core is split into single-purpose pure modules; the generator entry is the only module with I/O. | active | reason: typed public API; small units can each be built test-first; ESM-only reaches CommonJS users via A12; chosen over JS+JSDoc and dual ESM/CJS | Rubens |
+| D6 | Before the rewrite, characterization tests pin the base's output for its example schema; that output changes only where a D record requires it. | active | reason: catches regressions introduced by the rewrite (D5) | Rubens |
+| D7 | The core reads Prisma's datamodel through its own minimal `Datamodel` type and imports no Prisma types; differences between Prisma majors are absorbed in one adapter. | active | reason: D30; one place to add a contract-IR adapter if Q5 is answered yes (re-gated 2026-10-05; earlier basis A10, D2) | Rubens |
+| D8 | Errors and warnings are structured diagnostics `{ code, severity, location, message }` with stable codes. Any error fails `prisma generate`; warnings go to stderr. | superseded by D33 | reason: tests and users match on codes, not message text | Rubens |
+| D9 | The public API is `build`, `analyze` and their types; all other modules are internal. | active | reason: semver then covers only what is exported | Rubens |
+| D10 | The `@ai.*` annotation names, config keys, defaults (`ai` schema, `ai_reader` role, `15s` timeout) and the three output files stay as in the base; only branding changes to `hyde-db`. | superseded by D17 | reason: D3, D4 | Rubens |
+| D11 | The apply and drop scripts refuse to drop an existing AI schema whose comment lacks the `Generated by hyde-db` marker. | active | reason: A1 | Rubens |
+| D12 | `prisma generate` fails when the AI schema name equals `sourceSchema` or any model's `@@schema`. | active | reason: A13 | Rubens |
+| D13 | The apply script's final check also aborts when `ai_reader` can execute a `SECURITY DEFINER` function in a reachable non-system schema, or read a sequence; the error names each object and the `REVOKE` that fixes it. | active | reason: A3, A4 | Rubens |
+| D14 | Docs state that the role-level read-only and timeout settings are session defaults; the privilege setup is the guarantee. | active | reason: A2 | Rubens |
+| D15 | Docs give the `REVOKE CONNECT … FROM PUBLIC` step for other databases in the cluster. | active | reason: A14; the apply script cannot see other databases | Rubens |
+| D16 | The sensitive-name lint splits names into words. Long unambiguous stems match anywhere; short terms match only whole words, plurals included. Accepted trade-off: an all-lowercase run-together name like `billingzip` misses short terms. | active | reason: A5 | Rubens |
+| D17 | The `@ai.*` annotation names, config keys, defaults (`ai` schema, `ai_reader` role, `15s` timeout) and the three output files stay as in the base, except that `strict` defaults to `true`; branding changes to `hyde-db`. | active | reason: D3, D4; strict default removes D16's trade-off for default users; no published users depend on the old default; supersedes D10 | Rubens |
+| D18 | Claude decides open product questions and researches the big uncertain ones; robustness and developer UX take priority. | active | basis: owner instruction, 2026-10-05 | Rubens |
+| D19 | Every test that verifies a ledger record names its ID; its result moves that record to verified or falsified. | active | reason: keeps tests and ledger traceable to each other; D18 | Claude |
+| D20 | Five test layers: unit; characterization (D6); DMMF contract per Prisma major (A19, D30); attack suite on a real PostgreSQL (D1); end-to-end with the packed tarball under real `prisma generate` per major, plus a CommonJS `require` check (A19, A12). | active | reason: each layer proves a claim the others cannot; D18 (re-gated 2026-10-05; earlier links A10) | Claude |
+| D21 | CI runs the attack suite on PostgreSQL 14 and 18. | active | reason: oldest and newest maintained majors (A11); 14 still carries A15 | Claude |
+| D22 | `test:integration` fails, and never skips, when Docker is unavailable. | active | reason: a skipped security suite looks the same as a passing one; D18 | Claude |
+| D23 | Coverage gate: ≥95% of lines and branches in `src/`; the generator entry is excluded because the end-to-end layer covers it. | active | reason: untested rule branches are where leaks hide; 100% would force tests for unreachable defensive code; D18 | Claude |
+| D24 | The apply script's final check aborts when `ai_reader` can create objects in any schema; the error gives `REVOKE CREATE ON SCHEMA … FROM PUBLIC`. | active | reason: A15; an object `ai_reader` creates in a schema on a privileged user's `search_path` can hijack that user's calls (CVE-2018-1058); D18 | Claude |
+| D25 | Unknown config keys, invalid config values (including `strict`) and unknown annotations are errors; each names the closest valid spelling when one is within edit distance 2. | active | reason: A16; a typo must fail loudly, not silently weaken protection; D18 | Claude |
+| D26 | Every error diagnostic carries a fix hint naming the annotation or config change that resolves it. | active | reason: D18 | Claude |
+| D27 | `@ai.visible` on an `Unsupported` field is a warning stating that the column is never exposed. | reversed | reason: A17; reversed 2026-10-05 because A21: such fields never reach the generator | Claude |
+| D28 | On success the generator prints one line: view count, visible and hidden column counts, output path. | active | reason: D18; the hidden count shows what is withheld | Claude |
+| D29 | Config problems are diagnostics like all others, and one run reports every diagnostic. | active | reason: A16, D8; users fix everything in one pass; D18 | Claude |
+| D30 | The package supports the Prisma 6 and 7 CLIs; CI runs the test suite against each. | active | reason: A18 falsifies A10 for Prisma 8; A19; supersedes D2 | Claude |
+| D31 | `engines.node` is `^20.19 \|\| ^22.12 \|\| >=24`. | active | reason: matches Prisma 7 (A24); every range in it supports `require()` of ESM (A12) | Claude |
+| D32 | The generator implements Prisma's line-delimited JSON-RPC protocol itself; the package has no runtime dependencies. | active | reason: A19, A23; D18 | Claude |
+| D33 | Errors and warnings are structured diagnostics `{ code, severity, location, message }` with stable codes. Any error fails `prisma generate` with an error message listing every diagnostic; warnings and the success line go to stdout. | active | reason: tests and users match on codes, not message text; A20 (stderr is hidden on success); supersedes D8 | Claude |
+| D34 | The first release keeps the base feature set and only hardens it; row filtering and non-PostgreSQL databases stay out of scope. Prisma `view` blocks get no dedicated handling and are processed as models. | active | reason: D4's reasons; A21; supersedes D4 | Claude |
+| D35 | Docs state that `env()` is not supported in the generator block. | active | reason: A22 | Claude |
+| D36 | Toolchain: pnpm 10; TypeScript ~7.0 with `isolatedDeclarations` (`tsc` type-checks, tsdown/oxc emits declarations); tsdown ~0.23 with its built-in publint and attw (ESM-only profile); Vitest 5 for unit, characterization, contract and integration tests; Biome 2.5; `pg` in tests. | active | reason: A25, A29; the combination ran together in experiments 2026-10-05 | Claude |
+| D37 | CI runs on Node 24; local development needs Node ≥22.22. The end-to-end layer uses `node:test`, so it can run the built package on Node 20. | active | reason: A26; A27 (Node 24's npm can use trusted publishing); D31 must be tested on its lowest range | Claude |
+| D38 | CI runs on every push and pull request: lint and format, type check, build with publint and attw, unit/characterization/contract tests with coverage on Node 22 and 24, the attack suite on PostgreSQL 14 and 18, and end-to-end runs on Prisma 6 and 7 under Node 20 and 24. Every job is required. | active | reason: D20–D23, D30, D31, D37 | Claude |
+| D39 | Releases use Changesets: each user-facing change adds a changeset; the release workflow opens a version pull request and, on merge, publishes from CI through npm trusted publishing with provenance. The owner publishes the first version by hand, then configures the trusted publisher. | active | reason: A27; no long-lived npm token exists to leak | Claude |
+| D40 | The first release is 1.0.0. | active | reason: the Intent asks for production readiness; the public API is small and fixed (D9) | Claude |
+| D41 | Vulnerabilities are reported through GitHub private vulnerability reporting; `SECURITY.md` says so. | active | reason: a tool that guards data access needs a private disclosure path | Claude |
+| D42 | Dependabot opens weekly update pull requests for npm and GitHub Actions dependencies. | active | reason: keeps the toolchain patched; D18 | Claude |
+| D43 | The attack suite applies the generated scripts with `psql -v ON_ERROR_STOP=1` inside the database container; the end-to-end layer applies them with `prisma db execute --file`. | active | reason: proves the deploy commands the docs give; A30; D18 | Claude |
+| D44 | The package counts as production-ready when every D38 job passes on the release commit and the release is published per D39. | active | reason: D38 and D39 cover every claim the docs make; answers Q1 | Claude |
+| D45 | Core modules: config validation, annotation parsing, sensitive-name lint, analysis rules, SQL quoting, three renderers (apply SQL, drop SQL, Markdown) and `build`; the generator entry wraps them with the protocol and file output. | active | reason: D5; each module holds one concern the base mixed in `src/core.js`; recorded 2026-10-05 from the design section 1 that Rubens approved | Rubens |
+| Q1 | What must hold for the package to count as production-ready? | answered | owner: Rubens (delegated, D18); Intent; answer: D44 | Claude |
+| Q2 | Is the package published as `hyde-db`, `prisma-ai-views`, or a scoped name? | answered | owner: Rubens; A7; answer: D3 | Claude |
+| Q3 | Which Prisma major versions does the package support? | answered | owner: Rubens; A8; answer: D2, superseded by D30 | Claude |
+| Q4 | Does the first release add features beyond the base, or only harden it? | answered | owner: Rubens; Intent; answer: D4, superseded by D34 | Claude |
+| Q5 | Should hyde-db read Prisma 8's contract IR natively? | open | owner: Claude (D18); A18, D34; depends on Prisma 8 reaching GA and on whether the contract IR carries `///` documentation | Claude |
+
+## Trace
+
+- 2026-10-05 — Ledger created in the repository. Recorded A1–A9, Q1–Q3 (by: Claude); Intent, D1 (by: Rubens).
+- 2026-10-05 — Q3 answered by D2 (by: Rubens). Added A10 (by: Claude). Affected: D2.
+- 2026-10-05 — Q2 answered by D3 (by: Rubens). Affected: none. Added Q4 (by: Claude).
+- 2026-10-05 — Q4 answered by D4 (by: Rubens). Affected: none.
+- 2026-10-05 — Added D5, D6 (by: Rubens); A11, A12 (by: Claude).
+- 2026-10-05 — Design section 1 (architecture) approved: added D7–D10 (by: Rubens).
+- 2026-10-05 — Added A13, A14 (by: Claude).
+- 2026-10-05 — Design section 2 (hardening) approved: added D11–D17; D10 superseded by D17 (by: Rubens). Affected by D10: none.
+- 2026-10-05 — Rubens delegated product decisions to Claude: D18 (by: Rubens). Design section 3 (testing) adopted as D19–D23; added A15, D24 (by: Claude).
+- 2026-10-05 — Added A16, A17, D25–D29 (by: Claude).
+- 2026-10-05 — Prisma research (by: Claude): added A18–A24. A10 falsified by A18. Affected by A10: D2 → superseded by D30; D7, D20 → re-gated, still hold with new links. D8 superseded by D33 (A20); affected by D8: D29 → holds. D4 superseded by D34 (A21); affected by D4: D10 (already superseded), D17 → holds. D27 reversed (A21); affected: none. Added D30–D35, Q5 (by: Claude).
+- 2026-10-05 — Toolchain research (by: Claude): added A25–A30, D36–D44. Q1 answered by D44 (by: Claude, delegated per D18). Affected by Q1: D1 → holds.
