@@ -1,0 +1,41 @@
+# Dependencies
+node_modules/
+
+# Build output (tsdown)
+dist/
+*.tsbuildinfo
+
+# Packed tarballs (npm pack / pnpm pack, used by the end-to-end tests)
+*.tgz
+
+# Test and coverage output
+coverage/
+.vitest/
+out/
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Environment files: never commit credentials (e.g. the ai_reader password)
+.env
+.env.*
+!.env.example
+
+# Local agent and workflow scratch
+.superpowers/
+.claude/settings.local.json
+
+# Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
