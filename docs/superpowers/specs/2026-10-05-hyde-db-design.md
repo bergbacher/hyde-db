@@ -49,19 +49,22 @@ Annotation names (`@ai.visible`, `@ai.hidden`, `@ai.exclude`, `@ai.default(...)`
 Prisma CLI ──stdin: JSON-RPC (getManifest, generate)──▶ generator entry
            ◀─stderr: JSON-RPC responses──────────────     │  stdout: warnings + summary
                                                           ▼
-                                                       build()
+                                          build(dmmf datamodel, raw config)
+                                                          │
+                                                datamodel adapter ──▶ internal Datamodel
                           ┌───────────┬──────────┬────────┴────────┬───────────────┐
                           ▼           ▼          ▼                 ▼               ▼
                     config       annotations  sensitive-name   analysis rules   renderers
-                    validation   parsing      lint             (views,          apply SQL
+                    validation   parsing      lint             (views, counts,  apply SQL
                                                                diagnostics)     drop SQL
                                                                                 Markdown
                                         SQL quoting shared by the renderers
 ```
 
-- Strict TypeScript, ESM-only. The core modules are pure; the generator entry is the only module with I/O (D5, D45).
+- Strict TypeScript, ESM-only. The core modules are pure; the generator entry is the only module with I/O (D5, D46).
 - The generator entry implements Prisma's line-delimited JSON-RPC protocol itself — requests on stdin, responses on stderr — so the package has no runtime dependencies (D32, A19, A23).
-- The core reads Prisma's datamodel through its own minimal `Datamodel` type and imports no Prisma types; differences between Prisma majors are absorbed in one adapter (D7).
+- The core reads Prisma's datamodel through its own minimal `Datamodel` type and imports no Prisma types; differences between Prisma majors are absorbed in one adapter (D7). `build` and `analyze` accept the DMMF datamodel as Prisma provides it; the adapter converts it inside the core, and `Datamodel` stays internal (D47).
+- The analysis result carries the visible and hidden column counts that the success line prints (D48).
 - The public API is `build`, `analyze` and their types; everything else is internal (D9).
 
 ## Testing
