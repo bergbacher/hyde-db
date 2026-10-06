@@ -31,6 +31,8 @@ const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the 
 export interface PsqlOptions {
   /** Pass `-v ON_ERROR_STOP=1`, as the docs do. Default true; false mimics a client that runs past errors (D58). */
   readonly onErrorStop?: boolean
+  /** The database container to run in; default the suite's shared one. */
+  readonly server?: { readonly containerId: string; readonly user: string }
 }
 
 /**
@@ -44,7 +46,7 @@ export interface PsqlOptions {
  * exit 125/126/127, or a docker daemon error.
  */
 export function psql(database: string, script: string, options: PsqlOptions = {}): PsqlResult {
-  const { containerId, user } = inject('pg')
+  const { containerId, user } = options.server ?? inject('pg')
   const onErrorStop = options.onErrorStop ?? true
   const result = spawnSync(
     'docker',

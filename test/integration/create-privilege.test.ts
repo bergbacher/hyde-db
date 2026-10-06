@@ -1,4 +1,5 @@
-// D24: the reader role must not be able to create objects in any schema (CVE-2018-1058).
+// D24, D76: the reader role must not be able to create objects in any schema, or schemas in the
+// database (CVE-2018-1058).
 import pg from 'pg'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -6,6 +7,7 @@ import {
   apply,
   createTestDatabase,
   dropTestDatabase,
+  pasteFixAndReapply,
   psql,
   suggestedFix,
   type TestDb,
@@ -29,7 +31,7 @@ describe('CREATE privilege', () => {
     const result = apply(db)
     expect(result.status).toBe(3)
     expect(result.stderr).toContain(
-      `role ${db.role} can create objects in schemas: scratch. Fix: REVOKE CREATE ON SCHEMA scratch FROM PUBLIC;`,
+      `role ${db.role} can create objects in schemas: scratch. Fix: REVOKE CREATE ON SCHEMA scratch FROM PUBLIC CASCADE;`,
     )
   })
 
@@ -40,7 +42,7 @@ describe('CREATE privilege', () => {
     const result = apply(db)
     expect(result.status).toBe(3)
     expect(result.stderr).toContain(`role ${db.role} can create objects in schemas: public. Fix: `)
-    expect(suggestedFix(result)).toBe('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')
+    expect(suggestedFix(result)).toBe('REVOKE CREATE ON SCHEMA public FROM PUBLIC CASCADE;')
   })
 
   it('D24: the suggested REVOKE fixes it', async () => {
@@ -53,14 +55,14 @@ describe('CREATE privilege', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D71: a schema the role owns is refused as owned before CREATE is checked', async () => {
+  it('D73: a schema the role owns is refused as owned before CREATE is checked', async () => {
     const db = await freshDb(true)
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `CREATE SCHEMA scratch; ALTER SCHEMA scratch OWNER TO "${db.role}"`)
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
-      `role ${db.role} owns objects it must not own: schema scratch. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
+      `role ${db.role} owns objects it must not own: schema scratch. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`,
     )
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
@@ -76,7 +78,7 @@ describe('CREATE privilege', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} can create objects in schemas: scratch. Fix: `)
-    expect(suggestedFix(failed)).toBe(`REVOKE CREATE ON SCHEMA scratch FROM ${db.role};`)
+    expect(suggestedFix(failed)).toBe(`REVOKE CREATE ON SCHEMA scratch FROM ${db.role} CASCADE;`)
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })
@@ -109,10 +111,24 @@ describe('CREATE privilege', () => {
       const failed = apply(db)
       expect(failed.status).toBe(3)
       expect(failed.stderr).toContain(
-        `role ${db.role} can create objects in schemas: ${temp}. Fix: REVOKE CREATE ON SCHEMA ${temp} FROM ${db.role};`,
+        `role ${db.role} can create objects in schemas: ${temp}. Fix: REVOKE CREATE ON SCHEMA ${temp} FROM ${db.role} CASCADE;`,
       )
     } finally {
       await other.end()
     }
+  })
+})
+
+describe('CREATE on the database', () => {
+  it('D76: CREATE on the database for PUBLIC and the reader aborts apply, and the printed REVOKE fixes it', async () => {
+    const db = await freshDb(true)
+    expect(apply(db).status).toBe(0)
+    await adminQuery('postgres', `GRANT CREATE ON DATABASE ${db.name} TO PUBLIC, "${db.role}"`)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(
+      `role ${db.role} can create schemas in database ${db.name}. Fix: REVOKE CREATE ON DATABASE ${db.name} FROM PUBLIC, ${db.role} CASCADE;`,
+    )
+    pasteFixAndReapply(db, failed)
   })
 })

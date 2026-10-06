@@ -1,5 +1,5 @@
-// D72: the final check refuses default privileges that would make objects created later readable
-// to the reader role (A53), and prints the ALTER DEFAULT PRIVILEGES that removes them.
+// D77: the final check refuses default privileges that would make objects created later readable
+// to the reader role (A53, A59), and prints the ALTER DEFAULT PRIVILEGES that removes them.
 import { afterEach, describe, expect, inject, it } from 'vitest'
 import {
   adminQuery,
@@ -34,7 +34,7 @@ async function readerCanUseNewTable(db: TestDb): Promise<boolean> {
 }
 
 describe('default privileges', () => {
-  it('D72: default privileges granting the reader SELECT on future tables abort apply, and the printed fix works', async () => {
+  it('D77: default privileges granting the reader SELECT on future tables abort apply, and the printed fix works', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -50,7 +50,7 @@ describe('default privileges', () => {
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
-  it('D72: default privileges granting PUBLIC SELECT on future tables abort apply, and the printed fix works', async () => {
+  it('D77: default privileges granting PUBLIC SELECT on future tables abort apply, and the printed fix works', async () => {
     const db = await freshDb()
     await adminQuery(
       db.name,
@@ -65,7 +65,7 @@ describe('default privileges', () => {
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
-  it('D72: database-wide defaults are fixed without IN SCHEMA, for sequences to PUBLIC and functions to the reader', async () => {
+  it('D77: database-wide defaults are fixed without IN SCHEMA, for sequences to PUBLIC and functions to the reader', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -84,7 +84,18 @@ describe('default privileges', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it("D72: PUBLIC's defaults on functions and types are not refused", async () => {
+  it('D77: default privileges granting PUBLIC CREATE on future schemas abort apply, and the printed fix works', async () => {
+    const db = await freshDb()
+    await adminQuery(db.name, 'ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO PUBLIC')
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(
+      `(default privileges): schemas created by ${admin}. Fix: ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON SCHEMAS FROM PUBLIC;`,
+    )
+    pasteFixAndReapply(db, failed)
+  })
+
+  it("D77: PUBLIC's defaults on functions and types are not refused", async () => {
     const db = await freshDb()
     await adminQuery(
       db.name,

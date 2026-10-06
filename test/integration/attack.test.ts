@@ -144,7 +144,7 @@ describe('final check', () => {
     ).toEqual([])
   })
 
-  it('D69, D70: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D69, D78: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -193,7 +193,7 @@ describe('final check', () => {
     expect(result.stderr).toContain(`role ${db.role} must not be a member of other roles`)
   })
 
-  it('D1, D70: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D1, D78: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery('postgres', `GRANT pg_read_all_data TO "${db.role}"`)
@@ -232,7 +232,7 @@ describe('final check', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
-      `role ${db.role} can create objects in schemas: ${temp}. Fix: REVOKE CREATE ON SCHEMA ${temp} FROM ${db.role};`,
+      `role ${db.role} can create objects in schemas: ${temp}. Fix: REVOKE CREATE ON SCHEMA ${temp} FROM ${db.role} CASCADE;`,
     )
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)

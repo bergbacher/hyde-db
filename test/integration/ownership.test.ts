@@ -1,5 +1,6 @@
-// D71: the final check refuses a reader role that owns objects, because an owner can grant itself
-// access again after any REVOKE (A52); the fix reassigns them.
+// D73: the final check refuses a reader role that owns any object, because an owner can grant
+// itself access again after any REVOKE (A52) or read values through its type (A55); the fix
+// reassigns them.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -20,9 +21,13 @@ async function freshDb(): Promise<TestDb> {
   created.push(db)
   return db
 }
+/** The abort and fix for a reader that owns the given objects (D73). */
+function ownsObjects(db: TestDb, objects: string): string {
+  return `role ${db.role} owns objects it must not own: ${objects}. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`
+}
 
 describe('ownership', () => {
-  it('A52, D71: a source table the reader owns aborts apply; after the fix the reader cannot grant itself access', async () => {
+  it('A52, D73: a source table the reader owns aborts apply; after the fix the reader cannot grant itself access', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `ALTER TABLE public.api_keys OWNER TO "${db.role}"`)
@@ -37,9 +42,7 @@ describe('ownership', () => {
       ])
       const failed = apply(db)
       expect(failed.status).toBe(3)
-      expect(failed.stderr).toContain(
-        `role ${db.role} owns objects it must not own: relation public.api_keys. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
-      )
+      expect(failed.stderr).toContain(ownsObjects(db, 'table public.api_keys'))
       pasteFixAndReapply(db, failed)
       await expect(
         reader.query(`GRANT SELECT ON public.api_keys TO "${db.role}"`),
@@ -52,7 +55,52 @@ describe('ownership', () => {
     }
   })
 
-  it('A52, D71: a reader that owns the database is refused with the same fix, never an empty REVOKE', async () => {
+  it('A55, D73: a domain the reader owns, used by a source column, aborts apply; after the fix the reader cannot constrain it', async () => {
+    const db = await freshDb()
+    await adminQuery(
+      db.name,
+      'CREATE DOMAIN public.secret_t AS text; ALTER TABLE public.api_keys ALTER COLUMN secret TYPE public.secret_t',
+    )
+    expect(apply(db).status).toBe(0)
+    await adminQuery(db.name, `ALTER DOMAIN public.secret_t OWNER TO "${db.role}"`)
+    const reader = await connectAsReader(db)
+    try {
+      await reader.query('SET default_transaction_read_only = off')
+      // Adding a constraint validates the column without a table-privilege check, and the
+      // error shows the value (A55).
+      await expect(
+        reader.query('ALTER DOMAIN public.secret_t ADD CONSTRAINT peek CHECK (VALUE::integer > 0)'),
+      ).rejects.toThrow('sk_live_example')
+      const failed = apply(db)
+      expect(failed.status).toBe(3)
+      expect(failed.stderr).toContain(ownsObjects(db, 'type public.secret_t'))
+      pasteFixAndReapply(db, failed)
+      await expect(
+        reader.query('ALTER DOMAIN public.secret_t ADD CONSTRAINT peek CHECK (VALUE::integer > 0)'),
+      ).rejects.toMatchObject({ code: '42501' })
+    } finally {
+      await reader.end()
+    }
+  })
+
+  it('A48, D73: a large object the reader created aborts apply, and the fix reassigns it', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const reader = await connectAsReader(db)
+    let oid: unknown
+    try {
+      await reader.query('SET default_transaction_read_only = off')
+      oid = (await reader.query("SELECT lo_from_bytea(0, 'note') AS oid")).rows[0]?.oid
+    } finally {
+      await reader.end()
+    }
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(ownsObjects(db, `large object ${oid}`))
+    pasteFixAndReapply(db, failed)
+  })
+
+  it('A52, D73: a reader that owns the database is refused with the same fix, never an empty REVOKE', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     // As database owner the role also gets the privileges of pg_database_owner, which owns
@@ -60,9 +108,7 @@ describe('ownership', () => {
     await adminQuery('postgres', `ALTER DATABASE ${db.name} OWNER TO "${db.role}"`)
     const failed = apply(db)
     expect(failed.status).toBe(3)
-    expect(failed.stderr).toContain(
-      `role ${db.role} owns objects it must not own: database ${db.name}. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
-    )
+    expect(failed.stderr).toContain(ownsObjects(db, `database ${db.name}`))
     expect(failed.stderr).not.toContain('FROM ;')
     pasteFixAndReapply(db, failed)
     expect(
@@ -73,7 +119,7 @@ describe('ownership', () => {
     ).not.toEqual([{ owner: db.role }])
   })
 
-  it('D71: every kind of owned object is listed, in a fixed order', async () => {
+  it('D73: every owned object is listed by type and qualified name, in a fixed order', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     // Changing the owner of public.orders moves its serial's sequence public.orders_id_seq too.
@@ -83,17 +129,21 @@ describe('ownership', () => {
        CREATE SEQUENCE public.tickets_seq; ALTER SEQUENCE public.tickets_seq OWNER TO "${db.role}";
        ALTER TABLE public.orders OWNER TO "${db.role}";
        CREATE FUNCTION public.answer() RETURNS integer LANGUAGE sql AS 'SELECT 42';
-       ALTER FUNCTION public.answer() OWNER TO "${db.role}"`,
+       ALTER FUNCTION public.answer() OWNER TO "${db.role}";
+       ALTER TYPE public."Plan" OWNER TO "${db.role}"`,
     )
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
-      `role ${db.role} owns objects it must not own: schema scratch, relation public.orders, relation public.orders_id_seq, relation public.tickets_seq, function public.answer(). Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
+      ownsObjects(
+        db,
+        'function public.answer(), schema scratch, sequence public.orders_id_seq, sequence public.tickets_seq, table public.orders, type public."Plan"',
+      ),
     )
     pasteFixAndReapply(db, failed)
   })
 
-  it("D71: the reader's own temporary tables are not refused", async () => {
+  it("D73: the reader's own temporary tables are not refused", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
