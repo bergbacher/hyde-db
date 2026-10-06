@@ -292,6 +292,8 @@ describe('generator protocol', () => {
     expect(stdout).toContain('hyde-db: ')
     for (const file of OUTPUT_FILES)
       expect(readFileSync(join(output, file), 'utf8'), file).not.toBe('')
+    // The failed cleanup left the staging directory behind, so the cleanup really ran and failed.
+    expect(readdirSync(output).filter((name) => name.startsWith('.hyde-db-'))).toHaveLength(1)
   })
 
   it('D147: a cleanup that fails does not replace the earlier error', async () => {

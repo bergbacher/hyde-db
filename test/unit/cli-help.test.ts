@@ -316,7 +316,7 @@ describe('usage', () => {
     )
     const prose = note.join('\n')
     const password = prose.indexOf('\\password redacted_reader')
-    const allow = prose.indexOf('ALTER ROLE redacted_reader LOGIN;')
+    const allow = prose.indexOf('ALTER ROLE redacted_reader LOGIN, ending')
     const fallback = prose.indexOf('export READER_PASSWORD=...')
     expect(password).toBeGreaterThan(-1)
     expect(allow).toBeGreaterThan(password)
@@ -366,6 +366,8 @@ describe('usage', () => {
         expect(proseStarts.has(line.split(' ')[0] ?? ''), line).toBe(true)
         // A quote, redirection or equals sign in prose would swallow or create something when pasted.
         expect(line, line).not.toMatch(/['<>]/)
+        // A semicolon, pipe or ampersand in prose would end the command or chain the next one.
+        expect(line, line).not.toMatch(/[;|&]/)
         expect(line, line).not.toMatch(/^\S+=/)
       }
     }

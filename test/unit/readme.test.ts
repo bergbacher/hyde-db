@@ -244,7 +244,7 @@ const plainProse = prose.replaceAll('`', '')
 describe('the CLI usage and the README agree', () => {
   it('A41, D66: the login step comes in the same order: \\password, then ALTER ROLE … LOGIN;, then the READER_PASSWORD one-liner', () => {
     const order = (text: string): number[] =>
-      ['\\password redacted_reader', 'ALTER ROLE redacted_reader LOGIN;', 'READER_PASSWORD'].map(
+      ['\\password redacted_reader', 'ALTER ROLE redacted_reader LOGIN', 'READER_PASSWORD'].map(
         (phrase) => text.indexOf(phrase),
       )
     for (const [name, text] of [
@@ -625,7 +625,7 @@ describe('README (a view of LEDGER.md)', () => {
       "= to_regrole('pg_database_owner')::oid THEN (SELECT dbo.datdba FROM pg_database dbo",
     )
     expect(section('How a printed fix is built', '###')).toContain(
-      "From PostgreSQL 15 on, schema `public` belongs to `pg_database_owner`, a role nobody can log in as that stands for the database's owner, so its fix names the database's owner instead.",
+      "In a database created on PostgreSQL 15 or later, schema `public` belongs to `pg_database_owner`, a role nobody can log in as that stands for the database's owner, so its fix names the database's owner instead; a cluster upgraded from 14 keeps the bootstrap superuser as the owner.",
     )
   })
 
