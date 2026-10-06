@@ -519,6 +519,15 @@ describe('README (a view of LEDGER.md)', () => {
     expectSentence(ENDS, !sessionLevel)
   })
 
+  it('A98, D139: says the schema doc writes names as SQL needs them, as the generated doc does', () => {
+    const md = readRepoFile('example', 'redacted', 'redacted-schema.md')
+    expect(md).toContain('a name in double quotes is case-sensitive and works only with its quotes')
+    const after = section('After the first deploy', '###')
+    expect(after).toContain('`redacted-schema.md` writes each name as SQL needs it')
+    expect(after).toContain('is case-sensitive and works only with its quotes')
+    expect(after).toContain('unqualified view names work')
+  })
+
   it('D11, D13, D24, D49, D108: the refusal table lists every abort the apply script raises, in order', () => {
     expect(refusalRows.map((row) => row[0])).toEqual(refusalRows.map((_, index) => String(index)))
     const errors = refusalRows.map((row) => /`([^`]*)`/.exec(row[2] ?? '')?.[1])

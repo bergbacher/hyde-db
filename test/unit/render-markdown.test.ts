@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../src/brand.ts'
 import { renderMarkdown } from '../../src/render/markdown.ts'
+import type { View } from '../../src/types.ts'
 import { config, orders, users } from '../helpers/views.ts'
 
 describe('Markdown', () => {
@@ -12,13 +13,66 @@ describe('Markdown', () => {
     expect(md).toContain('Statements time out after 15s.')
   })
 
-  it("D54: the intro names the reader role's search_path and says other columns were removed", () => {
+  it("D54, D139: the intro names the reader role's search_path, how names are written, and says other columns were removed", () => {
     expect(md).toContain(
       "Query the views in schema `redacted` (it is the reader role's default search_path, so " +
-        'unqualified names work). Only the columns listed here exist; every other column was ' +
-        'removed on purpose. Statements time out after 15s.',
+        'unqualified names work). Names are written as SQL needs them: a name in double quotes ' +
+        'is case-sensitive and works only with its quotes. Only the columns listed here exist; ' +
+        'every other column was removed on purpose. Statements time out after 15s.',
     )
     expect(md).not.toContain('deliberately')
+  })
+
+  it('A98, D139: writes view, column and join names as SQL needs them', () => {
+    const category: View = {
+      ...users,
+      model: 'Category',
+      name: 'Category',
+      doc: '',
+      columns: [
+        { column: 'id', field: 'id', type: 'Int', nullable: false, isId: true, doc: '' },
+        {
+          column: 'supportEmail',
+          field: 'supportEmail',
+          type: 'String',
+          nullable: false,
+          isId: false,
+          doc: '',
+        },
+        { column: 'order', field: 'order', type: 'Int', nullable: false, isId: false, doc: '' },
+      ],
+    }
+    const products: View = {
+      ...orders,
+      model: 'Product',
+      name: 'products',
+      columns: [
+        { column: 'id', field: 'id', type: 'Int', nullable: false, isId: true, doc: '' },
+        {
+          column: 'categoryId',
+          field: 'categoryId',
+          type: 'Int',
+          nullable: true,
+          isId: false,
+          doc: '',
+        },
+      ],
+      relations: [
+        { fromCols: ['categoryId'], target: 'Category', targetModel: 'Category', toCols: ['id'] },
+      ],
+    }
+    const quoted = renderMarkdown({ config, views: [products, category] })
+    expect(quoted).toContain('## "Category"\n')
+    expect(quoted).toContain('## products\n')
+    expect(quoted).toContain('| `"supportEmail"` | String |  |')
+    expect(quoted).toContain('| `"order"` | Int |  |')
+    expect(quoted).toContain('| `id` | Int | primary key |')
+    expect(quoted).toContain('Joins:\n- products."categoryId" = "Category".id')
+  })
+
+  it('D139: names the views schema as SQL needs it', () => {
+    const reserved = renderMarkdown({ config: { ...config, schema: 'user' }, views: [] })
+    expect(reserved).toContain('Query the views in schema `"user"`')
   })
 
   it('carries the generated-file notice', () => {

@@ -150,11 +150,19 @@ export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): 
 
   diagnostics.push(...viewCollisions(candidates))
 
-  // Relations to models without a view are not worth describing.
-  const exposed = new Set(candidates.map((v) => v.name))
+  // A join is worth describing only when the reader can write it: the target has a view, and that
+  // view shows every target column, each paired with a source column (D139).
+  const shown = new Map(candidates.map((v) => [v.name, new Set(v.columns.map((c) => c.column))]))
   const views = candidates.map((v) => ({
     ...v,
-    relations: v.relations.filter((r) => exposed.has(r.target)),
+    relations: v.relations.filter((r) => {
+      const target = shown.get(r.target)
+      return (
+        target !== undefined &&
+        r.toCols.length === r.fromCols.length &&
+        r.toCols.every((column) => target.has(column))
+      )
+    }),
   }))
   const visible = views.reduce((n, v) => n + v.columns.length, 0)
   return { config, views, diagnostics, counts: { visible, hidden: columnTotal - visible } }

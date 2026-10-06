@@ -227,7 +227,7 @@ psql "${DATABASE_URL:?export DATABASE_URL first}" -c "ALTER ROLE redacted_reader
 
 The shell runs nothing while `READER_PASSWORD` or `DATABASE_URL` is unset or empty. Later deploys keep the login and the password. <!-- A41 -->
 
-**2. Connect the reader** (an AI tool, a PostgreSQL MCP server or a person's SQL client) as `redacted_reader`, preferably to a read replica, and give it `redacted-schema.md`. The role's `search_path` is `redacted`, so unqualified view names work.
+**2. Connect the reader** (an AI tool, a PostgreSQL MCP server or a person's SQL client) as `redacted_reader`, preferably to a read replica, and give it `redacted-schema.md`. The role's `search_path` is `redacted`, so unqualified view names work. `redacted-schema.md` writes each name as SQL needs it: a name that is not all lower case or is a reserved word appears in double quotes, such as `"User"` for a model without `@@map`. A name in double quotes is case-sensitive and works only with its quotes. <!-- D139, A98 -->
 
 ### Transactions, timeouts and the schema marker
 

@@ -290,7 +290,7 @@ describe('analysis rules', () => {
     expect(analyze(datamodel(hiddenTarget, order('@hyde.visible'))).views[0]?.relations).toEqual([])
   })
 
-  it('ignores relations to unknown models and keeps unknown field names as written', () => {
+  it('ignores relations to unknown models and to columns the target view does not show', () => {
     const a = analyze(
       datamodel(
         model('Order', [
@@ -310,9 +310,42 @@ describe('analysis rules', () => {
         ]),
       ),
     )
-    expect(a.views[0]?.relations).toEqual([
-      { fromCols: ['id'], target: 'Order', targetModel: 'Order', toCols: ['missing'] },
+    // The self relation's target column is no column of the view, so it is not described (D139).
+    expect(a.views[0]?.relations).toEqual([])
+  })
+
+  it('A98, D139: describes a join only when the target view shows every target column', () => {
+    const user = (idDoc: string) =>
+      model(
+        'User',
+        [scalar('id', idDoc, { type: 'Int' }), scalar('code', '@hyde.visible', { type: 'Int' })],
+        { dbName: 'users' },
+      )
+    const order = (to: string[], from: string[] = ['userId']) =>
+      model(
+        'Order',
+        [
+          scalar('id', '@hyde.visible'),
+          scalar('userId', '@hyde.visible', { dbName: 'user_id' }),
+          scalar('user', undefined, {
+            kind: 'object',
+            type: 'User',
+            relationFromFields: from,
+            relationToFields: to,
+          }),
+        ],
+        { dbName: 'orders' },
+      )
+    const join = { fromCols: ['user_id'], target: 'users', targetModel: 'User', toCols: ['id'] }
+    expect(analyze(datamodel(user('@hyde.visible'), order(['id']))).views[1]?.relations).toEqual([
+      join,
     ])
+    // users.id is hidden, so the view users has no column id to join on.
+    expect(analyze(datamodel(user('@hyde.hidden'), order(['id']))).views[1]?.relations).toEqual([])
+    // A target column without a source column to pair with, as no Prisma schema gives.
+    expect(
+      analyze(datamodel(user('@hyde.visible'), order(['id', 'code']))).views[1]?.relations,
+    ).toEqual([])
   })
 
   it('reports view name collisions across schemas', () => {
