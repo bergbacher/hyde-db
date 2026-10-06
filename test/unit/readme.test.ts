@@ -442,9 +442,8 @@ describe('README (a view of LEDGER.md)', () => {
     const targets = Array.from(prose.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g), (m) => m[1] ?? '')
     const relative = targets.filter((target) => !/^[a-z]+:/.test(target))
     expect(relative).toContain('RELEASING.md')
-    // SECURITY.md is written by Task 27, right after this README.
-    const pending = new Set(['SECURITY.md'])
-    for (const target of relative.filter((t) => !pending.has(t))) {
+    expect(relative).toContain('SECURITY.md')
+    for (const target of relative) {
       expect(existsSync(join(repoRoot, target)), target).toBe(true)
     }
   })
