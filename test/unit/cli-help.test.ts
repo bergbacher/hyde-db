@@ -150,7 +150,7 @@ describe('usage', () => {
   })
 
   it('D56: says Prisma runs it and that running it directly only prints the help', () => {
-    expect(text).toContain('Prisma runs it during prisma generate')
+    expect(text).toContain('During prisma generate, Prisma runs it.')
     expect(text).toContain('Running hyde-db directly only prints this help.')
   })
 
@@ -330,16 +330,44 @@ describe('usage', () => {
     expect(commandsIn(text).filter((c) => /^psql "[^"]*"$/.test(c))).toEqual([])
   })
 
-  it('D68: pasting the whole help runs only the indented commands: every prose line starts with an uppercase letter', () => {
-    // The title line starts with the product name (the one lowercase start); every other prose line
-    // is blank or starts with an uppercase ASCII letter, which no command does. No line, indented
-    // or not, holds a backtick or a command substitution.
+  it('D68: pasting the whole help runs only the indented commands: every prose line starts with an allowed prose word and holds no quote, angle bracket or backtick', () => {
+    // A case-insensitive file system runs `Write` as /usr/bin/write, so an uppercase start proves
+    // nothing. Every unindented line starts with one of these words, none of them a command.
+    const proseStarts = new Set([
+      'Usage:',
+      'Add',
+      'Optional',
+      'Roles',
+      'To',
+      'Output',
+      'Deploy',
+      'First,',
+      'Note:',
+      'If',
+      'Do',
+      'On',
+      'Drop',
+      'Once,',
+      'In',
+      'Without',
+      'Typed',
+      'Problems',
+      'Each',
+      'Full',
+      'During',
+      'Running',
+    ])
     for (const line of lines) {
       expect(line, line).not.toContain('`')
       expect(line, line).not.toContain('$(')
       if (line.startsWith(' ')) continue
       if (line === lines[0]) expect(line.startsWith(`${BRAND}: `)).toBe(true)
-      else expect(line, line).toMatch(/^([A-Z]|$)/)
+      else if (line !== '') {
+        expect(proseStarts.has(line.split(' ')[0] ?? ''), line).toBe(true)
+        // A quote, redirection or equals sign in prose would swallow or create something when pasted.
+        expect(line, line).not.toMatch(/['<>]/)
+        expect(line, line).not.toMatch(/^\S+=/)
+      }
     }
   })
 
@@ -387,10 +415,12 @@ describe('usage', () => {
     expect(usage(DEFAULT_CONFIG, 'https://github.com/acme/hyde-db')).toMatch(/^[\x20-\x7e\n]*$/)
   })
 
-  it('D56: says where <output> is: the generator output directory, relative to schema.prisma', () => {
-    const definitions = lines.filter((l) => l.includes('<output> ='))
+  it('D56: says what the placeholder in the paths is: the generator output directory, relative to schema.prisma', () => {
+    const definitions = lines.filter((l) => l.startsWith('Deploy in this order.'))
     expect(definitions).toHaveLength(1)
-    expect(definitions[0]).toContain("the generator's output directory")
+    expect(definitions[0]).toContain(
+      'replace the placeholder with the output directory of the generator',
+    )
     expect(definitions[0]).toMatch(/:$/)
     expect(definitions[0]).toContain('relative to schema.prisma')
     expect(definitions[0]).toContain(`(default ${DEFAULT_OUTPUT})`)
@@ -402,7 +432,9 @@ describe('usage', () => {
   it('A15, A95, D24: says the PostgreSQL 14 step runs once before the first apply, in the application database, as the owner of public or a superuser', () => {
     const step = lines.filter((l) => l.includes('REVOKE CREATE ON SCHEMA public FROM PUBLIC'))
     expect(step).toHaveLength(1)
-    expect(step[0]).toMatch(/^On PostgreSQL 14 and older, once before the first apply/)
+    expect(step[0]).toMatch(
+      /^On PostgreSQL 14 and older, and clusters upgraded from them, once before the first apply/,
+    )
     expect(step[0]).toContain('in the application database')
     expect(step[0]).toContain('as the owner of schema public or a superuser')
     expect(lines.indexOf(step[0] ?? '')).toBeLessThan(

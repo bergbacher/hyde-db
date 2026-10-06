@@ -95,7 +95,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
   return [
     `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role.`,
     '',
-    `Prisma runs it during prisma generate. Running ${BRAND} directly only prints this help.`,
+    `During prisma generate, Prisma runs it. Running ${BRAND} directly only prints this help.`,
     '',
     `Usage: ${BRAND} [-h | --help] [-v | --version]`,
     '',
@@ -110,7 +110,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     ...configLines(config),
     'Roles belong to the whole cluster, not to one database: give each database, and each generator block, its own role.',
     '',
-    'Annotate fields and models with /// comments in schema.prisma:',
+    'To annotate fields and models, use /// comments in schema.prisma:',
     '  /// @hyde.visible                  field: keep the column in its view',
     '  /// @hyde.hidden                   field: remove the column',
     '  /// @hyde.exclude                  model: no view at all',
@@ -121,15 +121,16 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  redacted-views-drop.sql  drops the views schema so migrations can alter columns',
     '  redacted-schema.md       tables, columns and joins of the views, to give whoever queries them',
     '',
-    // Every prose line starts with an upper-case letter, so pasted it runs nothing (D68); chained
-    // commands follow each other with no prose between them (D136).
-    `Deploy in this order. <output> = the generator's output directory, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
-    'Write the three files:',
+    // Every prose line starts with a word that is no command, and holds no quote or angle bracket,
+    // so pasted it runs nothing, even on a case-insensitive file system (D68); chained commands
+    // follow each other with no prose between them (D136).
+    `Deploy in this order. In the paths below, replace the placeholder with the output directory of the generator, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
+    'First, write the three files:',
     '  npx prisma generate',
     'Note: psql does not read .env. Export DATABASE_URL in your shell first, as a plain libpq URL without Prisma-only parameters such as ?schema=public.',
     'If the URL Prisma uses carries such parameters, deploy with npx prisma db execute --file instead, as the README shows, and set sourceSchema to its ?schema= name.',
     'Do not strip the parameters for psql: prisma migrate deploy would then run against the stripped URL, which can point at another schema.',
-    'On PostgreSQL 14 and older, once before the first apply, run REVOKE CREATE ON SCHEMA public FROM PUBLIC in the application database, as the owner of schema public or a superuser.',
+    'On PostgreSQL 14 and older, and clusters upgraded from them, once before the first apply, run REVOKE CREATE ON SCHEMA public FROM PUBLIC in the application database, as the owner of schema public or a superuser.',
     'Drop the views schema, migrate, then create the views and the role. A refused step stops the rest:',
     `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql &&`,
     '  npx prisma migrate deploy &&',
