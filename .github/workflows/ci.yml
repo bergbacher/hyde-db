@@ -1,0 +1,144 @@
+name: CI
+
+# Pull requests and branch pushes only; never tags. CI builds and packs only to test the
+# artifact and never publishes (D62, D63). Release publishing lives in release.yml.
+on:
+  pull_request:
+  push:
+    branches: ['**']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm lint
+
+  typecheck:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: node scripts/pack-e2e.mjs # pnpm build (publint and attw) and pnpm pack into .e2e/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hyde-db-tarball
+          path: .e2e/*.tgz
+          if-no-files-found: error
+          retention-days: 7
+
+  test:
+    name: test (Node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: ${{ matrix.node }}, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:coverage # unit, characterization, contract; at least 95% lines and branches
+
+  attack:
+    name: attack suite (PostgreSQL ${{ matrix.pg }})
+    runs-on: ubuntu-latest # ships the Docker CLI and daemon that testcontainers needs
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        pg: [14, 18]
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:integration
+        env:
+          PG_IMAGE: postgres:${{ matrix.pg }}-alpine
+
+  e2e:
+    name: end-to-end (Prisma ${{ matrix.prisma }}, Node ${{ matrix.node }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        prisma: ['6.19.3', '7.10.0']
+        node: [20, 24]
+    services:
+      postgres:
+        image: postgres:18-alpine
+        env:
+          POSTGRES_PASSWORD: postgres
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      # Nothing is installed or built here: Node 20 cannot run tsdown, and the tests use only node:test.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: '${{ matrix.node }}' }
+      - uses: actions/download-artifact@v8
+        with:
+          name: hyde-db-tarball
+          path: ${{ runner.temp }}/tarball
+      - run: |
+          node --version
+          npm --version
+          E2E_TARBALL="$(ls "$RUNNER_TEMP"/tarball/*.tgz)" node --test --test-timeout=600000 test/e2e/*.test.mjs
+        env:
+          E2E_PRISMA_VERSIONS: ${{ matrix.prisma }}
+          E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
+
+  ci-ok:
+    name: all jobs passed
+    if: always()
+    needs: [lint, typecheck, build, test, attack, e2e]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fail unless every job succeeded
+        run: |
+          echo '${{ toJSON(needs) }}'
+          test "${{ contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped') }}" = "false"

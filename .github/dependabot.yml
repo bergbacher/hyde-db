@@ -1,0 +1,18 @@
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      development:
+        dependency-type: development
+    ignore:
+      # Pinned to the schema engines of Prisma 6.19.x and 7.10.0 for the DMMF contract tests.
+      - dependency-name: prisma-schema-wasm-6
+      - dependency-name: prisma-schema-wasm-7
+      - dependency-name: '@prisma/prisma-schema-wasm'
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
