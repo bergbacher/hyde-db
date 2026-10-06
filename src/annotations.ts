@@ -85,10 +85,13 @@ export function readFieldAnnotations(modelName: string, field: Field): FieldAnno
   const { tags, text } = parseDoc(field.documentation)
   const diagnostics: Diagnostic[] = []
   let visibility: Visibility | undefined
+  let conflicted = false
   for (const tag of tags) {
     if (tag.name === 'visible' || tag.name === 'hidden') {
-      if (visibility !== undefined && visibility !== tag.name)
+      if (!conflicted && visibility !== undefined && visibility !== tag.name) {
         diagnostics.push(conflictingAnnotations(location))
+        conflicted = true
+      }
       // D57: a conflict fails closed; the conflict itself is still reported as an error.
       visibility = visibility === 'hidden' ? 'hidden' : tag.name
     } else if (tag.name === 'exclude' || tag.name === 'default')

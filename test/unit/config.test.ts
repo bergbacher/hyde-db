@@ -121,6 +121,19 @@ describe('config validation', () => {
     }
   })
 
+  it("D25: statementTimeout above PostgreSQL's maximum of 2147483647 ms is an error", () => {
+    for (const value of ['2147483647ms', '2147483647', '2147483s', '35791min', '35791 min'])
+      expect(codes({ statementTimeout: value }), value).toEqual([])
+    for (const value of ['2147483648ms', '2147484s', '35792min', '99999999999s', '9'.repeat(400)]) {
+      const { config, diagnostics } = validateConfig({ statementTimeout: value })
+      expect(
+        diagnostics.map((d) => d.code),
+        value,
+      ).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
+      expect(config.statementTimeout).toBe('15s')
+    }
+  })
+
   it('D25: identifiers longer than 63 characters are errors (PostgreSQL would truncate them)', () => {
     expect(codes({ role: 'r'.repeat(63) })).toEqual([])
     expect(codes({ role: 'r'.repeat(64) })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
@@ -216,6 +229,16 @@ describe('exotic input (D9)', () => {
     ['NaN', Number.NaN],
     ['an empty string', ''],
   ]
+  const boom = (): never => {
+    throw new Error('boom')
+  }
+  const invalidConfig = (message: string) => ({
+    code: 'HYDE_CONFIG_INVALID_VALUE',
+    severity: 'error',
+    location: 'config',
+    message,
+    hint: 'Pass an object of generator config keys, or omit it.',
+  })
 
   it('D9: validateConfig never throws for an exotic value of any key', () => {
     for (const [label, value] of exotic) {
@@ -234,16 +257,101 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: validateConfig treats a null, undefined or non-object config as defaults', () => {
+  it('D9: validateConfig treats a null or undefined config as defaults, without a diagnostic', () => {
     for (const value of [null, undefined]) {
       expect(validateConfig(value as unknown as GeneratorConfig)).toEqual({
         config: DEFAULT_CONFIG,
         diagnostics: [],
       })
     }
-    for (const [label, value] of exotic.filter(([, v]) => v !== null && v !== undefined)) {
-      const { config } = validateConfig(value as GeneratorConfig)
-      expect(config, label).toEqual(DEFAULT_CONFIG)
+  })
+
+  it('D9: validateConfig reports exactly one error for a config that is not an object', () => {
+    const notObjects: readonly (readonly [unknown, string])[] = [
+      ['strict', 'string'],
+      ['', 'string'],
+      [5, 'number'],
+      [Number.NaN, 'number'],
+      [true, 'boolean'],
+      [10n, 'bigint'],
+      [Symbol('s'), 'symbol'],
+      [() => 1, 'function'],
+      [[], 'array'],
+      [[[['a']], []], 'array'],
+      [['strict'], 'array'],
+    ]
+    for (const [value, type] of notObjects) {
+      expect(validateConfig(value as GeneratorConfig), type).toEqual({
+        config: DEFAULT_CONFIG,
+        diagnostics: [
+          invalidConfig(`config must be an object of generator config keys, got type ${type}`),
+        ],
+      })
+    }
+  })
+
+  it('D9: validateConfig reads circular and prototype-less objects like any other object', () => {
+    for (const value of [circular, bare]) {
+      const { config, diagnostics } = validateConfig(value)
+      expect(config).toEqual(DEFAULT_CONFIG)
+      expect(diagnostics.map((d) => [d.code, d.location])).toEqual([
+        ['HYDE_CONFIG_UNKNOWN_KEY', 'config.self'],
+      ])
+    }
+  })
+
+  it('D9: a getter that throws becomes one error for its key; other keys are still read', () => {
+    const { config, diagnostics } = validateConfig({
+      role: 'safe_reader',
+      get strict(): string {
+        return boom()
+      },
+    })
+    expect(config.role).toBe('safe_reader')
+    expect(config.strict).toBe(DEFAULT_CONFIG.strict)
+    expect(diagnostics).toEqual([
+      {
+        code: 'HYDE_CONFIG_INVALID_VALUE',
+        severity: 'error',
+        location: 'config.strict',
+        message: 'config "strict" could not be read: reading it threw',
+        hint: 'Set strict to a plain value in the generator block.',
+      },
+    ])
+  })
+
+  it('D9: an unknown key is reported without reading its value, so a throwing getter is harmless', () => {
+    const { diagnostics } = validateConfig({
+      get strickt(): string {
+        return boom()
+      },
+    })
+    expect(diagnostics.map((d) => [d.code, d.location])).toEqual([
+      ['HYDE_CONFIG_UNKNOWN_KEY', 'config.strickt'],
+    ])
+  })
+
+  it('D9: a Proxy whose get trap throws becomes one error per known key it lists', () => {
+    const proxy = new Proxy({ strict: 'true', role: 'safe_reader' }, { get: boom })
+    expect(validateConfig(proxy).diagnostics.map((d) => [d.code, d.location])).toEqual([
+      ['HYDE_CONFIG_INVALID_VALUE', 'config.role'],
+      ['HYDE_CONFIG_INVALID_VALUE', 'config.strict'],
+    ])
+  })
+
+  it('D9: a config whose keys cannot be listed becomes one error for config', () => {
+    const revoked = Proxy.revocable({}, {})
+    revoked.revoke()
+    const hostile: readonly (readonly [string, GeneratorConfig])[] = [
+      ['ownKeys trap', new Proxy({}, { ownKeys: boom })],
+      ['has trap', new Proxy({}, { has: boom })],
+      ['revoked proxy', revoked.proxy],
+    ]
+    for (const [label, value] of hostile) {
+      expect(validateConfig(value), label).toEqual({
+        config: DEFAULT_CONFIG,
+        diagnostics: [invalidConfig('config could not be read: listing its keys threw')],
+      })
     }
   })
 })

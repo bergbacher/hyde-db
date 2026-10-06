@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../src/brand.ts'
 import { build } from '../../src/build.ts'
 import {
+  configNotAnObject,
   conflictingAnnotations,
   DIAGNOSTIC_CODES,
   didYouMean,
@@ -25,6 +26,8 @@ import {
   timeoutDisabled,
   unknownAnnotation,
   unknownConfigKey,
+  unreadableConfig,
+  unreadableConfigValue,
   unsupportedProvider,
   viewNameCollision,
 } from '../../src/diagnostics.ts'
@@ -54,6 +57,9 @@ const ALL: Diagnostic[] = [
   noOutputDirectory(),
   relationAnnotated('Order.user'),
   sensitiveExplicit('User.email'),
+  configNotAnObject('string'),
+  unreadableConfig(),
+  unreadableConfigValue('strict'),
   timeoutDisabled('0s', 'redacted_reader'),
   legacyAnnotation('User.id', 'hidden'),
 ]
@@ -142,7 +148,8 @@ describe('value formatting (D9)', () => {
     expect(got(Symbol('s'))).toBe('Symbol(s)')
     expect(got(circular)).toBe('[object Object]')
     expect(got(bare)).toBe('object')
-    expect(got(() => 1)).toBe('() => 1')
+    expect(got(() => 1)).toBe('function')
+    expect(got(function named() {})).toBe('function')
     expect(got(undefined)).toBe('undefined')
     expect(got(null)).toBe('null')
   })
@@ -166,10 +173,16 @@ describe('privacy naming (D53, D54)', () => {
     const { datamodel, config } = parseSchema(readRepoFile('example', 'schema.prisma'))
     const { files, diagnostics } = build(datamodel, config)
     for (const name of OUTPUT_FILES) expect(files?.[name], name).not.toMatch(aiCentric)
-    // The legacy-annotation warning names the old @ai.* tags and package on purpose (D60).
-    const current = ALL.filter((d) => d.code !== 'HYDE_LEGACY_ANNOTATION')
-    for (const d of [...current, ...diagnostics]) {
-      expect(d.message, d.code).not.toMatch(aiCentric)
+    // The legacy-annotation warning names the old tag and package on purpose (D60); only those
+    // two tokens are removed from its message before the scan. Its hint is scanned unchanged.
+    const intended = (d: Diagnostic): string =>
+      d.code === 'HYDE_LEGACY_ANNOTATION'
+        ? d.message
+            .replace(/@ai\.(visible|hidden|exclude|default)/, '')
+            .replace('prisma-ai-views', '')
+        : d.message
+    for (const d of [...ALL, ...diagnostics]) {
+      expect(intended(d), d.code).not.toMatch(aiCentric)
       expect(d.hint ?? '', d.code).not.toMatch(aiCentric)
     }
   })
@@ -193,6 +206,33 @@ describe('warnings', () => {
       location: 'model User',
       message: '@ai.exclude is the old prisma-ai-views annotation and has no effect',
       hint: 'Rename it to @hyde.exclude.',
+    })
+  })
+})
+
+describe('config shape errors (D9)', () => {
+  it('D9: a config that is not an object names the received type', () => {
+    expect(configNotAnObject('array')).toEqual({
+      code: 'HYDE_CONFIG_INVALID_VALUE',
+      severity: 'error',
+      location: 'config',
+      message: 'config must be an object of generator config keys, got type array',
+      hint: 'Pass an object of generator config keys, or omit it.',
+    })
+  })
+
+  it('D9: an unreadable config or config value is an invalid-value error with a fix hint', () => {
+    expect(unreadableConfig()).toMatchObject({
+      code: 'HYDE_CONFIG_INVALID_VALUE',
+      location: 'config',
+      message: 'config could not be read: listing its keys threw',
+      hint: 'Pass an object of generator config keys, or omit it.',
+    })
+    expect(unreadableConfigValue('role')).toMatchObject({
+      code: 'HYDE_CONFIG_INVALID_VALUE',
+      location: 'config.role',
+      message: 'config "role" could not be read: reading it threw',
+      hint: 'Set role to a plain value in the generator block.',
     })
   })
 })

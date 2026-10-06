@@ -71,6 +71,8 @@ const quoted = (suggestion: string | undefined): string =>
 function shown(value: unknown): string {
   if (typeof value === 'string') return `"${value}"`
   if (typeof value === 'number') return String(value)
+  // A function's source text could be long and span lines; its type is all a message needs.
+  if (typeof value === 'function') return 'function'
   try {
     const json = JSON.stringify(value)
     if (typeof json === 'string') return json
@@ -111,6 +113,35 @@ export function invalidConfigValue(
     suggestion === undefined
       ? `Set ${key} to ${expected} in the generator block (env() is not supported there).`
       : `Set ${key} = "${suggestion}" in the generator block.`,
+  )
+}
+
+const CONFIG_OBJECT_HINT = 'Pass an object of generator config keys, or omit it.'
+
+export function configNotAnObject(received: string): Diagnostic {
+  return make(
+    'HYDE_CONFIG_INVALID_VALUE',
+    'config',
+    `config must be an object of generator config keys, got type ${received}`,
+    CONFIG_OBJECT_HINT,
+  )
+}
+
+export function unreadableConfig(): Diagnostic {
+  return make(
+    'HYDE_CONFIG_INVALID_VALUE',
+    'config',
+    'config could not be read: listing its keys threw',
+    CONFIG_OBJECT_HINT,
+  )
+}
+
+export function unreadableConfigValue(key: string): Diagnostic {
+  return make(
+    'HYDE_CONFIG_INVALID_VALUE',
+    `config.${key}`,
+    `config "${key}" could not be read: reading it threw`,
+    `Set ${key} to a plain value in the generator block.`,
   )
 }
 

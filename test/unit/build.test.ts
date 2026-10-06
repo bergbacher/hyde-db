@@ -96,12 +96,61 @@ describe('public API', () => {
     }
   })
 
-  it('D9: analyze and build accept any value as the whole config', () => {
-    const wholes: readonly unknown[] = [...exotic.map(([, v]) => v), 5, 'strict', true]
-    for (const value of wholes) {
-      expect(() => analyze(users, value as GeneratorConfig), String(typeof value)).not.toThrow()
-      expect(() => build(users, value as GeneratorConfig), String(typeof value)).not.toThrow()
+  it('D9: analyze and build report one error for a whole config that is not an object', () => {
+    const notObjects: readonly unknown[] = [
+      5,
+      'strict',
+      true,
+      10n,
+      Symbol('s'),
+      () => 1,
+      [],
+      [['a']],
+    ]
+    for (const value of notObjects) {
+      const config = value as GeneratorConfig
+      for (const result of [analyze(users, config), build(users, config)]) {
+        expect(result.diagnostics, String(typeof value)).toMatchObject([
+          { code: 'HYDE_CONFIG_INVALID_VALUE', severity: 'error', location: 'config' },
+        ])
+      }
+      expect(build(users, config).files, String(typeof value)).toBeNull()
     }
-    expect(analyze(users, null as unknown as GeneratorConfig).diagnostics).toEqual([])
+  })
+
+  it('D9: analyze and build treat a null or undefined whole config as the defaults', () => {
+    for (const value of [null, undefined]) {
+      const config = value as unknown as GeneratorConfig
+      expect(analyze(users, config).diagnostics).toEqual([])
+      expect(build(users, config).files).not.toBeNull()
+    }
+  })
+
+  it('D9: analyze and build report hostile config objects instead of throwing', () => {
+    const boom = (): never => {
+      throw new Error('boom')
+    }
+    const hostile: readonly (readonly [string, GeneratorConfig, string])[] = [
+      ['circular', circular, 'config.self'],
+      ['prototype-less circular', bare, 'config.self'],
+      [
+        'throwing getter',
+        {
+          get strict(): string {
+            return boom()
+          },
+        },
+        'config.strict',
+      ],
+      ['throwing get trap', new Proxy({ strict: 'true' }, { get: boom }), 'config.strict'],
+      ['throwing ownKeys trap', new Proxy({}, { ownKeys: boom }), 'config'],
+    ]
+    for (const [label, config, location] of hostile) {
+      expect(
+        analyze(users, config).diagnostics.map((d) => d.location),
+        label,
+      ).toEqual([location])
+      expect(build(users, config).files, label).toBeNull()
+    }
   })
 })

@@ -135,11 +135,19 @@ describe('field annotations', () => {
     expect(result.diagnostics[0]?.location).toBe('User.email')
   })
 
-  it('D57: a repeated tag around the conflict still resolves to hidden', () => {
-    expect(
-      readFieldAnnotations('User', fieldWithDoc('@hyde.visible\n@hyde.hidden\n@hyde.visible'))
-        .visibility,
-    ).toBe('hidden')
+  it('D57: a repeated tag around the conflict still resolves to hidden and reports it once', () => {
+    for (const doc of [
+      '@hyde.visible\n@hyde.hidden\n@hyde.visible',
+      '@hyde.hidden\n@hyde.visible\n@hyde.hidden',
+      '@hyde.visible @hyde.visible @hyde.hidden @hyde.hidden',
+    ]) {
+      const result = readFieldAnnotations('User', fieldWithDoc(doc))
+      expect(result.visibility, doc).toBe('hidden')
+      expect(
+        result.diagnostics.map((d) => d.code),
+        doc,
+      ).toEqual(['HYDE_ANNOTATION_CONFLICT'])
+    }
   })
 
   it('D25: an unknown field annotation names the closest field annotation', () => {
