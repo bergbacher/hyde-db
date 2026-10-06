@@ -14,7 +14,7 @@ worktree: in-place
 
 A production-ready npm package, built test-first from `prisma-ai-views` 0.1.0, that gives any reader — an AI tool or a person — read access to a Prisma-managed PostgreSQL database exposing only the columns that annotations in the Prisma schema allow. AI agents are its primary operators (Intent).
 
-Production-ready means every CI job in [Toolchain, CI, release](#toolchain-ci-release) passes on the release commit and the release is published from CI with provenance (D44).
+Production-ready means every CI job in [Toolchain, CI, release](#toolchain-ci-release) passes on the release commit and the release is published from CI with provenance on a release tag (D64).
 
 ## Scope
 
@@ -94,7 +94,7 @@ Every behavior starts as a failing test. A test that verifies a ledger record na
 - Toolchain: pnpm 10; TypeScript ~7.0 with `isolatedDeclarations` (`tsc` type-checks, tsdown emits declarations through oxc); tsdown ~0.23 with built-in publint and attw (ESM-only profile); Vitest 5; Biome 2.5; `pg` in tests (D36, A25, A29).
 - CI runs on Node 24; local development needs Node ≥22.22 (D37, A26, A27).
 - CI on every push and pull request, all jobs required: lint and format; type check; build with publint and attw; unit, characterization and contract tests with coverage on Node 22 and 24; attack suite on PostgreSQL 14 and 18; end-to-end on Prisma 6 and 7 under Node 20 and 24 (D38).
-- Releases: Changesets; the release workflow opens a version pull request and, on merge, publishes from CI through npm trusted publishing with provenance. The owner publishes the first version by hand, then configures the trusted publisher (D39, A27). The 1.0.0 changeset stays pending, so the first merge only opens the version pull request; the owner publishes 1.0.0 by hand from it, configures the trusted publisher, then merges it, following `RELEASING.md` (D52).
+- Releases: the npm package is built and published on GitHub Actions only for release tags (D62). Changesets opens the version pull request on `main` without building or publishing; a maintainer pushes tag `v<version>` on the merged version commit; the tag-triggered workflow checks the tag equals `package.json` `version`, runs the full gate, builds, packs, keeps the tarball as an artifact and publishes it with provenance through npm trusted publishing. The first publish uses a short-lived `NPM_TOKEN` secret once; the owner then configures the trusted publisher and deletes the secret. Pull-request CI builds only to test. `RELEASING.md` gives the steps (D63, A27).
 - Vulnerability reports go through GitHub private vulnerability reporting, documented in `SECURITY.md` (D41). Dependabot opens weekly npm and GitHub Actions updates (D42).
 
 ## Open
