@@ -45,6 +45,18 @@ function timeoutMillis(value: string): number | undefined {
   return Number(match[1]) * UNIT_MS[(match[2] ?? 'ms') as keyof typeof UNIT_MS]
 }
 
+/**
+ * The `[object Tag]` name of a value, or undefined when a hostile `get` trap or `Symbol.toStringTag`
+ * getter throws: the keys are then read one by one below, and each unreadable one is reported.
+ */
+function objectTag(value: object): string | undefined {
+  try {
+    return Object.prototype.toString.call(value).slice('[object '.length, -1)
+  } catch {
+    return undefined
+  }
+}
+
 export interface ConfigResult {
   readonly config: ResolvedConfig
   readonly diagnostics: readonly Diagnostic[]
@@ -65,6 +77,11 @@ export function validateConfig(rawConfig?: GeneratorConfig | null): ConfigResult
   try {
     // Inside the try: `Array.isArray` throws on a revoked Proxy, as do hostile `ownKeys`/`has` traps.
     if (Array.isArray(raw)) return { config, diagnostics: [configNotAnObject('array')] }
+    // The tag, not the prototype, so class instances, prototype-less and cross-realm plain objects
+    // stay accepted while boxed primitives, typed arrays, Map, Set, Date, Error, … are refused once.
+    const tag = objectTag(raw)
+    if (tag !== undefined && tag !== 'Object')
+      return { config, diagnostics: [configNotAnObject(tag)] }
     const known = CONFIG_KEYS.filter((key) => key in raw)
     const unknown = Object.keys(raw)
       .filter((key) => !CONFIG_KEYS.includes(key))

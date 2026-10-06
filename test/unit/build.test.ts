@@ -106,6 +106,15 @@ describe('public API', () => {
       () => 1,
       [],
       [['a']],
+      Object(1),
+      new String('strict'),
+      new Uint8Array(2),
+      new Map([['strict', 'false']]),
+      new Set(['strict']),
+      new Date(0),
+      /strict/,
+      new Error('strict'),
+      Promise.resolve({}),
     ]
     for (const value of notObjects) {
       const config = value as GeneratorConfig

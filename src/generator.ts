@@ -7,7 +7,7 @@
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
-import { BRAND } from './brand.ts'
+import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import { build } from './build.ts'
 import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from './cli-help.ts'
 import { DEFAULT_CONFIG } from './config.ts'
@@ -30,7 +30,7 @@ interface GenerateParams {
 }
 
 interface Request {
-  /** Absent in a JSON-RPC notification, which gets no response. */
+  /** Undefined only in a JSON-RPC notification, which gets no response; `null` is an id. */
   readonly id?: unknown
   readonly method: string
   readonly params?: unknown
@@ -78,7 +78,7 @@ function dispatch(request: Request): Reply {
     if (request.method === 'getManifest') {
       return {
         result: {
-          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: DEFAULT_OUTPUT },
         },
       }
     }
@@ -106,7 +106,7 @@ function serve(): void {
       if (typeof request !== 'object' || request === null || !('method' in request)) return
       const { id } = request as Request
       const reply = dispatch(request as Request)
-      if (typeof id === 'number' || typeof id === 'string') send({ id, ...reply })
+      if (id !== undefined) send({ id, ...reply })
     },
   )
 }

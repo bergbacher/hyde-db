@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BRAND } from '../../src/brand.ts'
+import { BRAND, DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { build } from '../../src/build.ts'
 import {
   configNotAnObject,
@@ -164,7 +164,9 @@ describe('privacy naming (D53, D54)', () => {
     expect(unknownAnnotation('User.id', 'visable', ['visible', 'hidden']).hint).toBe(
       'Replace @hyde.visable with @hyde.visible.',
     )
-    expect(noOutputDirectory().hint).toBe('Set output = "./redacted" in the generator block.')
+    expect(noOutputDirectory().hint).toBe(
+      `Set output = "${DEFAULT_OUTPUT}" in the generator block.`,
+    )
     expect(schemaEqualsSource('public').hint).toContain('(the default is "redacted")')
   })
 

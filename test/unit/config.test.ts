@@ -1,3 +1,4 @@
+import { runInNewContext } from 'node:vm'
 import { describe, expect, it } from 'vitest'
 import { CONFIG_KEYS, DEFAULT_CONFIG, validateConfig } from '../../src/config.ts'
 import type { GeneratorConfig } from '../../src/types.ts'
@@ -16,6 +17,10 @@ describe('config validation', () => {
       statementTimeout: '15s',
     })
     expect(validateConfig()).toEqual({ config: DEFAULT_CONFIG, diagnostics: [] })
+  })
+
+  it('D54: CONFIG_KEYS names exactly the keys of DEFAULT_CONFIG, in the same order', () => {
+    expect([...CONFIG_KEYS]).toEqual(Object.keys(DEFAULT_CONFIG))
   })
 
   it('accepts every valid key as Prisma passes it (strings)', () => {
@@ -279,6 +284,19 @@ describe('exotic input (D9)', () => {
       [[], 'array'],
       [[[['a']], []], 'array'],
       [['strict'], 'array'],
+      // Boxed primitives and built-in objects are not a bag of keys (D9): refused once, by tag.
+      [Object(1), 'Number'],
+      [new String('strict'), 'String'],
+      [new Boolean(false), 'Boolean'],
+      [Object(10n), 'BigInt'],
+      [Object(Symbol('s')), 'Symbol'],
+      [new Uint8Array(2), 'Uint8Array'],
+      [new Map([['strict', 'false']]), 'Map'],
+      [new Set(['strict']), 'Set'],
+      [new Date(0), 'Date'],
+      [/strict/, 'RegExp'],
+      [new Error('strict'), 'Error'],
+      [Promise.resolve({ strict: 'false' }), 'Promise'],
     ]
     for (const [value, type] of notObjects) {
       expect(validateConfig(value as GeneratorConfig), type).toEqual({
@@ -286,6 +304,18 @@ describe('exotic input (D9)', () => {
         diagnostics: [
           invalidConfig(`config must be an object of generator config keys, got type ${type}`),
         ],
+      })
+    }
+  })
+
+  it('D9: validateConfig keeps accepting class instances and cross-realm plain objects', () => {
+    class Settings {
+      strict = 'false'
+    }
+    for (const value of [new Settings(), runInNewContext('({ strict: "false" })')]) {
+      expect(validateConfig(value as GeneratorConfig)).toEqual({
+        config: { ...DEFAULT_CONFIG, strict: false },
+        diagnostics: [],
       })
     }
   })

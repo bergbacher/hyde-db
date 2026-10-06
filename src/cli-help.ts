@@ -1,7 +1,7 @@
 // Command-line text and argument handling, kept pure so the I/O module stays thin (D5, D56).
 // The help is written for an agent that has never seen the package (D55): what it is, how to
 // configure it, the annotations, the output files and the deploy order, in that order.
-import { BRAND } from './brand.ts'
+import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import { CONFIG_KEYS } from './config.ts'
 import type { ResolvedConfig } from './types.ts'
 
@@ -11,15 +11,19 @@ export type CliCommand =
   | { readonly kind: 'version' }
   | { readonly kind: 'unknown'; readonly argument: string }
 
+const HELP_ARGUMENTS: readonly string[] = ['--help', '-h', 'help']
+const VERSION_ARGUMENTS: readonly string[] = ['--version', '-v', 'version']
+
 /**
  * Arguments win over the environment: Prisma passes none (A34), so any argument means a person
- * or an agent is at the keyboard. The first argument decides.
+ * or an agent is at the keyboard. Order does not matter: a help request anywhere wins, then a
+ * version request; otherwise the first argument is the unknown one (D56).
  */
 export function selectCommand(args: readonly string[], underPrisma: boolean): CliCommand {
   const [first] = args
   if (first === undefined) return underPrisma ? { kind: 'protocol' } : { kind: 'help' }
-  if (first === '--help' || first === '-h') return { kind: 'help' }
-  if (first === '--version' || first === '-v') return { kind: 'version' }
+  if (args.some((arg) => HELP_ARGUMENTS.includes(arg))) return { kind: 'help' }
+  if (args.some((arg) => VERSION_ARGUMENTS.includes(arg))) return { kind: 'version' }
   return { kind: 'unknown', argument: first }
 }
 
@@ -69,7 +73,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '',
     '  generator redacted {',
     `    provider = "${BRAND}"`,
-    '    output   = "./redacted"',
+    `    output   = "${DEFAULT_OUTPUT}"`,
     '  }',
     '',
     'Optional keys, all strings; an unset key uses the default shown:',
@@ -79,7 +83,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  /// @hyde.visible                  field: keep the column in its view',
     '  /// @hyde.hidden                   field: remove the column',
     '  /// @hyde.exclude                  model: no view at all',
-    '  /// @hyde.default(visible|hidden)  model: default for its unannotated fields',
+    '  /// @hyde.default(visible|hidden)  model: default for its unannotated fields (needs strict "false")',
     '',
     'Output files (commit them):',
     '  redacted-views.sql       creates the views schema, one view per model, and the role',
@@ -87,9 +91,12 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  redacted-schema.md       tables, columns and joins of the views, to give whoever queries them',
     '',
     'Deploy in this order (<output> is the generator output directory):',
+    '  npx prisma generate  # writes the three files',
+    '  # psql does not read .env: export DATABASE_URL in your shell as a plain libpq URL, without Prisma-only parameters such as ?schema=public',
     '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
     '  npx prisma migrate deploy',
     '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
+    `  psql "$DATABASE_URL" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '…'"  # once: gives the role a login`,
     '',
     'Problems are diagnostics with stable HYDE_* codes (for example HYDE_STRICT_UNANNOTATED).',
     'Each error carries a fix hint, and any error fails `prisma generate` before writing files.',

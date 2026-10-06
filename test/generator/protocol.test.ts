@@ -5,12 +5,13 @@ import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { build } from '../../src/index.ts'
 import { OUTPUT_FILES, readRepoFile, repoRoot } from '../helpers/files.ts'
 import { parseSchema } from '../helpers/prisma.ts'
 
 interface RpcResponse {
-  readonly id: number
+  readonly id: number | null
   readonly result?: unknown
   readonly error?: { readonly code: number; readonly message: string }
 }
@@ -22,8 +23,8 @@ interface Session {
 }
 
 /**
- * Every non-empty stderr line must be a JSON-RPC response with a numeric id (A19, A20). Nothing
- * is filtered: a stray line (a Node warning, a debug print) fails the test that provoked it.
+ * Every non-empty stderr line must be a JSON-RPC response with a numeric or null id (A19, A20).
+ * Nothing is filtered: a stray line (a Node warning, a debug print) fails the test that provoked it.
  */
 function parseResponses(stderr: string): RpcResponse[] {
   return stderr
@@ -31,7 +32,9 @@ function parseResponses(stderr: string): RpcResponse[] {
     .filter((line) => line !== '')
     .map((line) => {
       const message: unknown = JSON.parse(line)
-      expect(message, line).toMatchObject({ jsonrpc: '2.0', id: expect.any(Number) })
+      expect(message, line).toMatchObject({ jsonrpc: '2.0' })
+      const { id } = message as { id?: unknown }
+      expect(id === null || typeof id === 'number', line).toBe(true)
       return message as RpcResponse
     })
 }
@@ -103,7 +106,7 @@ describe('generator protocol', () => {
         jsonrpc: '2.0',
         id: 1,
         result: {
-          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: DEFAULT_OUTPUT },
         },
       },
     ])
@@ -173,6 +176,25 @@ describe('generator protocol', () => {
     expect(stderr.split('\n').filter((line) => line !== '')).toHaveLength(1)
   })
 
+  it('A19: a request with id null is answered, and the response carries id null', async () => {
+    const { responses, stderr } = await runGenerator([
+      { jsonrpc: '2.0', id: null, method: 'getManifest', params: {} },
+      { jsonrpc: '2.0', method: 'getManifest', params: {} },
+      { jsonrpc: '2.0', id: 7, method: 'nope' },
+    ])
+    expect(responses).toEqual([
+      {
+        jsonrpc: '2.0',
+        id: null,
+        result: {
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: DEFAULT_OUTPUT },
+        },
+      },
+      { jsonrpc: '2.0', id: 7, error: { code: -32601, message: 'hyde-db: unknown method nope' } },
+    ])
+    expect(stderr.split('\n').filter((line) => line !== '')).toHaveLength(2)
+  })
+
   it('A20: stderr carries only JSON-RPC lines, one per request that has an id', async () => {
     const { request } = generateRequest(example)
     const failing = generateRequest(example, { provider: 'mysql' }).request
@@ -212,7 +234,7 @@ describe('generator protocol', () => {
         jsonrpc: '2.0',
         id: 1,
         result: {
-          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: DEFAULT_OUTPUT },
         },
       },
       { jsonrpc: '2.0', id: 2, result: null },

@@ -4,6 +4,7 @@
 import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { OUTPUT_FILES, readRepoFile, repoRoot } from '../helpers/files.ts'
 
 const TIME_LIMIT_MS = 5000
@@ -82,13 +83,18 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
       expect(stdout).toContain(annotation)
     }
     for (const file of OUTPUT_FILES) expect(stdout).toContain(file)
-    expect(stdout).toContain(
+    const deploy = [
+      'npx prisma generate',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
-    )
-    expect(stdout).toContain('npx prisma migrate deploy')
-    expect(stdout).toContain(
+      'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-    )
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '…'"`,
+    ]
+    const positions = deploy.map((command) => stdout.indexOf(command))
+    expect(positions).not.toContain(-1)
+    expect(positions).toEqual([...positions].sort((a, b) => a - b))
+    expect(stdout).toContain('(needs strict "false")')
+    expect(stdout).toContain(`output   = "${DEFAULT_OUTPUT}"`)
     expect(stdout).toContain('HYDE_')
     expect(stdout.endsWith('\n')).toBe(true)
   })
@@ -116,6 +122,38 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
     expect((await run(['-v'])).stdout).toBe(`${version}\n`)
   })
 
+  it('D56: help and version also work as plain words', async () => {
+    const help = await run(['--help'])
+    const word = await run(['help'])
+    expect(word.code).toBe(0)
+    expect(word.stdout).toBe(help.stdout)
+    const version = await run(['version'])
+    expect(version.code).toBe(0)
+    expect(version.stdout).toBe((await run(['--version'])).stdout)
+  })
+
+  it('D56: --help wins over an unknown argument in either order', async () => {
+    const help = await run(['--help'])
+    for (const args of [
+      ['--bogus', '--help'],
+      ['--help', '--bogus'],
+    ]) {
+      const result = await run(args)
+      expect(result.code, args.join(' ')).toBe(0)
+      expect(result.stderr, args.join(' ')).toBe('')
+      expect(result.stdout, args.join(' ')).toBe(help.stdout)
+    }
+  })
+
+  it('D56: --version wins over an unknown argument, but --help wins over --version', async () => {
+    const withBogus = await run(['--version', '--bogus'])
+    expect(withBogus.code).toBe(0)
+    expect(withBogus.stdout).toBe(`${version}\n`)
+    const both = await run(['--version', '--help'])
+    expect(both.code).toBe(0)
+    expect(both.stdout).toBe((await run(['--help'])).stdout)
+  })
+
   it('D56: an unknown argument exits 2 with a pointer to --help on stderr', async () => {
     const { code, stdout, stderr } = await run(['--frobnicate'])
     expect(code).toBe(2)
@@ -134,7 +172,7 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
       jsonrpc: '2.0',
       id: 1,
       result: {
-        manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+        manifest: { prettyName: 'Redacted read-only views', defaultOutput: DEFAULT_OUTPUT },
       },
     })
   })

@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from '../../src/cli-help.ts'
 import { CONFIG_KEYS, DEFAULT_CONFIG } from '../../src/config.ts'
 import { DIAGNOSTIC_CODES } from '../../src/diagnostics.ts'
@@ -27,10 +28,30 @@ describe('selectCommand', () => {
     expect(selectCommand(['-v'], false)).toEqual({ kind: 'version' })
   })
 
-  it('D56: the first argument decides; anything else is unknown', () => {
-    expect(selectCommand(['--version', '--help'], false)).toEqual({ kind: 'version' })
-    expect(selectCommand(['help'], false)).toEqual({ kind: 'unknown', argument: 'help' })
-    expect(selectCommand(['--help', '--nope'], false)).toEqual({ kind: 'help' })
+  it('D56: help and version also work as plain words', () => {
+    expect(selectCommand(['help'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['version'], false)).toEqual({ kind: 'version' })
+    expect(selectCommand(['help'], true)).toEqual({ kind: 'help' })
+  })
+
+  it('D56: order does not matter: a help request anywhere wins, then a version request', () => {
+    expect(selectCommand(['--bogus', '--help'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['--help', '--bogus'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['--bogus', '-h'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['--bogus', 'help'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['--version', '--help'], false)).toEqual({ kind: 'help' })
+    expect(selectCommand(['--version', '--bogus'], false)).toEqual({ kind: 'version' })
+    expect(selectCommand(['--bogus', '-v'], false)).toEqual({ kind: 'version' })
+    expect(selectCommand(['--bogus', 'version'], false)).toEqual({ kind: 'version' })
+  })
+
+  it('D56: otherwise the first unknown argument is reported', () => {
+    expect(selectCommand(['--bogus'], false)).toEqual({ kind: 'unknown', argument: '--bogus' })
+    expect(selectCommand(['--first', '--second'], false)).toEqual({
+      kind: 'unknown',
+      argument: '--first',
+    })
+    expect(selectCommand(['Help'], false)).toEqual({ kind: 'unknown', argument: 'Help' })
   })
 })
 
@@ -84,9 +105,12 @@ describe('usage', () => {
 
   it('D56: shows the minimal generator block and says env() is not supported (D35)', () => {
     expect(text).toContain(
-      ['generator redacted {', '  provider = "hyde-db"', '  output   = "./redacted"', '}'].join(
-        '\n  ',
-      ),
+      [
+        'generator redacted {',
+        '  provider = "hyde-db"',
+        `  output   = "${DEFAULT_OUTPUT}"`,
+        '}',
+      ].join('\n  '),
     )
     expect(text).toContain('env() is not supported')
   })
@@ -132,6 +156,11 @@ describe('usage', () => {
     }
   })
 
+  it('D56: says @hyde.default needs strict "false"', () => {
+    const line = lines.find((l) => l.includes('@hyde.default('))
+    expect(line).toContain('(needs strict "false")')
+  })
+
   it('D56: names exactly the files build() writes', () => {
     const files = build({ models: [] }).files
     expect(files).not.toBeNull()
@@ -139,13 +168,44 @@ describe('usage', () => {
     expect([...named].sort()).toEqual(Object.keys(files ?? {}).sort())
   })
 
-  it('D56: gives the deploy order as copy-pasteable commands', () => {
-    const commands = lines.filter((line) => /^ {2}(psql|npx) /.test(line)).map((l) => l.trim())
-    expect(commands).toEqual([
+  /** The command lines of the deploy block, without their trailing `# …` comments. */
+  const commandsIn = (usageText: string): string[] =>
+    usageText
+      .split('\n')
+      .filter((line) => /^ {2}(psql|npx) /.test(line))
+      .map((line) => line.trim().replace(/ +#.*$/, ''))
+
+  it('D56: gives the deploy order as copy-pasteable commands, starting with prisma generate', () => {
+    expect(commandsIn(text)).toEqual([
+      'npx prisma generate',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
       'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '…'"`,
     ])
+  })
+
+  it('D56: says prisma generate writes the three files and the login step runs once', () => {
+    expect(lines.find((l) => l.includes('npx prisma generate'))).toMatch(
+      /# writes the three files$/,
+    )
+    expect(lines.find((l) => l.includes('ALTER ROLE'))).toMatch(/# once: .*login/)
+  })
+
+  it('D56: warns that psql needs DATABASE_URL exported as a plain libpq URL', () => {
+    const caveats = lines.filter((l) => l.includes('DATABASE_URL') && !/^ {2}psql /.test(l))
+    expect(caveats).toHaveLength(1)
+    expect(caveats[0]).toContain('export')
+    expect(caveats[0]).toContain('.env')
+    expect(caveats[0]).toContain('libpq')
+    expect(caveats[0]).toContain('?schema=public')
+  })
+
+  it('D56: names the role from the config it is given in the login step', () => {
+    const custom = { ...DEFAULT_CONFIG, role: 'masked_reader' }
+    expect(commandsIn(usage(custom)).at(-1)).toBe(
+      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD '…'"`,
+    )
   })
 
   it('D56: mentions the stable HYDE_* codes with fix hints, using a code that exists', () => {

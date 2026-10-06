@@ -1,7 +1,7 @@
 // Diagnostics catalog (D51): every problem hyde-db reports has a stable code, a severity,
 // a location and a message; every error also carries a fix hint (D26). Unknown names get a
 // "did you mean" suggestion when a valid spelling is within edit distance 2 (D25).
-import { BRAND } from './brand.ts'
+import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import type { Diagnostic, DiagnosticCode, Severity } from './types.ts'
 
 export const SEVERITY: Readonly<Record<DiagnosticCode, Severity>> = {
@@ -271,7 +271,7 @@ export function noOutputDirectory(): Diagnostic {
     'HYDE_NO_OUTPUT',
     'generator',
     'no output directory',
-    'Set output = "./redacted" in the generator block.',
+    `Set output = "${DEFAULT_OUTPUT}" in the generator block.`,
   )
 }
 
