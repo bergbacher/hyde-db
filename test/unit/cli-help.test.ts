@@ -308,7 +308,7 @@ describe('usage', () => {
     expect(text).toContain('Once, after the first deploy, let the reader log in.')
   })
 
-  it('A41, D66, D136: the login step sets the password with \\password first, then LOGIN, and the one-liner is the fallback with its costs', () => {
+  it('A41, D66: the login step sets the password with \\password first, then LOGIN, and the one-liner is the fallback with its costs', () => {
     const login = lines.findIndex((l) => l.includes('LOGIN PASSWORD'))
     const note = lines.slice(
       lines.findIndex((l) => l.startsWith('Once, after the first deploy')),
