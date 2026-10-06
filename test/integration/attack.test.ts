@@ -427,10 +427,7 @@ describe('cluster', () => {
     const setRole = psql(db.name, `SET ROLE "${db.role}";`, { server: asOwner })
     expect(setRole.status).toBe(3)
     expect(setRole.stderr).toContain('permission denied to set role')
-    const pasted = psql(db.name, fix, { server: asOwner })
-    expect(pasted.status, pasted.stderr).toBe(0)
-    const reapplied = psql(db.name, script)
-    expect(reapplied.status, reapplied.stderr).toBe(0)
+    await pasteFixAndReapply(db, failed, { user: owner, script })
   })
 
   it("A39: a reader role that already exists as SUPERUSER stops the owner's apply before any change", async () => {

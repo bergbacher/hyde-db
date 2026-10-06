@@ -316,8 +316,10 @@ export interface PasteOptions {
   readonly orphans?: readonly string[]
   /** Skip the ACL comparison, for fixes that change ownership rather than revoke (REASSIGN OWNED). */
   readonly ownership?: boolean
-  /** The role that pastes the fix, after `SET ROLE`; default the suite's superuser. */
+  /** The role that pastes the fix, after `SET ROLE`; default the server's superuser. */
   readonly role?: string
+  /** The role psql logs in as to paste the fix, in a session of its own; default the server's superuser. */
+  readonly user?: string
 }
 
 /**
@@ -333,8 +335,9 @@ export async function pasteFix(
 ): Promise<PsqlResult> {
   const before = await aclEntries(db.name, db.server)
   const fix = suggestedFix(failed)
+  const { containerId, user } = db.server ?? inject('pg')
   const pasted = psql(db.name, options.role ? `SET ROLE "${options.role}";\n${fix}` : fix, {
-    server: db.server,
+    server: { containerId, user: options.user ?? user },
   })
   expect(pasted.status, pasted.stderr).toBe(0)
   if (!options.ownership) {

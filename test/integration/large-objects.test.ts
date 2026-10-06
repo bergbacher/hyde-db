@@ -12,8 +12,10 @@ import {
   dropTestDatabase,
   inOneTransaction,
   type PsqlResult,
+  pasteFix,
   pasteFixAndReapply,
   psql,
+  type Server,
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
@@ -93,6 +95,8 @@ describe('lo_compat_privileges for the whole server', () => {
   }
   const role = 'hyde_compat_reader'
   let script = ''
+  /** The server's own database, as the paste helper takes it. */
+  let db: TestDb
   /** Waits until a new session sees the setting (pg_reload_conf only signals the server). */
   async function settled(value: string): Promise<void> {
     for (let attempt = 0; attempt < 50; attempt++) {
@@ -105,10 +109,15 @@ describe('lo_compat_privileges for the whole server', () => {
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer(inject('pg').image).start()
-    const server = { containerId: container.getId(), user: container.getUsername() }
+    const server: Server = {
+      containerId: container.getId(),
+      user: container.getUsername(),
+      uri: container.getConnectionUri(),
+    }
     const database = container.getDatabase()
     run = (sql: string) => psql(database, sql, { server })
-    script = buildFiles(role)['redacted-views.sql']
+    db = { name: database, role, password: '', files: buildFiles(role), server }
+    script = db.files['redacted-views.sql']
     const tables = readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')
     expect(run(`${tables}\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;`).status).toBe(0)
   })
@@ -126,7 +135,7 @@ describe('lo_compat_privileges for the whole server', () => {
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${role}: the server configuration. Fix: ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();${SUPERUSER}`,
     )
-    expect(run(suggestedFix(failed)).status).toBe(0)
+    await pasteFix(db, failed)
     await settled('off')
     const reapplied = run(script)
     expect(reapplied.status, reapplied.stderr).toBe(0)
@@ -139,9 +148,7 @@ describe('lo_compat_privileges for the whole server', () => {
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${role}: all roles. Fix: ALTER ROLE ALL RESET lo_compat_privileges;${SUPERUSER}`,
     )
-    expect(run(suggestedFix(failed)).status).toBe(0)
-    const reapplied = run(script)
-    expect(reapplied.status, reapplied.stderr).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 })
 
@@ -154,6 +161,10 @@ describe('lo_compat_privileges on the server command line', () => {
   }
   const role = 'hyde_cmdline_reader'
   let script = ''
+  /** The server's own database for `reader`, as the paste helper takes it. */
+  let databaseFor: (reader: string) => TestDb = () => {
+    throw new Error('the server has not started')
+  }
 
   beforeAll(async () => {
     container = await new PostgreSqlContainer(inject('pg').image)
@@ -162,7 +173,15 @@ describe('lo_compat_privileges on the server command line', () => {
     const containerId = container.getId()
     const admin = container.getUsername()
     const database = container.getDatabase()
+    const server: Server = { containerId, user: admin, uri: container.getConnectionUri() }
     run = (sql: string, user = admin) => psql(database, sql, { server: { containerId, user } })
+    databaseFor = (reader) => ({
+      name: database,
+      role: reader,
+      password: '',
+      files: buildFiles(reader),
+      server,
+    })
     script = buildFiles(role)['redacted-views.sql']
     const tables = readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')
     // The reader logs in through the container's local socket to show what its sessions get.
@@ -182,20 +201,18 @@ describe('lo_compat_privileges on the server command line', () => {
     return shown.stdout.trim()
   }
 
-  it('A70, D109: lo_compat_privileges set on the server command line reaches the reader and aborts apply; the printed setting for the reader turns it off', () => {
+  it('A70, D109: lo_compat_privileges set on the server command line reaches the reader and aborts apply; the printed setting for the reader turns it off', async () => {
     expect(readerSetting()).toBe('on')
     const failed = run(script)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${role}: the server command line. Fix: ALTER ROLE ${role} SET lo_compat_privileges = off;${SUPERUSER}`,
     )
-    expect(run(suggestedFix(failed)).status).toBe(0)
-    const reapplied = run(script)
-    expect(reapplied.status, reapplied.stderr).toBe(0)
+    await pasteFixAndReapply(databaseFor(role), failed)
     expect(readerSetting()).toBe('off')
   })
 
-  it('A81, D109: on a first deploy the fix creates the reader the failed apply rolled back, then turns lo_compat_privileges off for it', () => {
+  it('A81, D109: on a first deploy the fix creates the reader the failed apply rolled back, then turns lo_compat_privileges off for it', async () => {
     const newRole = 'hyde_cmdline_new_reader'
     const exists = `SELECT 'exists=' || count(*) FROM pg_roles WHERE rolname = '${newRole}';`
     expect(run(exists).stdout).toContain('exists=0')
@@ -209,9 +226,7 @@ describe('lo_compat_privileges on the server command line', () => {
     expect(suggestedFix(failed)).not.toContain('ADMIN')
     // The apply created the role in its transaction, so the abort rolled the creation back (A81).
     expect(run(exists).stdout).toContain('exists=0')
-    expect(run(suggestedFix(failed)).status).toBe(0)
-    const reapplied = run(newScript)
-    expect(reapplied.status, reapplied.stderr).toBe(0)
+    await pasteFixAndReapply(databaseFor(newRole), failed)
     const shown = run(
       `SELECT 'config=' || array_to_string(setconfig, ',') FROM pg_db_role_setting WHERE setrole = '${newRole}'::regrole AND setdatabase = 0;`,
     )
@@ -247,7 +262,7 @@ describe('lo_compat_privileges on the server command line', () => {
     return `GRANT ${reader} TO ${deployer} WITH ADMIN OPTION${options}; `
   }
 
-  it("A89, D123: on a first deploy by a non-superuser deployer, the fix also grants it ADMIN on the reader it creates again, so the deployer's re-apply can set the reader's settings", () => {
+  it("A89, D123: on a first deploy by a non-superuser deployer, the fix also grants it ADMIN on the reader it creates again, so the deployer's re-apply can set the reader's settings", async () => {
     managedDeployer()
     const reader = 'hyde_cmdline_owned_reader'
     const ownScript = buildFiles(reader)['redacted-views.sql']
@@ -257,7 +272,7 @@ describe('lo_compat_privileges on the server command line', () => {
       `${COMPAT} for role ${reader}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${reader} NOLOGIN; ${adminGrant(reader)}ALTER ROLE ${reader} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
     )
     // A superuser pastes it verbatim; then the deployer's own re-apply passes.
-    expect(run(suggestedFix(failed)).status).toBe(0)
+    await pasteFix(databaseFor(reader), failed)
     const reapplied = run(ownScript, deployer)
     expect(reapplied.status, reapplied.stderr).toBe(0)
   })
