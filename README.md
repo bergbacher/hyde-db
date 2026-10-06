@@ -6,11 +6,13 @@ You mark fields `/// @hyde.visible` or `/// @hyde.hidden`. `prisma generate` the
 
 | File | What it does |
 |---|---|
-| `redacted-views.sql` | Creates schema `redacted` with one view per model that holds only the visible columns, and a role `redacted_reader` that can `SELECT` from those views and nothing else. A final check aborts the script if the role could reach anything more. |
+| `redacted-views.sql` | Creates schema `redacted` with one view per model that holds only the visible columns, and a role `redacted_reader` that can `SELECT` from those views. A final check inside the same transaction aborts the script if the role could reach anything beyond them. |
 | `redacted-views-drop.sql` | Drops schema `redacted`, so migrations can change the columns the views use. |
 | `redacted-schema.md` | Tables, columns and joins of the views, for whoever queries them. |
 
 Hidden columns do not exist in the views, so every query that names one, such as `left(email, 1)` or `WHERE email LIKE …`, fails because the column does not exist. PostgreSQL's privileges enforce this; no result filter is involved. <!-- D1 -->
+
+What this guarantees, and what it does not, is in [What it guarantees and what it does not](#what-it-guarantees-and-what-it-does-not).
 
 ## Quick start
 
@@ -65,15 +67,16 @@ npx prisma generate
 On success it prints one line: <!-- D28 -->
 
 ```text
-hyde-db: 2 views, 5 visible and 1 hidden columns → prisma/redacted
+hyde-db: 2 views, 5 visible columns and 1 hidden column → prisma/redacted
 ```
 
 Then commit `prisma/redacted/`, [deploy](#deploy), and do the [one-time setup](#one-time-setup).
 
 ## Supported versions
 
-- **Prisma:** the Prisma 6 and 7 CLIs, tested on 6.19.3 and 7.10.0. Prisma 8 has no generator step, so hyde-db cannot run there; whether to read Prisma 8's contract IR instead is an open question. <!-- D30, A19, A18, Q5 -->
-- **PostgreSQL:** 14 to 18; the attack suite runs on 14 and 18. No other database is supported. <!-- A11, D21, D34 -->
+- **Prisma:** the Prisma 6 and 7 CLIs; the end-to-end tests run Prisma 6.19.3 and 7.10.0. Prisma 8 has no generator step, so hyde-db cannot run there; whether to read Prisma 8's contract IR instead is an open question. <!-- D30, A19, A18, Q5 -->
+- **PostgreSQL:** 14 to 18. The attack suite in the CI workflow runs on PostgreSQL 14 and 18, the oldest and newest of these majors. <!-- A11, D21, D38 -->
+- **MySQL:** not in 1.0. MySQL 8.4 and 9.7 are planned for 1.1.0. Until then a datasource with `provider = "mysql"` (or any provider other than `postgresql`) fails `prisma generate` with `HYDE_UNSUPPORTED_PROVIDER`. <!-- D87, D94, D86 -->
 - **Node.js:** `^20.19 || ^22.12 || >=24`. <!-- D31 -->
 - **Runtime dependencies:** none. <!-- D32 -->
 
@@ -96,7 +99,7 @@ generator redacted {
 
 | Key | Default | Accepts | Effect |
 |---|---|---|---|
-| `provider` | required | exactly `"hyde-db"` | Prisma runs the provider as a command, so any extra word reaches hyde-db as an argument: an unknown one fails `prisma generate` with `hyde-db: unknown argument "…"`, and a help or version argument makes it print that and write nothing while `prisma generate` still exits 0. |
+| `provider` | required | exactly `"hyde-db"` | Prisma runs the provider as a command. Any extra word, such as `"hyde-db --help"`, reaches hyde-db as an argument: it exits with status 2, so `prisma generate` fails and writes no files. |
 | `output` | `"./redacted"` | a directory | Where the three files go, relative to `schema.prisma`. |
 | `strict` | `"true"` | `"true"`, `"false"` | `"true"`: every scalar and enum field needs `@hyde.visible` or `@hyde.hidden`, and `@hyde.default` is an error. |
 | `default` | `"hidden"` | `"hidden"`, `"visible"` | Visibility of unannotated fields; takes effect only with `strict = "false"`. |
@@ -105,8 +108,15 @@ generator redacted {
 | `sourceSchema` | `"public"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Schema of models without `@@schema`. |
 | `statementTimeout` | `"15s"` | digits with an optional `ms`, `s` or `min` (bare digits are milliseconds), at most 2147483647 ms | The reader role's default statement timeout; a zero value turns it off and warns. |
 
-<!-- D61, D25, D59 -->
+<!-- D66, D25, D59, A42 -->
 
+- With an extra word in `provider`, the failure message is: <!-- D66 -->
+
+  ```text
+  hyde-db: Prisma passed arguments (--help); the generator block must read provider = "hyde-db" with nothing after it.
+  ```
+
+- Without `output`, Prisma 6 and 7 write to `./redacted` next to `schema.prisma`. hyde-db ignores the generator block's name. <!-- A42 -->
 - Values are plain strings. `env("…")` is not supported in the generator block: Prisma passes the variable's name, not its value, so the value is rejected as invalid. <!-- D35, A22 -->
 - An unknown key or an invalid value is an error that names the closest valid spelling, for example `unknown config key "strickt" (did you mean "strict"?)`. <!-- D25 -->
 - `schema` must differ from `sourceSchema` and from every model's `@@schema`, because the scripts drop and recreate it. <!-- D12 -->
@@ -149,14 +159,16 @@ git diff --exit-code prisma/redacted
 
 With `psql`:
 
+Note: psql does not read .env. Export DATABASE_URL in your shell first, as a plain libpq URL without Prisma-only parameters such as ?schema=public.
+
 ```sh
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/redacted/redacted-views-drop.sql
+psql "${DATABASE_URL:?export DATABASE_URL first}" -v ON_ERROR_STOP=1 -f prisma/redacted/redacted-views-drop.sql
 npx prisma migrate deploy
-psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f prisma/redacted/redacted-views.sql
+psql "${DATABASE_URL:?export DATABASE_URL first}" -v ON_ERROR_STOP=1 -f prisma/redacted/redacted-views.sql
 ```
 
-- psql does not read `.env`. Export `DATABASE_URL` in the shell as a plain libpq URL, without Prisma-only parameters such as `?schema=public`, which psql rejects. <!-- D61 -->
-- Keep `-v ON_ERROR_STOP=1`. Without it, psql exits 0 even when a script is refused: the database stays unchanged, but the deploy does not notice. <!-- D58 -->
+- While `DATABASE_URL` is unset or empty, the shell stops each `psql` line with `DATABASE_URL: export DATABASE_URL first` and runs nothing. Without that guard, psql would connect to whatever database its defaults point at. <!-- D68, A49 -->
+- Keep `-v ON_ERROR_STOP=1`. Without it, psql exits 0 even when a script is refused: the database stays unchanged, but the deploy does not notice. <!-- D58, A43 -->
 
 With Prisma 7 (the database URL comes from `prisma.config.ts`):
 
@@ -176,17 +188,25 @@ npx prisma db execute --file prisma/redacted/redacted-views.sql --schema prisma/
 
 <!-- D43, A30 -->
 
-The paths assume `prisma/schema.prisma` and `output = "./redacted"`. The deploy user can be a superuser or a non-superuser owner with `CREATEROLE`; see [deploy permissions](#deploy-permissions). <!-- D49 -->
+The paths assume `prisma/schema.prisma` and `output = "./redacted"`. Who may run the scripts is in [deploy permissions](#deploy-permissions).
+
+### Transactions, timeouts and the schema marker
+
+- Each script is one transaction. A refused drop or apply changes nothing, under any client. <!-- D58 -->
+- If your own code runs the scripts over a pooled connection, send `ROLLBACK` after an error, before the connection is reused. <!-- A43 -->
+- Both scripts set `SET LOCAL lock_timeout = '60s'`, and the apply script also sets `SET LOCAL jit = off`. Both settings end with the script's transaction, so they do not stay with a reused connection. <!-- D110, D129, A84, A93 -->
+- A reader that holds a transaction open on a view makes a deploy fail after 60 seconds with `canceling statement due to lock timeout`, and the deploy rolls back. End the reader's session or transaction, then deploy again. <!-- D110, D93, A72 -->
+- The scripts drop schema `redacted` only when its comment is the hyde-db marker: `Generated by hyde-db`, alone or followed by `.` and more text. Any other schema of that name stops them; see row 0 of [what the apply script refuses](#what-the-apply-script-refuses). <!-- D11, D58 -->
 
 ### One-time setup
 
-**1. Let the reader log in.** The apply script creates `redacted_reader` without login. Put its password in `READER_PASSWORD` (from your secret store; never commit it), then run once: <!-- D61 -->
+**1. Let the reader log in.** The apply script creates `redacted_reader` without login. First export `READER_PASSWORD` in your shell, from your secret store; never commit it. The password must not contain a single quote. Typed inline, it lands in your shell history and in ps output. Then run once: <!-- D66, D68 -->
 
 ```sh
-psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '${READER_PASSWORD:?set READER_PASSWORD first}'"
+psql "${DATABASE_URL:?export DATABASE_URL first}" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '${READER_PASSWORD:?set READER_PASSWORD first}'"
 ```
 
-The shell runs nothing while `READER_PASSWORD` is unset or empty. The password must not contain a single quote. Later deploys keep the login and the password.
+The shell runs nothing while `READER_PASSWORD` or `DATABASE_URL` is unset or empty. To keep the password out of your shell, run `ALTER ROLE redacted_reader LOGIN;` in an interactive psql session instead, then `\password redacted_reader`, which prompts for the password. Later deploys keep the login and the password. <!-- A41 -->
 
 **2. On PostgreSQL 14 and older**, and on clusters upgraded from them, every role may create objects in schema `public`. The apply script refuses to finish while `redacted_reader` can create objects anywhere, so run once: <!-- A15, D24 -->
 
@@ -204,61 +224,123 @@ REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;
 
 ### Deploy permissions
 
-The scripts run as a superuser, or as a non-superuser owner with `CREATEROLE`, the setup managed PostgreSQL services commonly use. The deploy user must be able to create schemas in the database and to read the source tables, because the views run with their owner's privileges. <!-- D49, A31, A33 -->
+The scripts run as a superuser, or as a non-superuser with `CREATEROLE`, the option where you have no superuser, for example on a managed service. The deploy user must be able to create schemas in the database and to read the source tables, because the views run with their owner's privileges. On a first deploy it creates `redacted_reader`. <!-- D49, A31, A33 -->
 
-| Situation | What happens | What to do |
-|---|---|---|
-| The deploy user does not own the source tables. | Apply prints `WARNING: no privileges could be revoked for "users"` (and one per column) and succeeds. | Nothing: the final check guarantees the result. |
-| The final check prints `Fix: ALTER ROLE redacted_reader NO…;`. | A `CREATEROLE` user can run `NOCREATEROLE`, and on PostgreSQL 14 also `NOCREATEDB`; the other attributes need more. | Run the printed fix as the provider's admin role or a superuser. |
-| `redacted_reader` already exists as a superuser, or (PostgreSQL 16 and later) was created by another role. | Apply stops at `ALTER ROLE "redacted_reader" SET …` with a permission error, before the final check. Nothing changes. | Fix the role as an admin (below), then deploy again. |
+- hyde-db never revokes anything on source tables. A grant to `redacted_reader` (or to `PUBLIC`) on a source table is refused by the final check, with the statement that removes it. So a deploy user that owns, or can read, only the tables the views use can deploy. <!-- D69, A50 -->
+- The apply script never changes the reader's role attributes. It refuses a reader that has any of them, with the `ALTER ROLE` that removes them. <!-- D49 -->
 
-<!-- D49, A31 -->
+A reader role that already exists as a superuser, or (PostgreSQL 16 and later) was created by another role, stops a non-superuser's apply at the first `ALTER ROLE "redacted_reader" SET …` line with a permission error. That happens before the final check, and nothing changes. An administrator fixes the role, then you deploy again: <!-- A39 -->
 
 ```sql
 ALTER ROLE redacted_reader NOSUPERUSER;
 GRANT redacted_reader TO <deploy-user> WITH ADMIN OPTION;
 ```
 
-The first statement is for a superuser reader role; the second, on PostgreSQL 16 and later, lets the deploy user manage a role it did not create.
+The first statement is for a superuser reader role and needs a superuser. The second, on PostgreSQL 16 and later, lets the deploy user manage a role it did not create; replace `<deploy-user>` with its name.
 
-### Transactions and the schema marker
+## What the apply script refuses
 
-- Each script is one transaction. A refused drop or apply changes nothing, under any client. <!-- D58 -->
-- If your own code runs the scripts over a pooled connection, send `ROLLBACK` after an error, before the connection is reused.
-- The scripts drop schema `redacted` only when its comment is the hyde-db marker: `Generated by hyde-db`, alone or followed by `.` and more text. Any other schema of that name stops them with `schema redacted exists but was not created by hyde-db … refusing to drop it`. Rename or drop that schema yourself, or set `schema` to an unused name. <!-- D11, D58 -->
+The apply script aborts at the first of these checks that fails, in this order, and the whole transaction rolls back, so nothing changes. Row 0 runs before the old views are dropped. Rows 1 to 13 are the final check, which runs after the new views and grants. <!-- D1, D11, D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111 -->
 
-## What the final check refuses
+Every error starts with `hyde-db: `. The third column is the text that follows, up to the list of objects. Every final-check error ends with `Fix: ` and the statements to paste; the examples use made-up object names.
 
-The apply script ends with a check inside its transaction. It aborts the whole script, so nothing changes, when `redacted_reader` meets any condition below, checked in this order. Each error starts with `hyde-db: role redacted_reader`. <!-- D1, D13, D24, D49 -->
+| # | Refused when | Error after `hyde-db: ` | Printed fix |
+|---|---|---|---|
+| 0 | schema `redacted` exists and its comment is not the hyde-db marker | `schema redacted exists but was not created by hyde-db (its comment lacks the "Generated by hyde-db" marker)` | none: rename or drop that schema yourself, or set `schema` to an unused name |
+| 1 | `redacted_reader` has `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` | `role redacted_reader has attributes it must not have:` | `ALTER ROLE redacted_reader NOCREATEROLE NOBYPASSRLS;`, naming every attribute it has |
+| 2 | it owns any object in this database other than its own temporary objects and large objects, or owns any database | `role redacted_reader owns objects it must not own:` | `REASSIGN OWNED BY redacted_reader TO CURRENT_USER; -- run as an administrator` |
+| 3 | it is a member of another role, such as `pg_read_all_data` | `role redacted_reader must not be a member of other roles:` | `REVOKE pg_read_all_data FROM redacted_reader GRANTED BY admin CASCADE;`, one per membership; `GRANTED BY` only on PostgreSQL 16 and later |
+| 4 | it can create schemas in this database, directly or through `PUBLIC` | `role redacted_reader can create schemas in database` | `REVOKE CREATE ON DATABASE app FROM PUBLIC, redacted_reader CASCADE;` |
+| 5 | it or `PUBLIC` holds a privilege beyond the initial ones on a schema, relation, column or function in `pg_catalog`, `information_schema` or `pg_toast` | `role redacted_reader has privileges on system catalog objects beyond their initial privileges:` | `REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM PUBLIC CASCADE;`, or the `ROUTINE`, `SCHEMA` or column form such as `SELECT (rolpassword)` |
+| 6 | it holds any privilege on a table, partitioned table, view, materialized view or foreign table outside `redacted`: `SELECT`, `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE`, `REFERENCES`, `TRIGGER` or any column privilege, through `PUBLIC` or directly; source tables included | `role redacted_reader can read relations outside schema redacted:` | `REVOKE ALL ON public.users FROM PUBLIC, redacted_reader CASCADE;` |
+| 7 | it can use a foreign server | `role redacted_reader can use foreign servers:` | `REVOKE USAGE ON FOREIGN SERVER loop FROM PUBLIC CASCADE;` |
+| 8 | it can execute a `SECURITY DEFINER` function in a non-system schema it can use | `role redacted_reader can execute SECURITY DEFINER functions:` | `REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC CASCADE;` |
+| 9 | it can use a sequence (`SELECT`, `USAGE`, `UPDATE`, or a column grant); temporary sequences excepted, so its own cannot block a deploy | `role redacted_reader can read sequences:` | `REVOKE ALL ON SEQUENCE public.users_id_seq FROM PUBLIC CASCADE;` |
+| 10 | another role's default privileges grant it anything, or grant `PUBLIC` privileges on tables, sequences, schemas or (PostgreSQL 18) large objects; its own default privileges excepted | `role redacted_reader gets privileges on objects created later (default privileges):` | `ALTER DEFAULT PRIVILEGES FOR ROLE admin IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;` |
+| 11 | it can create objects in any schema, including another session's `pg_temp_N`; the applying session's own temporary schema excepted | `role redacted_reader can create objects in schemas:` | `REVOKE CREATE ON SCHEMA public FROM PUBLIC CASCADE;` |
+| 12 | `lo_compat_privileges` is on for its sessions: in the server configuration file or on the server command line, for the database, for its role, for all roles, or for its role in this database | `lo_compat_privileges is on, which turns off privilege checks on large objects for role redacted_reader:` | depends on where it is set; see [large-object settings](#large-object-settings) |
+| 13 | it or `PUBLIC` has an ACL entry on a large object it does not own | `role redacted_reader can read large objects it does not own:` | `REVOKE ALL ON LARGE OBJECT 16401 FROM PUBLIC CASCADE;` |
 
-| Refused when `redacted_reader`… | Error, after the role name | Fix |
-|---|---|---|
-| has `SUPERUSER`, `CREATEDB`, `CREATEROLE`, `REPLICATION` or `BYPASSRLS` | `has attributes it must not have: CREATEDB` | printed: `ALTER ROLE redacted_reader NOCREATEDB;` |
-| can read a table, partitioned table, view, materialized view or foreign table outside `redacted`, including through `PUBLIC` grants, column grants or membership in `pg_read_all_data` | `can read relations outside schema redacted: public.users` | not printed: revoke the grant, for example `REVOKE SELECT ON public.users FROM PUBLIC;` |
-| is a member of another role | `must not be a member of other roles` | not printed: `REVOKE <other-role> FROM redacted_reader;` |
-| can execute a `SECURITY DEFINER` function in a schema it can use | `can execute SECURITY DEFINER functions: public.peek(n integer)` | printed: `REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC;` |
-| can use a sequence (`SELECT`, `USAGE` or `UPDATE`) | `can read sequences: public.users_id_seq` | printed: `REVOKE ALL ON SEQUENCE public.users_id_seq FROM PUBLIC;` |
-| can create objects in any schema | `can create objects in schemas: public` | printed: `REVOKE CREATE ON SCHEMA public FROM PUBLIC;` |
+- On PostgreSQL 14 and older, the default `CREATE` for `PUBLIC` on schema `public` is refused by row 11; the [one-time setup](#one-time-setup) removes it. <!-- A15, D24 -->
+- A `CREATE` grant on another session's temporary schema outlives that session, because PostgreSQL reuses the schema; row 11 refuses it, and the printed `REVOKE` removes it. <!-- A45, D24 -->
+- The check reports one kind of problem per run. After pasting a fix, run the apply script again; repeat until it passes.
 
-- A printed fix names whoever holds the privilege: `PUBLIC`, `redacted_reader` (also when it owns the object), or both. It works when pasted; run it as the object's owner or a superuser (for `ALTER ROLE`, see [deploy permissions](#deploy-permissions)), then deploy again. <!-- D13, D24, D49 -->
-- The apply script itself revokes direct grants to `redacted_reader` on tables in `sourceSchema`, column grants included. <!-- D1 -->
-- On PostgreSQL 14 and older, the default `CREATE` for `PUBLIC` on schema `public` is refused here; the [one-time setup](#one-time-setup) removes it. <!-- A15, D24 -->
-- The check skips the applying session's own temporary schema. A `CREATE` grant on another session's temporary schema (`pg_temp_N`) is refused; such a grant outlives that session, and the printed `REVOKE` removes it. <!-- D24 -->
+### How a printed fix is built
+
+- A fix of one statement is printed bare. A fix of several statements is printed as one transaction, `BEGIN; … COMMIT;`, so it applies completely or not at all. <!-- D108, A82 -->
+- A fix names whoever holds the privilege: `PUBLIC`, `redacted_reader`, or both. It names the reader only when the reader holds a grant or owns the object, so a fix also works after a failed first deploy rolled back the creation of the role. <!-- D108, A81 -->
+- Grants made by the object's owner are revoked in one statement with `CASCADE`, which also removes what the reader passed on from them in the same ACL. <!-- D108, A54 -->
+- A grant made by any other role, a third-party grantor, is revoked as that grantor: `SET ROLE <grantor>; REVOKE … CASCADE; RESET ROLE;`. Each grantor revokes exactly the privileges it granted, never `ALL`. <!-- D108, D127, A56, A87 -->
+- Column privileges the reader passed on to others are revoked as the reader first, before its own grant goes, for example `SET ROLE redacted_reader; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE;`. <!-- D108, A69 -->
+- When a grantor no longer holds the grant option behind something it passed on, the fix lends it that exact option for its revoke and takes it back afterwards: `GRANT … WITH GRANT OPTION;` before, and `REVOKE GRANT OPTION FOR … CASCADE;` or `REVOKE … CASCADE;` after. The option comes from a role the grantor belongs to that still holds it, run as that role with `SET ROLE`, or else from the owner. <!-- D127, A90, A91 -->
+- A fix that contains `SET ROLE` ends with `-- run as a superuser`, and so does every fix for row 12. The fix for row 2 ends with `-- run as an administrator`. Both are SQL comments, so they paste harmlessly. <!-- D108, D109 -->
+- The `ALTER SYSTEM` fix of row 12 is printed without `BEGIN; … COMMIT;`, because PostgreSQL refuses `ALTER SYSTEM` inside a transaction. <!-- D109 -->
+
+A fix as an apply prints it, after `Fix: ` (one line):
+
+```text
+BEGIN; SET ROLE redacted_reader; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM redacted_reader CASCADE; COMMIT; -- run as a superuser
+```
+
+### What a pasted fix changes
+
+A pasted fix removes the grants that give `redacted_reader` or `PUBLIC` the refused access, and leaves every other grant exactly as it was. The attack suite compares the ACL entries before and after each pasted fix. The exceptions: <!-- D128 -->
+
+- **Orphaned pass-ons.** When a grantor no longer holds the grant option behind column grants it passed on, the fix that revokes them also removes the same orphaned grants that grantor made to other roles. Such grants are never backed by a grant option. <!-- D125 -->
+- **Owner-lent options.** When only the owner can lend the grantor the option, a grant that the grantor passed on from its own owner-granted column option can cascade away with the fix. The fix grants the grantor's own column grants back, but not what it passed on from them. <!-- D130, A92 -->
+- **A superuser as lender.** If a role with `SUPERUSER` holds an explicit grant option on the object and the grantor is a member of it, the fix may borrow the option from that role, and taking it back can also remove grants the grantor holds itself. This needs a role with `SUPERUSER` that holds explicit grant options on the object, so it cannot happen where nobody is a superuser. <!-- A92 -->
+
+### Large-object settings
+
+Row 12's fix depends on where `lo_compat_privileges` is on. Every one ends with `-- run as a superuser`; several sources together print one `BEGIN; … COMMIT;`. <!-- D109, D123, A61, A70, A81, A89 -->
+
+| Where it is on | Printed fix |
+|---|---|
+| server configuration file | `ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();` (no transaction) |
+| server command line (`postgres -c …`) | SQL cannot change it, so the fix turns it off for the reader's role: `ALTER ROLE redacted_reader SET lo_compat_privileges = off;` |
+| server command line, on a first deploy | The failed apply rolled back the role it created, so the fix creates it first: `BEGIN; CREATE ROLE redacted_reader NOLOGIN; ALTER ROLE redacted_reader SET lo_compat_privileges = off; COMMIT;`. When the deploy user is not a superuser, the fix also gives it `ADMIN OPTION` on the role, `GRANT redacted_reader TO admin WITH ADMIN OPTION, INHERIT FALSE, SET FALSE;` (without `, INHERIT FALSE, SET FALSE` before PostgreSQL 16), so its next apply can set the role's settings. |
+| the database | `ALTER DATABASE app RESET lo_compat_privileges;` |
+| the reader's role, all roles, the reader's role in this database | `ALTER ROLE redacted_reader RESET lo_compat_privileges;`, `ALTER ROLE ALL RESET lo_compat_privileges;`, `ALTER ROLE redacted_reader IN DATABASE app RESET lo_compat_privileges;` |
+
+### Running fixes without a superuser
+
+Where the deploy user is a non-superuser with `CREATEROLE`, for example on a managed service without superuser access, this is what it can run, as probed: <!-- D125, A38, A39, A82 -->
+
+| Fix | Run by a non-superuser deploy user with `CREATEROLE` |
+|---|---|
+| A `REVOKE` without `SET ROLE` | Works when the deploy user owns the object: it revokes as the owner. |
+| Contains `SET ROLE <role>` (`-- run as a superuser`) | Fails with `permission denied to set role`. Works after `GRANT <role> TO CURRENT_USER;` for each role the fix names after `SET ROLE`; afterwards run `REVOKE <role> FROM CURRENT_USER;`. On PostgreSQL 16 and later that grant needs `ADMIN OPTION` on the role, which the deploy user holds on roles it created, `redacted_reader` included. For a role someone else created, the grant fails with `Only roles with the ADMIN option on role … may grant this role`, and only a role with that option can run the fix. On 14, `CREATEROLE` is enough for any role that is not a superuser. |
+| `REASSIGN OWNED BY redacted_reader TO CURRENT_USER;` (row 2) | Fails with `permission denied to reassign objects`. Works after `GRANT redacted_reader TO CURRENT_USER;`; afterwards run `REVOKE redacted_reader FROM CURRENT_USER;`. |
+| `ALTER ROLE redacted_reader NO…;` (row 1) | `NOCREATEROLE` works. `NOCREATEDB` works on 14, and on 16 and later only when the deploy user has `CREATEDB` itself. `NOREPLICATION` and `NOBYPASSRLS` need a superuser on 14, and on 16 and later a role that has that attribute itself. `NOSUPERUSER` needs a superuser. |
+| Row 12, large-object settings | Fails on 14, 16 and 18, for example with `permission denied to set parameter "lo_compat_privileges"`: a superuser must run it. |
+
+For example, for a fix that runs `SET ROLE redacted_reader`, do this in one psql session as the deploy user:
+
+1. Run `GRANT redacted_reader TO CURRENT_USER;`.
+2. Paste the printed fix.
+3. Run `REVOKE redacted_reader FROM CURRENT_USER;`.
+4. Run the apply script again.
+
+The probe used PostgreSQL 14.24, 16.14 and 18.6 in Docker, with a deploy user that has `LOGIN CREATEROLE CREATEDB`, is not a superuser, owns the database, its schema `public` and the source tables, and created `redacted_reader` by deploying. It did not run on any provider's service, did not test provider-specific admin roles, and did not test the fixes of rows 3, 5 and 10 (memberships, catalog privileges and default privileges).
 
 ## What it guarantees and what it does not
 
-The guarantee is the privilege setup: `redacted_reader` can read the generated views and nothing else, and the apply script proves that against the live database before it commits. <!-- D14, D1 -->
+The guarantee is the privilege setup, scoped to table data: `redacted_reader` can read no table data outside the generated views. The apply script proves that against the live database before it commits. It holds as of each successful apply: a grant made later is not checked until the next apply, which refuses it. <!-- D93, D1, D14 -->
 
 The role's read-only default and statement timeout are session defaults, not guarantees: `redacted_reader` can turn both off with `SET`. With read-only off it still cannot write to any table, because it holds no write privileges, but it can create temporary tables unless `TEMPORARY` on the database is revoked from `PUBLIC`, which affects every role. <!-- D14, A2, D50, A32 -->
 
 | Not covered | Why | What to do |
 |---|---|---|
+| Catalog metadata | The reader can read the names of every schema, table and column, hidden columns included, view and function definitions, and row counts from the statistics. | Do not put secrets in names, comments or definitions. |
+| Large objects the reader owns, including ones an administrator transfers to it | After `SET`, the reader can create large objects through `PUBLIC`'s default `EXECUTE` on `lo_create`, `lo_creat` and `lo_from_bytea`, and owns them. | Optionally run `REVOKE EXECUTE ON FUNCTION lo_create(oid), lo_creat(integer), lo_from_bytea(oid, bytea) FROM PUBLIC;`, which affects every role. Never transfer a large object to the reader. |
+| Data an administrator publishes through channels the database cannot attribute | A trigger that sends row data with `NOTIFY` reaches any role that runs `LISTEN`, which needs no privilege. | Do not publish row data through `NOTIFY` in a database the reader can connect to. |
+| A server-level `lo_compat_privileges = on` hidden by a deployer-scoped `off` | When the deploy user's own role setting or connection options set it `off`, the apply session cannot see that the server has it `on` for the reader. | Do not set `lo_compat_privileges` for the deploy user or in its connection options. |
 | Rows | Every row of a visible model is visible. | Expose only models whose every row the reader may see; `@hyde.exclude` the others. |
 | Content of visible columns | hyde-db judges names, not contents. A free-text column such as `description` can contain personal data. | Mark such a column `@hyde.hidden` unless you are sure. |
 | Load | The timeout limits single statements, and the reader can lift it. | Connect the reader to a read replica. |
 | Other databases in the cluster | The checks see one database. | Run the `REVOKE CONNECT` step of the [one-time setup](#one-time-setup). |
 
-<!-- D34, D14, D15 -->
+<!-- D93, A47, A48, A64, A66, A70, A71, D34, D14, D15 -->
 
 ## Diagnostics
 
@@ -291,24 +373,26 @@ hyde-db: warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible altho
 | `HYDE_STRICT_MODEL_DEFAULT` | error | `@hyde.default` in strict mode. | Annotate each field, or set `strict = "false"`. |
 | `HYDE_SENSITIVE_IMPLICIT` | error | A sensitive-looking name would become visible through a default. | Add `@hyde.hidden`, or `@hyde.visible` if it is safe. |
 | `HYDE_VIEW_NAME_COLLISION` | error | Two models map to the same view name. | Exclude one with `@hyde.exclude`. |
-| `HYDE_UNSUPPORTED_PROVIDER` | error | The datasource provider is not `postgresql`. | Use hyde-db only with PostgreSQL. |
+| `HYDE_UNSUPPORTED_PROVIDER` | error | The datasource provider is not `postgresql`, for example `mysql`. | Use hyde-db 1.0 only with PostgreSQL. |
 | `HYDE_NO_OUTPUT` | error | Prisma passed no output directory. | Set `output = "./redacted"`. |
 | `HYDE_RELATION_ANNOTATED` | warning | A relation field carries `@hyde.visible` or `@hyde.hidden`, which has no effect. | Annotate the scalar foreign-key fields instead. |
 | `HYDE_SENSITIVE_EXPLICIT` | warning | A sensitive-looking name is explicitly `@hyde.visible`. | Make sure the column is safe to show. |
 | `HYDE_TIMEOUT_DISABLED` | warning | `statementTimeout` is zero, which turns the reader role's statement timeout off. | Use a positive value such as `"15s"`, or remove the key. |
 | `HYDE_LEGACY_ANNOTATION` | warning | A doc comment holds an `@ai.*` annotation from prisma-ai-views, which has no effect. | Rename it to `@hyde.*`. |
 
-<!-- D51, D25, D26, D57, D59, D60 -->
+<!-- D51, D25, D26, D57, D59, D60, D87 -->
 
 ## Command line
 
-Run outside `prisma generate`, the `hyde-db` binary prints its usage: what it does, the generator block with every default, the annotations, the output files and the deploy commands. <!-- D61, D55 -->
+Run outside `prisma generate`, the `hyde-db` binary prints its usage: what it does, the generator block with every default, the annotations, the output files and the deploy commands. <!-- D66, D55 -->
 
 ```sh
 npx hyde-db --help
 ```
 
-`help` and `-h` do the same; `--version`, `-v` and `version` print the version. Outside Prisma the binary never reads standard input, and an unknown argument exits with status 2. Prisma starts it with `PRISMA_GENERATOR_INVOCATION=true` and no arguments; only then does it speak the generator protocol. <!-- D61, A34 -->
+- `help` and `-h` do the same; `--version`, `-v` and `version` print the version. <!-- D66 -->
+- Outside Prisma the binary never reads standard input. An unknown argument exits with status 2 and `hyde-db: unknown argument "--bogus"`. <!-- D66 -->
+- Prisma starts the binary with `PRISMA_GENERATOR_INVOCATION=true`. With no argument it then speaks the generator protocol; with any argument it exits with status 2 and the provider message shown under [generator block](#generator-block). <!-- D66, A34 -->
 
 ## Migrating from prisma-ai-views
 
@@ -328,7 +412,7 @@ npx hyde-db --help
 2. Rename every `@ai.*` annotation to `@hyde.*`. A leftover one has no effect and warns with `HYDE_LEGACY_ANNOTATION`; in strict mode its field is also reported as unannotated. <!-- D60, A37 -->
 3. Update the generator block, and the file paths in CI and deploy scripts. To keep the old non-strict behavior, set `strict = "false"`.
 4. Deploy, then do the [one-time setup](#one-time-setup) for `redacted_reader`.
-5. The old schema `ai` and role `ai_reader` stay untouched: the scripts never drop a schema without the hyde-db marker, so even with `schema = "ai"` they refuse to touch it. Until you drop the old schema, its views still block migrations that change the columns they use. Once the new views work, run as an admin: <!-- D11 -->
+5. The old schema `ai` and role `ai_reader` stay untouched: the scripts never drop a schema without the hyde-db marker, so even with `schema = "ai"` they refuse to touch it. Until you drop the old schema, its views still block migrations that change the columns they use. Once the new views work, run as an admin: <!-- D11, A44 -->
 
 ```sql
 DROP SCHEMA ai CASCADE;
@@ -342,11 +426,14 @@ The package exports `build`, `analyze` and their types, nothing else. Both take 
 ```ts
 import { analyze, build } from 'hyde-db'
 
-const { views, diagnostics, counts, files } = build(datamodel, { strict: 'true' })
+const { config, views, diagnostics, counts, files } = build(datamodel, { strict: 'true' })
 ```
 
 - `analyze` returns `config`, `views`, `diagnostics` and `counts` (visible and hidden columns) without rendering files. <!-- D48 -->
 - `build` adds `files`, the three file contents keyed by file name, or `null` when any diagnostic is an error.
+- `config` is a `ResolvedConfig`, a union discriminated on `dialect`. In 1.0 its only member is `PostgresqlConfig`, with `dialect: 'postgresql'`. <!-- D112 -->
+- `View.sourceSchema` is `string | null`. It is never `null` on PostgreSQL; `null` is for databases without schemas. <!-- D112 -->
+- Union types in the public API may gain members in minor releases. Switch on `dialect` and handle `null` instead of assuming one shape. <!-- D112 -->
 - `HYDE_UNSUPPORTED_PROVIDER` and `HYDE_NO_OUTPUT` come only from `prisma generate`.
 - The package is ESM-only; CommonJS code can `require('hyde-db')` on every supported Node.js version. <!-- D5, A12, D31 -->
 
@@ -383,11 +470,11 @@ E2E_DATABASE_URL=postgresql://postgres:pg@localhost:55432/postgres pnpm test:e2e
 
 `E2E_PRISMA_VERSIONS` (default `6.19.3,7.10.0`) narrows the Prisma versions; `E2E_TARBALL` points `node --test test/e2e/*.test.mjs` at an existing `.tgz` instead of the one `pnpm test:e2e` packs.
 
-Releases: every user-facing change adds a changeset (`pnpm changeset`). Changesets opens a version pull request on `main`. After it merges, a maintainer pushes the tag `v<version>`, and GitHub Actions checks, builds and publishes that tag with provenance; branch and pull-request CI never publish. [RELEASING.md](RELEASING.md) gives the steps. <!-- D63, D62 -->
+Releases: every user-facing change adds a changeset (`pnpm changeset`). Changesets opens a version pull request on `main`. After it merges, a maintainer pushes the tag `v<version>`, and the release workflow on GitHub Actions checks, builds and publishes that tag with provenance. It publishes only a commit on which CI passed; branch and pull-request CI never publish. [RELEASING.md](RELEASING.md) gives the steps. <!-- D63, D62, D126 -->
 
 ## Security
 
-See [SECURITY.md](SECURITY.md) for how to report a vulnerability. <!-- D41 -->
+Report vulnerabilities privately; [SECURITY.md](SECURITY.md) says how, and repeats the guarantee, its limits and a hardening checklist. <!-- D41 -->
 
 ## License
 
