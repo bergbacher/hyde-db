@@ -1,11 +1,11 @@
 // Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
 // views, grants the reader role SELECT on exactly those views, and aborts with a pasteable fix if
 // the role could reach anything else (D11, D13, D24, D49, D76, D80–D82, D91, D108, D109, D111,
-// D123, D124, D127, D130, D131, D134, D135, D138); it revokes nothing itself (D69).
+// D123, D124, D127, D130, D131, D134, D135, D138, D141); it revokes nothing itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
-import { renderSchemaGuard } from './schema-guard.ts'
+import { renderDependentsGuard, renderSchemaGuard } from './schema-guard.ts'
 
 export interface RenderInput {
   readonly config: ResolvedConfig
@@ -644,6 +644,8 @@ export function renderApplySql({ config, views }: RenderInput): string {
     'END $$;',
     '',
     renderSchemaGuard(config),
+    '',
+    renderDependentsGuard(config),
     '',
     `DROP SCHEMA IF EXISTS ${S} CASCADE;`,
     `CREATE SCHEMA ${S};`,

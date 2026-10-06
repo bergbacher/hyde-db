@@ -1,10 +1,11 @@
 // Renders redacted-views-drop.sql: drops the views schema before migrations, but only when it
-// carries the marker comment (D11). Guard and drop share one transaction, so a refused
-// drop changes nothing even under a client that runs past errors (D58).
+// carries the marker comment (D11) and nothing outside it depends on its views (D141). Guards and
+// drop share one transaction, so a refused drop changes nothing even under a client that runs
+// past errors (D58).
 import { BRAND } from '../brand.ts'
 import { quoteIdent } from '../sql.ts'
 import type { ResolvedConfig } from '../types.ts'
-import { renderSchemaGuard } from './schema-guard.ts'
+import { renderDependentsGuard, renderSchemaGuard } from './schema-guard.ts'
 
 export function renderDropSql({ config }: { readonly config: ResolvedConfig }): string {
   return [
@@ -17,6 +18,7 @@ export function renderDropSql({ config }: { readonly config: ResolvedConfig }): 
     'SET LOCAL client_min_messages = warning;',
     "SET LOCAL lock_timeout = '60s';",
     renderSchemaGuard(config),
+    renderDependentsGuard(config),
     `DROP SCHEMA IF EXISTS ${quoteIdent(config.schema)} CASCADE;`,
     'COMMIT;',
     '',

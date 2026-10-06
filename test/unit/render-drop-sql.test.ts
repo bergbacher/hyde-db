@@ -3,6 +3,9 @@ import { BRAND } from '../../src/brand.ts'
 import { renderDropSql } from '../../src/render/drop-sql.ts'
 import { config } from '../helpers/views.ts'
 
+/** The start of the guard that refuses to drop objects outside the views schema (D141). */
+const DEPENDENTS_GUARD = '-- Refuse to drop objects outside schema'
+
 describe('drop SQL', () => {
   const sql = renderDropSql({ config })
 
@@ -45,6 +48,12 @@ describe('drop SQL', () => {
       "SET LOCAL lock_timeout = '60s';",
     ])
     expect(sql).toContain(`\nBEGIN;\n${settings.join('\n')}\n`)
+  })
+
+  it('A97, D141: refuses to drop the schema while objects outside it depend on its views, after the marker guard', () => {
+    const guard = sql.indexOf(DEPENDENTS_GUARD)
+    expect(guard).toBeGreaterThan(sql.indexOf('refusing to drop it'))
+    expect(guard).toBeLessThan(sql.indexOf('DROP SCHEMA'))
   })
 
   it('D11: the marker guard checks the configured schema', () => {

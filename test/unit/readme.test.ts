@@ -147,34 +147,34 @@ const DEFAULT_KINDS = Array.from(
 const ROW_PINS: Readonly<
   Record<number, { fix: RegExp; golden: readonly string[]; condition: readonly string[] }>
 > = {
-  1: {
+  2: {
     fix: new RegExp(`^ALTER ROLE redacted_reader( NO(${ATTRIBUTES.join('|')}))+;$`),
     golden: ["format('ALTER ROLE %I %s;'"],
     condition: ATTRIBUTES.map((attribute) => `\`${attribute}\``),
   },
-  2: {
+  3: {
     fix: /^REASSIGN OWNED BY redacted_reader TO CURRENT_USER; -- run as an administrator$/,
     golden: ['Fix: REASSIGN OWNED BY % TO CURRENT_USER; -- run as an administrator'],
     condition: ['temporary objects and large objects', 'owns any database'],
   },
-  3: {
+  4: {
     fix: /^REVOKE \S+ FROM redacted_reader( GRANTED BY \S+)? CASCADE;$/,
     golden: ["format('REVOKE %I FROM %I%s CASCADE;'", "format(' GRANTED BY %s'"],
     condition: ['member of another role'],
   },
-  4: {
+  5: {
     fix: new RegExp(`^REVOKE CREATE ON DATABASE \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('CREATE ON DATABASE %I'", "has_database_privilege(r.oid, d.oid, 'CREATE')"],
     condition: ['create schemas in this database'],
   },
-  5: {
+  6: {
     fix: new RegExp(`^REVOKE [A-Z]+( \\(\\w+\\))? ON TABLE \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('TABLE %s'", "format('REVOKE %s ON %s FROM %s CASCADE;', q.privileges"],
     condition: goldenList(/WHERE n\.nspname IN \(([^)]*)\) AND x\.grantee/).map(
       (schema) => `\`${schema.replaceAll("'", '')}\``,
     ),
   },
-  6: {
+  7: {
     fix: new RegExp(`^REVOKE ALL ON \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: [
       "format('ALL ON %s', format('%I.%I', n.nspname, c.relname))",
@@ -186,17 +186,17 @@ const ROW_PINS: Readonly<
       'any column privilege',
     ],
   },
-  7: {
+  8: {
     fix: new RegExp(`^REVOKE USAGE ON FOREIGN SERVER \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('USAGE ON FOREIGN SERVER %I'", "has_server_privilege(r.oid, fs.oid, 'USAGE')"],
     condition: ['foreign server'],
   },
-  8: {
+  9: {
     fix: new RegExp(`^REVOKE EXECUTE ON ROUTINE \\S+\\(.*\\) FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('EXECUTE ON ROUTINE %s'", 'p.prosecdef'],
     condition: ['`SECURITY DEFINER`'],
   },
-  9: {
+  10: {
     fix: new RegExp(`^REVOKE ALL ON SEQUENCE \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('ALL ON SEQUENCE %s'"],
     condition: [
@@ -204,7 +204,7 @@ const ROW_PINS: Readonly<
       'column grant',
     ],
   },
-  10: {
+  11: {
     fix: new RegExp(
       `^ALTER DEFAULT PRIVILEGES FOR ROLE \\S+( IN SCHEMA \\S+)? REVOKE ALL ON (${DEFAULT_KINDS.join('|')}) FROM ${GRANTEES};$`,
     ),
@@ -214,17 +214,17 @@ const ROW_PINS: Readonly<
     ],
     condition: ['tables, sequences, schemas or (PostgreSQL 18) large objects'],
   },
-  11: {
+  12: {
     fix: new RegExp(`^REVOKE CREATE ON SCHEMA \\S+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('CREATE ON SCHEMA %I'", 'n.oid <> pg_my_temp_schema()'],
     condition: ["another session's `pg_temp_N`", "the applying session's own temporary schema"],
   },
-  13: {
+  14: {
     fix: new RegExp(`^REVOKE ALL ON LARGE OBJECT \\d+ FROM ${GRANTEES} CASCADE;$`),
     golden: ["format('ALL ON LARGE OBJECT %s'", 'l.lomowner <> r.oid'],
     condition: ['a large object it does not own'],
   },
-  14: {
+  15: {
     fix: new RegExp(
       `^REVOKE (ALTER SYSTEM|SET|ALTER SYSTEM, SET) ON PARAMETER \\S+ FROM ${GRANTEES} CASCADE; -- run as a superuser$`,
     ),
@@ -526,9 +526,25 @@ describe('README (a view of LEDGER.md)', () => {
     expect(errors).toEqual(abortPrefixes)
   })
 
+  it('A97, D141: row 1 and the deploy notes say both scripts refuse to drop objects outside the views schema that depend on its views', () => {
+    const row = refusalRows[1] ?? []
+    expect(row[1]).toContain('temporary objects excepted')
+    expect(row[3]).toBe('none: drop them before the deploy, and create them again after it')
+    expect(dropSql).toContain(
+      "RAISE EXCEPTION 'hyde-db: objects outside schema redacted depend on its views: %;",
+    )
+    const notes = section('Transactions, timeouts and the schema marker', '###')
+    for (const phrase of [
+      'both scripts stop, name it, and change nothing',
+      "a reader's own cannot block a deploy",
+    ]) {
+      expect(notes, phrase).toContain(phrase)
+    }
+  })
+
   it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111, D138: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {
     const pinned = Object.keys(ROW_PINS).map(Number)
-    expect(pinned).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
+    expect(pinned).toEqual([2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 14, 15])
     for (const index of pinned) {
       const pin = ROW_PINS[index]
       const row = refusalRows[index] ?? []
