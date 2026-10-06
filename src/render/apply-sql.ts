@@ -4,6 +4,7 @@
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
+import { renderSchemaGuard } from './schema-guard.ts'
 
 export interface RenderInput {
   readonly config: ResolvedConfig
@@ -56,6 +57,8 @@ export function renderApplySql({ config, views }: RenderInput): string {
     `    CREATE ROLE ${R} NOLOGIN;`,
     '  END IF;',
     'END $$;',
+    '',
+    renderSchemaGuard(config),
     '',
     `DROP SCHEMA IF EXISTS ${S} CASCADE;`,
     `CREATE SCHEMA ${S};`,
