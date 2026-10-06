@@ -101,6 +101,15 @@ describe('apply SQL', () => {
     expect(sql).toContain('r.oid = c.relowner')
   })
 
+  it('D24: aborts when the role can create objects in any schema', () => {
+    expect(sql).toContain("AND has_schema_privilege(r.oid, n.oid, 'CREATE');")
+    expect(sql).toContain('REVOKE CREATE ON SCHEMA %I FROM %s;')
+  })
+
+  it('D24: names the role in the fix when it owns the schema', () => {
+    expect(sql).toContain('r.oid = n.nspowner')
+  })
+
   it('uses the configured schema, role and timeout everywhere', () => {
     const custom = renderApplySql({
       config: {

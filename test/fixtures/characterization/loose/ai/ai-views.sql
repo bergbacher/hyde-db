@@ -59,7 +59,7 @@ ALTER ROLE "ai_reader" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPAS
 
 -- Safety check: abort if the role can read any relation outside the AI schema
 -- (e.g. via PUBLIC grants or membership in another role), execute a SECURITY DEFINER
--- function, or read a sequence.
+-- function, read a sequence, or create objects in any schema.
 DO $$
 DECLARE
   leaks text;
@@ -102,6 +102,15 @@ BEGIN
     AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(r.oid, c.oid, 'SELECT, USAGE, UPDATE') ELSE false END;
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role ai_reader can read sequences: %. Fix: %', leaks, fixes;
+  END IF;
+  SELECT string_agg(format('%I', n.nspname), ', ' ORDER BY n.nspname),
+         string_agg(format('REVOKE CREATE ON SCHEMA %I FROM %s;', n.nspname, concat_ws(', ', CASE WHEN has_schema_privilege('public', n.oid, 'CREATE') THEN 'PUBLIC' END, CASE WHEN r.oid = n.nspowner OR EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('CREATE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname)
+    INTO leaks, fixes
+  FROM pg_namespace n CROSS JOIN pg_roles r
+  WHERE r.rolname = 'ai_reader'
+    AND has_schema_privilege(r.oid, n.oid, 'CREATE');
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: role ai_reader can create objects in schemas: %. Fix: %', leaks, fixes;
   END IF;
 END $$;
 
