@@ -20,7 +20,10 @@ A portable SQL script with the same workflow and output files as PostgreSQL, run
 
 ## Architecture
 
-- One shared core — annotations, config validation, analysis — and a dialect per datasource provider (`postgresql`, `mysql`) that renders the apply SQL, the drop SQL and the Markdown wording. The generator accepts both providers (D96, A80).
+- Shared core: annotations, analysis, and the config rules common to both databases. Each database is a `Dialect` — its config key set and limits, its SQL quoting, and its apply, drop and Markdown renderers — and `build` dispatches on it (D104).
+- MySQL quotes identifiers with backticks and only doubles single quotes in literals, under the `sql_mode` its script pins; PostgreSQL keeps its double-quoted identifiers (D104).
+- `build` and `analyze` take an optional third argument `{ provider: 'postgresql' | 'mysql' }`, defaulting to `postgresql`; the generator passes the datasource's `activeProvider`. 1.0 callers keep working, so 1.1.0 is a minor release (D107).
+- `View.sourceSchema` is `string | null`: `null` on MySQL, where views read unqualified names from the connection's database. The resolved config is a union per dialect, and `validateConfig(raw, dialect)` holds the per-dialect key sets and limits as data (D106).
 - Prisma with `provider = "mysql"`: `activeProvider` is `"mysql"`, multi-schema is unsupported, the source database is the connection's default database, enums are inline column types, `@map`/`@@map` arrive as `dbName`, `view` blocks arrive in `models` (A80).
 
 ## Config on MySQL
@@ -33,14 +36,14 @@ A portable SQL script with the same workflow and output files as PostgreSQL, run
 | `sourceSchema` | error on MySQL (no schemas; the source database is the connection's) | D97, A80 |
 | `statementTimeout` | error on MySQL (no per-account timeout) | D97, A78 |
 
-Errors carry fix hints like every other diagnostic (D25, D26).
+Errors carry fix hints like every other diagnostic (D25, D26). Validation is `validateConfig(raw, dialect)` (D106).
 
-## Apply script (D98)
+## Apply script (D105)
 
-1. Strict SQL mode and `lock_wait_timeout = 60`.
+1. `SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES'` and `lock_wait_timeout = 60` — strict mode makes the abort mechanism fire, and the pinned mode makes literal quoting unambiguous (D104).
 2. Abort if the views database exists without hyde-db's marker view (the marker, since MySQL databases carry no comment) — nothing is dropped.
 3. Abort with the `GRANT SELECT ON mysql.* …` fix if the deployer cannot read the grant tables; without that access `information_schema` would silently show nothing (A77).
-4. `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>` — strips every direct grant, including stale view grants, which MySQL re-attaches to re-created names (A74, A77).
+4. `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>` — strips every direct grant, including stale view grants, which MySQL re-attaches to re-created names (A74, A77) — then verify the reader has no static privileges and no rows in `mysql.global_grants`, `db`, `tables_priv`, `columns_priv` or `procs_priv`, which covers wildcard grants whatever `partial_revokes` is.
 5. Pre-check, before any build step, refusing what the reset cannot fix: roles or default roles on the reader, a non-empty `mandatory_roles`, proxy grants, and other accounts a login could match (same name on another host, anonymous accounts) (A77).
 6. Drop and recreate the views database with the marker view and the views, created with `DEFINER = CURRENT_USER` so they expose only their columns and fail closed if the definer breaks (A75).
 7. Create the account if missing with `ACCOUNT LOCK`; grant `SELECT` on each view last.
