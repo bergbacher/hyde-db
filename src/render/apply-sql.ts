@@ -1,6 +1,6 @@
 // Renders ai-views.sql: one transaction that recreates the AI schema with column-filtered
 // views, grants the AI role SELECT on exactly those views, and aborts if the role could
-// reach anything else (D11, D13, D24).
+// reach anything else (D11, D13, D24, D49).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -31,6 +31,23 @@ function grantees(
   )
 }
 
+/** Role attributes the AI role must not have, as pg_roles columns, in the order the abort lists them (D49). */
+const ATTRIBUTES: readonly (readonly [column: string, name: string])[] = [
+  ['rolsuper', 'SUPERUSER'],
+  ['rolcreatedb', 'CREATEDB'],
+  ['rolcreaterole', 'CREATEROLE'],
+  ['rolreplication', 'REPLICATION'],
+  ['rolbypassrls', 'BYPASSRLS'],
+]
+
+/** SQL listing the attributes role `r` holds, each with the given prefix; '' when it holds none. */
+function heldAttributes(separator: string, prefix: string): string {
+  const cases = ATTRIBUTES.map(
+    ([column, name]) => `CASE WHEN r.${column} THEN '${prefix}${name}' END`,
+  )
+  return `concat_ws('${separator}', ${cases.join(', ')})`
+}
+
 /** The final safety check: every way the role could reach data outside the views aborts the script. */
 function renderFinalCheck(config: ResolvedConfig): string[] {
   const role = ql(config.role)
@@ -38,14 +55,24 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
   const sequence = "format('%I.%I', n.nspname, c.relname)"
   return [
-    '-- Safety check: abort if the role can read any relation outside the AI schema',
-    '-- (e.g. via PUBLIC grants or membership in another role), execute a SECURITY DEFINER',
-    '-- function, read a sequence, or create objects in any schema.',
+    '-- Safety check: abort if the role has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or',
+    '-- BYPASSRLS, can read any relation outside the AI schema (e.g. via PUBLIC grants or',
+    '-- membership in another role), execute a SECURITY DEFINER function, read a sequence,',
+    '-- or create objects in any schema.',
     'DO $$',
     'DECLARE',
     '  leaks text;',
     '  fixes text;',
     'BEGIN',
+    '  -- Attributes first: a superuser would pass every privilege test below.',
+    `  SELECT ${heldAttributes(', ', '')},`,
+    `         format('ALTER ROLE %I %s;', r.rolname, ${heldAttributes(' ', 'NO')})`,
+    '    INTO leaks, fixes',
+    '  FROM pg_roles r',
+    `  WHERE r.rolname = ${role};`,
+    "  IF leaks <> '' THEN",
+    `    RAISE EXCEPTION '${BRAND}: role ${config.role} has attributes it must not have: %. Fix: %', leaks, fixes;`,
+    '  END IF;',
     `  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY 1) INTO leaks`,
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace',
     `  WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')`,
@@ -89,6 +116,9 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '    INTO leaks, fixes',
     '  FROM pg_namespace n CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
+    // The applying session's own temp schema grants CREATE to every role with TEMP on the
+    // database; that is not a leak, and REVOKE on it would do nothing.
+    `    AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'`,
     "    AND has_schema_privilege(r.oid, n.oid, 'CREATE');",
     '  IF leaks IS NOT NULL THEN',
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} can create objects in schemas: %. Fix: %', leaks, fixes;`,
@@ -151,7 +181,6 @@ export function renderApplySql({ config, views }: RenderInput): string {
     `ALTER ROLE ${R} SET default_transaction_read_only = on;`,
     `ALTER ROLE ${R} SET statement_timeout = ${ql(config.statementTimeout)};`,
     `ALTER ROLE ${R} SET search_path = ${S};`,
-    `ALTER ROLE ${R} NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`,
     '',
     ...renderFinalCheck(config),
     '',

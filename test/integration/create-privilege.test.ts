@@ -62,4 +62,27 @@ describe('CREATE privilege', () => {
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })
+
+  it('D24: a direct CREATE grant names the role in the fix', async () => {
+    const db = await freshDb(true)
+    expect(apply(db).status).toBe(0)
+    await adminQuery(
+      db.name,
+      `CREATE SCHEMA scratch; GRANT CREATE ON SCHEMA scratch TO "${db.role}"`,
+    )
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(`role ${db.role} can create objects in schemas: scratch. Fix: `)
+    expect(suggestedFix(failed)).toBe(`REVOKE CREATE ON SCHEMA scratch FROM ${db.role};`)
+    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
+    expect(apply(db).status).toBe(0)
+  })
+
+  it("D24: the applying session's own temporary schema is not a leak", async () => {
+    const db = await freshDb(true)
+    // A TEMP table earlier in the same session gives it a pg_temp_N schema, in which every role
+    // with TEMP on the database (PUBLIC by default) counts as holding CREATE.
+    const result = psql(db.name, `CREATE TEMP TABLE scratch (id int);\n${db.files['ai-views.sql']}`)
+    expect(result.status, result.stderr).toBe(0)
+  })
 })

@@ -110,6 +110,52 @@ describe('apply SQL', () => {
     expect(sql).toContain('r.oid = n.nspowner')
   })
 
+  /** The CREATE check of the final DO block, from its fix to its abort. */
+  const createCheck = sql.slice(
+    sql.indexOf("string_agg(format('REVOKE CREATE ON SCHEMA"),
+    sql.indexOf('can create objects in schemas'),
+  )
+
+  it('D24: names the role in the fix when it holds CREATE directly', () => {
+    expect(createCheck).toContain(
+      "EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('CREATE'))",
+    )
+  })
+
+  it("D24: ignores the applying session's own temporary schemas", () => {
+    expect(createCheck).toContain(
+      "AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'",
+    )
+  })
+
+  /** The final safety check's DO block. */
+  const finalCheck = sql.slice(sql.lastIndexOf('DO $$'))
+
+  it('D49: refuses elevated role attributes instead of resetting them', () => {
+    expect(sql).not.toContain('NOSUPERUSER NOCREATEDB')
+    expect(sql).not.toMatch(/^ALTER ROLE "ai_reader" NO/m)
+    for (const column of [
+      'rolsuper',
+      'rolcreatedb',
+      'rolcreaterole',
+      'rolreplication',
+      'rolbypassrls',
+    ]) {
+      expect(finalCheck).toContain(`CASE WHEN r.${column} THEN`)
+    }
+    expect(finalCheck).toContain("FROM pg_roles r\n  WHERE r.rolname = 'ai_reader';")
+    expect(finalCheck).toContain("format('ALTER ROLE %I %s;', r.rolname, concat_ws(' ', ")
+    expect(finalCheck).toContain(
+      `RAISE EXCEPTION '${BRAND}: role ai_reader has attributes it must not have: %. Fix: %', leaks, fixes;`,
+    )
+  })
+
+  it('D49: checks the role attributes before anything a superuser would trip', () => {
+    const attributes = finalCheck.indexOf('has attributes it must not have')
+    expect(attributes).toBeGreaterThan(0)
+    expect(attributes).toBeLessThan(finalCheck.indexOf('has_table_privilege'))
+  })
+
   it('uses the configured schema, role and timeout everywhere', () => {
     const custom = renderApplySql({
       config: {

@@ -53,16 +53,25 @@ GRANT SELECT ON ALL TABLES IN SCHEMA "ai" TO "ai_reader";
 ALTER ROLE "ai_reader" SET default_transaction_read_only = on;
 ALTER ROLE "ai_reader" SET statement_timeout = '15s';
 ALTER ROLE "ai_reader" SET search_path = "ai";
-ALTER ROLE "ai_reader" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
--- Safety check: abort if the role can read any relation outside the AI schema
--- (e.g. via PUBLIC grants or membership in another role), execute a SECURITY DEFINER
--- function, read a sequence, or create objects in any schema.
+-- Safety check: abort if the role has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or
+-- BYPASSRLS, can read any relation outside the AI schema (e.g. via PUBLIC grants or
+-- membership in another role), execute a SECURITY DEFINER function, read a sequence,
+-- or create objects in any schema.
 DO $$
 DECLARE
   leaks text;
   fixes text;
 BEGIN
+  -- Attributes first: a superuser would pass every privilege test below.
+  SELECT concat_ws(', ', CASE WHEN r.rolsuper THEN 'SUPERUSER' END, CASE WHEN r.rolcreatedb THEN 'CREATEDB' END, CASE WHEN r.rolcreaterole THEN 'CREATEROLE' END, CASE WHEN r.rolreplication THEN 'REPLICATION' END, CASE WHEN r.rolbypassrls THEN 'BYPASSRLS' END),
+         format('ALTER ROLE %I %s;', r.rolname, concat_ws(' ', CASE WHEN r.rolsuper THEN 'NOSUPERUSER' END, CASE WHEN r.rolcreatedb THEN 'NOCREATEDB' END, CASE WHEN r.rolcreaterole THEN 'NOCREATEROLE' END, CASE WHEN r.rolreplication THEN 'NOREPLICATION' END, CASE WHEN r.rolbypassrls THEN 'NOBYPASSRLS' END))
+    INTO leaks, fixes
+  FROM pg_roles r
+  WHERE r.rolname = 'ai_reader';
+  IF leaks <> '' THEN
+    RAISE EXCEPTION 'hyde-db: role ai_reader has attributes it must not have: %. Fix: %', leaks, fixes;
+  END IF;
   SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY 1) INTO leaks
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
   WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
@@ -106,6 +115,7 @@ BEGIN
     INTO leaks, fixes
   FROM pg_namespace n CROSS JOIN pg_roles r
   WHERE r.rolname = 'ai_reader'
+    AND n.nspname NOT LIKE 'pg\_temp\_%' AND n.nspname NOT LIKE 'pg\_toast\_temp\_%'
     AND has_schema_privilege(r.oid, n.oid, 'CREATE');
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role ai_reader can create objects in schemas: %. Fix: %', leaks, fixes;

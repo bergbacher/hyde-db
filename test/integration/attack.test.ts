@@ -252,15 +252,44 @@ describe('cluster', () => {
     expect(row?.public_create).toBe(Number(row?.version) < 150000)
   })
 
-  it('A31: a non-superuser owner with CREATEROLE cannot apply the attribute-resetting script (pinned until D49 lands in Task 24a)', async () => {
-    const db = await freshDb()
+  /** A non-superuser deploy owner as on managed PostgreSQL: CREATEROLE, owns public and its tables' rights. */
+  async function managedOwner(db: TestDb): Promise<string> {
     const owner = await extraRole(`${db.name}_owner`, "LOGIN CREATEROLE PASSWORD 'owner'")
     await adminQuery(
       db.name,
       `ALTER SCHEMA public OWNER TO ${owner}; GRANT ALL ON ALL TABLES IN SCHEMA public TO ${owner}; GRANT CREATE ON DATABASE ${db.name} TO ${owner}`,
     )
-    const result = psql(db.name, `SET ROLE ${owner};\n${db.files['ai-views.sql']}`)
+    return owner
+  }
+
+  it('A31: a non-superuser owner with CREATEROLE cannot reset role attributes', async () => {
+    const db = await freshDb()
+    const owner = await managedOwner(db)
+    // The owner creates the AI role, as the script does on its first deploy.
+    expect(psql(db.name, `SET ROLE ${owner};\nCREATE ROLE "${db.role}" NOLOGIN;`).status).toBe(0)
+    const result = psql(
+      db.name,
+      `SET ROLE ${owner};\nALTER ROLE "${db.role}" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`,
+    )
     expect(result.status).toBe(3)
-    expect(result.stderr).toMatch(/SUPERUSER|superuser/)
+    expect(result.stderr).toMatch(/superuser|permission denied/)
+  })
+
+  it('D49: a non-superuser owner with CREATEROLE can apply the script', async () => {
+    const db = await freshDb()
+    const owner = await managedOwner(db)
+    const result = psql(db.name, `SET ROLE ${owner};\n${db.files['ai-views.sql']}`)
+    expect(result.status, result.stderr).toBe(0)
+    const reader = await connectAsReader(db)
+    try {
+      expect((await reader.query('SELECT id, country FROM users')).rows).toEqual([
+        { id: 1, country: 'DE' },
+      ])
+      await expect(reader.query('SELECT * FROM public.users')).rejects.toMatchObject({
+        code: '42501',
+      })
+    } finally {
+      await reader.end()
+    }
   })
 })
