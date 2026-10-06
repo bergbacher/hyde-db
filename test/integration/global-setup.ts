@@ -2,6 +2,7 @@
 // no error handling: without a container runtime this throws and the run fails (D22, A28).
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import type { TestProject } from 'vitest/node'
+import { startServer } from './helpers/server.ts'
 
 declare module 'vitest' {
   export interface ProvidedContext {
@@ -13,7 +14,7 @@ let container: StartedPostgreSqlContainer | undefined
 
 export async function setup(project: TestProject): Promise<void> {
   const image = process.env.PG_IMAGE ?? 'postgres:18-alpine'
-  container = await new PostgreSqlContainer(image).start()
+  container = await startServer(() => new PostgreSqlContainer(image))
   project.provide('pg', {
     uri: container.getConnectionUri(),
     containerId: container.getId(),

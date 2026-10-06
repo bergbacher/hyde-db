@@ -19,6 +19,7 @@ import {
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
+import { startServer } from './helpers/server.ts'
 
 const created: TestDb[] = []
 afterEach(async () => {
@@ -108,7 +109,7 @@ describe('lo_compat_privileges for the whole server', () => {
   }
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer(inject('pg').image).start()
+    container = await startServer(() => new PostgreSqlContainer(inject('pg').image))
     const server: Server = {
       containerId: container.getId(),
       user: container.getUsername(),
@@ -167,9 +168,13 @@ describe('lo_compat_privileges on the server command line', () => {
   }
 
   beforeAll(async () => {
-    container = await new PostgreSqlContainer(inject('pg').image)
-      .withCommand(['postgres', '-c', 'lo_compat_privileges=on'])
-      .start()
+    container = await startServer(() =>
+      new PostgreSqlContainer(inject('pg').image).withCommand([
+        'postgres',
+        '-c',
+        'lo_compat_privileges=on',
+      ]),
+    )
     const containerId = container.getId()
     const admin = container.getUsername()
     const database = container.getDatabase()

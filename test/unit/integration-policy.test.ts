@@ -2,6 +2,7 @@ import { readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { readRepoFile, repoRoot } from '../helpers/files.ts'
+import { startServer } from '../integration/helpers/server.ts'
 
 function integrationFiles(dir = join(repoRoot, 'test', 'integration')): string[] {
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
@@ -9,14 +10,59 @@ function integrationFiles(dir = join(repoRoot, 'test', 'integration')): string[]
   )
 }
 
+/** testcontainers 12's message when a container's ports are not bound within its fixed 10 seconds. */
+const PORTS_NOT_BOUND =
+  'Timed out after 10000ms while waiting for container ports to be bound to the host'
+
+/** A container factory whose starts settle as given, in order, and that counts them. */
+function containers(...outcomes: readonly (string | Error)[]): {
+  readonly factory: () => { start(): Promise<string> }
+  readonly starts: () => number
+} {
+  let started = 0
+  return {
+    factory: () => ({
+      start: async () => {
+        const outcome = outcomes[started++]
+        if (outcome instanceof Error) throw outcome
+        return outcome ?? 'unexpected start'
+      },
+    }),
+    starts: () => started,
+  }
+}
+
 describe('integration policy', () => {
   it('D22: the integration suite has no skip paths and the container start is not caught', () => {
     for (const file of integrationFiles()) {
       const source = readRepoFile(file.slice(repoRoot.length + 1))
       expect(source, file).not.toMatch(/\.(skip|skipIf|runIf|todo)\b|\bctx\.skip\(/)
+      // Every server starts through startServer, which retries only a port-binding timeout.
+      if (!file.endsWith(join('helpers', 'server.ts')))
+        expect(source, file).not.toMatch(/\.start\(\)/)
     }
-    expect(readRepoFile('test', 'integration', 'global-setup.ts')).not.toMatch(
-      /\btry\s*\{|\.catch\s*\(/,
-    )
+    const globalSetup = readRepoFile('test', 'integration', 'global-setup.ts')
+    expect(globalSetup).not.toMatch(/\btry\s*\{|\.catch\s*\(/)
+    expect(globalSetup).toContain('await startServer(')
+  })
+
+  it('D22: startServer starts a container once more only when testcontainers timed out binding its ports', async () => {
+    const retried = containers(new Error(PORTS_NOT_BOUND), 'second')
+    await expect(startServer(retried.factory)).resolves.toBe('second')
+    expect(retried.starts()).toBe(2)
+
+    const other = new Error('Could not find a working container runtime strategy')
+    const failing = containers(other, 'never')
+    await expect(startServer(failing.factory)).rejects.toBe(other)
+    expect(failing.starts()).toBe(1)
+
+    const twice = new Error(PORTS_NOT_BOUND)
+    const failingTwice = containers(new Error(PORTS_NOT_BOUND), twice, 'never')
+    await expect(startServer(failingTwice.factory)).rejects.toBe(twice)
+    expect(failingTwice.starts()).toBe(2)
+  })
+
+  it("D22: a hook outlasts testcontainers' 120-second startup timeout, so a slow start fails as itself", () => {
+    expect(readRepoFile('vitest.config.ts')).toContain('hookTimeout: 180_000,')
   })
 })

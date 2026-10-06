@@ -2,7 +2,8 @@
 // reader turn off large-object privilege checks or rewrite the server configuration (A96); the
 // final check refuses it. On PostgreSQL 14 there are no parameter privileges, and the check is
 // inert. Parameter privileges are cluster-wide and would reach the applies of the other test
-// files, so these tests get a server of their own, which is thrown away afterwards.
+// files, so on PostgreSQL 15+ these tests get a server of their own, which is thrown away
+// afterwards; on 14 they show on the shared server that the check is inert.
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest'
 import {
@@ -19,11 +20,13 @@ import {
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
+import { startServer } from './helpers/server.ts'
 
 let container: StartedPostgreSqlContainer | undefined
 let server: Server | undefined
 beforeAll(async () => {
-  container = await new PostgreSqlContainer(inject('pg').image).start()
+  if ((await serverVersion('postgres')) < 150000) return
+  container = await startServer(() => new PostgreSqlContainer(inject('pg').image))
   server = {
     containerId: container.getId(),
     user: container.getUsername(),

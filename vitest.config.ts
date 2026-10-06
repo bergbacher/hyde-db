@@ -27,7 +27,7 @@ const config: ViteUserConfig = defineConfig({
           include: ['test/integration/**/*.test.ts'],
           globalSetup: ['test/integration/global-setup.ts'],
           testTimeout: 60_000,
-          hookTimeout: 120_000,
+          hookTimeout: 180_000,
         },
       },
     ],
