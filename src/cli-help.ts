@@ -97,7 +97,8 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
     '  npx prisma migrate deploy',
     '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-    `  psql "$DATABASE_URL" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '<choose-a-strong-password>'"  # once: give the role a login; replace the placeholder first`,
+    // The shell aborts, running nothing, when READER_PASSWORD is unset or empty: no placeholder to paste.
+    `  psql "$DATABASE_URL" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"  # once; the password must not contain a single quote`,
     '',
     'Problems are diagnostics with stable HYDE_* codes (for example HYDE_STRICT_UNANNOTATED).',
     'Each error carries a fix hint, and any error fails `prisma generate` before writing files.',

@@ -88,7 +88,7 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
       'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,
     ]
     const positions = deploy.map((command) => stdout.indexOf(command))
     expect(positions).not.toContain(-1)

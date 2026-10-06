@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from '../../src/cli-help.ts'
@@ -86,6 +87,9 @@ describe('repositoryUrl', () => {
     expect(repositoryUrl(null)).toBeUndefined()
   })
 })
+
+/** The password argument of the login step: the shell aborts when READER_PASSWORD is unset or empty. */
+const LOGIN_PASSWORD = `'\${READER_PASSWORD:?set READER_PASSWORD first}'`
 
 describe('usage', () => {
   const text = usage(DEFAULT_CONFIG)
@@ -181,7 +185,7 @@ describe('usage', () => {
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
       'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
     ])
   })
 
@@ -190,14 +194,47 @@ describe('usage', () => {
       /# writes the three files$/,
     )
     expect(lines.find((l) => l.includes('ALTER ROLE'))).toMatch(
-      /# once: give the role a login; replace the placeholder first$/,
+      /# once; the password must not contain a single quote$/,
     )
   })
 
-  it('D56: the login step has an ASCII <placeholder> for the password, never a pasteable value', () => {
+  it('D56: the login step takes the password from READER_PASSWORD, with no <placeholder> to paste', () => {
     const login = lines.find((l) => l.includes('ALTER ROLE')) ?? ''
-    expect(login).toMatch(/PASSWORD '<[a-z-]+>'/)
+    expect(login).toContain('${READER_PASSWORD:?')
+    expect(login).not.toMatch(/<[^>]*>/)
     expect(login).not.toContain('…')
+  })
+
+  describe('the login command in a shell', () => {
+    // The command as printed, with psql swapped for printf so the arguments it would get are shown.
+    const command =
+      commandsIn(text)
+        .at(-1)
+        ?.replace(/^psql /, "printf '%s\\n' ") ?? ''
+    const shell = (env: Record<string, string>) =>
+      spawnSync('sh', ['-c', command], {
+        env: { PATH: process.env.PATH ?? '', DATABASE_URL: 'postgresql://db', ...env },
+        encoding: 'utf8',
+      })
+
+    it('D56: aborts with a message, running nothing, while READER_PASSWORD is unset or empty', () => {
+      const unset: Record<string, string>[] = [{}, { READER_PASSWORD: '' }]
+      for (const env of unset) {
+        const { status, stdout, stderr } = shell(env)
+        expect(status, JSON.stringify(env)).not.toBe(0)
+        expect(stdout, JSON.stringify(env)).toBe('')
+        expect(stderr, JSON.stringify(env)).toContain('READER_PASSWORD: set READER_PASSWORD first')
+      }
+    })
+
+    it('D56: passes the password from READER_PASSWORD into the statement once it is set', () => {
+      const { status, stdout, stderr } = shell({ READER_PASSWORD: 'S3cr$t value' })
+      expect(status).toBe(0)
+      expect(stderr).toBe('')
+      expect(stdout.split('\n')).toContain(
+        "ALTER ROLE redacted_reader LOGIN PASSWORD 'S3cr$t value'",
+      )
+    })
   })
 
   it('D56: the help is pure ASCII, so a pasted command carries no look-alike character', () => {
@@ -228,7 +265,7 @@ describe('usage', () => {
   it('D56: names the role from the config it is given in the login step', () => {
     const custom = { ...DEFAULT_CONFIG, role: 'masked_reader' }
     expect(commandsIn(usage(custom)).at(-1)).toBe(
-      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
     )
   })
 
