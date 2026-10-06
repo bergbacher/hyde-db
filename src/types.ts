@@ -60,6 +60,8 @@ export type DiagnosticCode =
   | 'HYDE_NO_OUTPUT'
   | 'HYDE_RELATION_ANNOTATED'
   | 'HYDE_SENSITIVE_EXPLICIT'
+  | 'HYDE_TIMEOUT_DISABLED'
+  | 'HYDE_LEGACY_ANNOTATION'
 
 /** A structured problem report (D51). Errors always carry a fix hint (D26). */
 export interface Diagnostic {

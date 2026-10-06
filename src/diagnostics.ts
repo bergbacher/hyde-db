@@ -20,6 +20,8 @@ export const SEVERITY: Readonly<Record<DiagnosticCode, Severity>> = {
   HYDE_NO_OUTPUT: 'error',
   HYDE_RELATION_ANNOTATED: 'warning',
   HYDE_SENSITIVE_EXPLICIT: 'warning',
+  HYDE_TIMEOUT_DISABLED: 'warning',
+  HYDE_LEGACY_ANNOTATION: 'warning',
 }
 
 export const DIAGNOSTIC_CODES: readonly DiagnosticCode[] = Object.keys(SEVERITY) as DiagnosticCode[]
@@ -65,8 +67,23 @@ function make(code: DiagnosticCode, location: string, message: string, hint?: st
 const quoted = (suggestion: string | undefined): string =>
   suggestion === undefined ? '' : ` (did you mean "${suggestion}"?)`
 
-const shown = (value: unknown): string =>
-  typeof value === 'string' ? `"${value}"` : JSON.stringify(value)
+/** Shows any value a caller can pass as config; never throws (BigInt, circular, symbol, no prototype). */
+function shown(value: unknown): string {
+  if (typeof value === 'string') return `"${value}"`
+  if (typeof value === 'number') return String(value)
+  try {
+    const json = JSON.stringify(value)
+    if (typeof json === 'string') return json
+  } catch {
+    // BigInt or circular structure: fall through to the plain string form.
+  }
+  try {
+    return String(value)
+  } catch {
+    // An object without a prototype cannot be converted to a string.
+    return typeof value
+  }
+}
 
 export function unknownConfigKey(key: string, validKeys: readonly string[]): Diagnostic {
   const suggestion = didYouMean(key, validKeys)
@@ -240,6 +257,24 @@ export function sensitiveExplicit(location: string): Diagnostic {
     'HYDE_SENSITIVE_EXPLICIT',
     location,
     'explicitly visible although the name looks sensitive — double-check',
+  )
+}
+
+export function timeoutDisabled(value: string, role: string): Diagnostic {
+  return make(
+    'HYDE_TIMEOUT_DISABLED',
+    'generator config',
+    `statementTimeout "${value}" disables the statement timeout for role ${role}`,
+    'Use a positive value such as "15s", or remove statementTimeout to use the default.',
+  )
+}
+
+export function legacyAnnotation(location: string, name: string): Diagnostic {
+  return make(
+    'HYDE_LEGACY_ANNOTATION',
+    location,
+    `@ai.${name} is the old prisma-ai-views annotation and has no effect`,
+    `Rename it to @hyde.${name}.`,
   )
 }
 

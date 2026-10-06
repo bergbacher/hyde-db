@@ -10,6 +10,7 @@ import {
   hasErrors,
   invalidConfigValue,
   invalidDefaultArgument,
+  legacyAnnotation,
   levenshtein,
   misplacedFieldAnnotation,
   misplacedModelAnnotation,
@@ -21,6 +22,7 @@ import {
   sensitiveImplicit,
   strictModelDefault,
   strictUnannotated,
+  timeoutDisabled,
   unknownAnnotation,
   unknownConfigKey,
   unsupportedProvider,
@@ -52,6 +54,8 @@ const ALL: Diagnostic[] = [
   noOutputDirectory(),
   relationAnnotated('Order.user'),
   sensitiveExplicit('User.email'),
+  timeoutDisabled('0s', 'redacted_reader'),
+  legacyAnnotation('User.id', 'hidden'),
 ]
 
 describe('diagnostics catalog', () => {
@@ -67,10 +71,38 @@ describe('diagnostics catalog', () => {
     }
   })
 
-  it('D51: relation and explicit-sensitive findings are warnings, everything else is an error', () => {
+  it('D51: the diagnostic codes are exactly the published list', () => {
+    expect([...DIAGNOSTIC_CODES].sort()).toEqual([
+      'HYDE_ANNOTATION_CONFLICT',
+      'HYDE_ANNOTATION_INVALID_ARGUMENT',
+      'HYDE_ANNOTATION_MISPLACED',
+      'HYDE_ANNOTATION_UNKNOWN',
+      'HYDE_CONFIG_INVALID_VALUE',
+      'HYDE_CONFIG_UNKNOWN_KEY',
+      'HYDE_LEGACY_ANNOTATION',
+      'HYDE_NO_OUTPUT',
+      'HYDE_RELATION_ANNOTATED',
+      'HYDE_SCHEMA_CONFLICT',
+      'HYDE_SENSITIVE_EXPLICIT',
+      'HYDE_SENSITIVE_IMPLICIT',
+      'HYDE_STRICT_MODEL_DEFAULT',
+      'HYDE_STRICT_UNANNOTATED',
+      'HYDE_TIMEOUT_DISABLED',
+      'HYDE_UNSUPPORTED_PROVIDER',
+      'HYDE_VIEW_NAME_COLLISION',
+    ])
+    expect(DIAGNOSTIC_CODES).toHaveLength(17)
+  })
+
+  it('D51: relation, explicit-sensitive, disabled-timeout and legacy-annotation findings are warnings, everything else is an error', () => {
     const warnings = ALL.filter((d) => d.severity === 'warning').map((d) => d.code)
     expect(new Set(warnings)).toEqual(
-      new Set(['HYDE_RELATION_ANNOTATED', 'HYDE_SENSITIVE_EXPLICIT']),
+      new Set([
+        'HYDE_RELATION_ANNOTATED',
+        'HYDE_SENSITIVE_EXPLICIT',
+        'HYDE_TIMEOUT_DISABLED',
+        'HYDE_LEGACY_ANNOTATION',
+      ]),
     )
   })
 
@@ -88,6 +120,31 @@ describe('diagnostics catalog', () => {
     expect(sensitiveImplicit('Gone.secret', 'model').message).toBe(
       'name looks sensitive but would be exposed via the model default',
     )
+  })
+})
+
+describe('value formatting (D9)', () => {
+  const got = (value: unknown): string =>
+    invalidConfigValue('role', value, 'a name').message.replace(/^.*, got /, '')
+  const circular: Record<string, unknown> = {}
+  circular.self = circular
+  const bare = Object.create(null) as Record<string, unknown>
+  bare.self = bare
+
+  it('D9: shows any value without throwing', () => {
+    expect(got('x')).toBe('"x"')
+    expect(got(['a'])).toBe('["a"]')
+    expect(got({ a: 1 })).toBe('{"a":1}')
+    expect(got(10n)).toBe('10')
+    expect(got(Number.NaN)).toBe('NaN')
+    expect(got(Number.POSITIVE_INFINITY)).toBe('Infinity')
+    expect(got(true)).toBe('true')
+    expect(got(Symbol('s'))).toBe('Symbol(s)')
+    expect(got(circular)).toBe('[object Object]')
+    expect(got(bare)).toBe('object')
+    expect(got(() => 1)).toBe('() => 1')
+    expect(got(undefined)).toBe('undefined')
+    expect(got(null)).toBe('null')
   })
 })
 
@@ -109,10 +166,34 @@ describe('privacy naming (D53, D54)', () => {
     const { datamodel, config } = parseSchema(readRepoFile('example', 'schema.prisma'))
     const { files, diagnostics } = build(datamodel, config)
     for (const name of OUTPUT_FILES) expect(files?.[name], name).not.toMatch(aiCentric)
-    for (const d of [...ALL, ...diagnostics]) {
+    // The legacy-annotation warning names the old @ai.* tags and package on purpose (D60).
+    const current = ALL.filter((d) => d.code !== 'HYDE_LEGACY_ANNOTATION')
+    for (const d of [...current, ...diagnostics]) {
       expect(d.message, d.code).not.toMatch(aiCentric)
       expect(d.hint ?? '', d.code).not.toMatch(aiCentric)
     }
+  })
+})
+
+describe('warnings', () => {
+  it('D59: a disabled timeout names the value and the role, and how to fix it', () => {
+    expect(timeoutDisabled('0 ms', 'safe_reader')).toEqual({
+      code: 'HYDE_TIMEOUT_DISABLED',
+      severity: 'warning',
+      location: 'generator config',
+      message: 'statementTimeout "0 ms" disables the statement timeout for role safe_reader',
+      hint: 'Use a positive value such as "15s", or remove statementTimeout to use the default.',
+    })
+  })
+
+  it('D60: a legacy annotation names the old tag and its @hyde replacement', () => {
+    expect(legacyAnnotation('model User', 'exclude')).toEqual({
+      code: 'HYDE_LEGACY_ANNOTATION',
+      severity: 'warning',
+      location: 'model User',
+      message: '@ai.exclude is the old prisma-ai-views annotation and has no effect',
+      hint: 'Rename it to @hyde.exclude.',
+    })
   })
 })
 

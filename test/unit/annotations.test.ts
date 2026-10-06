@@ -89,6 +89,28 @@ describe('model annotations', () => {
   })
 })
 
+describe('legacy annotations on models (D60)', () => {
+  it('D60: a leftover @ai.exclude on a model warns and does not exclude it', () => {
+    const result = readModelAnnotations(modelWithDoc('Internal only.\n@ai.exclude'))
+    expect(result.excluded).toBe(false)
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'HYDE_LEGACY_ANNOTATION',
+        severity: 'warning',
+        location: 'model User',
+        message: '@ai.exclude is the old prisma-ai-views annotation and has no effect',
+        hint: 'Rename it to @hyde.exclude.',
+      },
+    ])
+  })
+
+  it('D60: a leftover @ai.default(visible) on a model warns and sets no default', () => {
+    const result = readModelAnnotations(modelWithDoc('@ai.default(visible)'))
+    expect(result.defaults).toEqual([])
+    expect(result.diagnostics.map((d) => d.hint)).toEqual(['Rename it to @hyde.default.'])
+  })
+})
+
 describe('field annotations', () => {
   it('reads visibility and doc text', () => {
     expect(readFieldAnnotations('User', fieldWithDoc('@hyde.hidden\nLogin address'))).toEqual({
@@ -99,11 +121,25 @@ describe('field annotations', () => {
     expect(readFieldAnnotations('User', fieldWithDoc('')).visibility).toBeUndefined()
   })
 
-  it('reports both @hyde.visible and @hyde.hidden; the last one wins', () => {
+  it('D57: visible after hidden resolves to hidden', () => {
+    const result = readFieldAnnotations('User', fieldWithDoc('@hyde.hidden\n@hyde.visible'))
+    expect(result.visibility).toBe('hidden')
+    expect(result.diagnostics.map((d) => d.code)).toEqual(['HYDE_ANNOTATION_CONFLICT'])
+    expect(result.diagnostics[0]).toMatchObject({ severity: 'error', location: 'User.email' })
+  })
+
+  it('D57: hidden after visible resolves to hidden', () => {
     const result = readFieldAnnotations('User', fieldWithDoc('@hyde.visible\n@hyde.hidden'))
     expect(result.visibility).toBe('hidden')
     expect(result.diagnostics.map((d) => d.code)).toEqual(['HYDE_ANNOTATION_CONFLICT'])
     expect(result.diagnostics[0]?.location).toBe('User.email')
+  })
+
+  it('D57: a repeated tag around the conflict still resolves to hidden', () => {
+    expect(
+      readFieldAnnotations('User', fieldWithDoc('@hyde.visible\n@hyde.hidden\n@hyde.visible'))
+        .visibility,
+    ).toBe('hidden')
   })
 
   it('D25: an unknown field annotation names the closest field annotation', () => {
@@ -111,6 +147,37 @@ describe('field annotations', () => {
     expect(d?.message).toBe('unknown annotation @hyde.visable (did you mean @hyde.visible?)')
     const [far] = readFieldAnnotations('User', fieldWithDoc('@hyde.public')).diagnostics
     expect(far?.message).toBe('unknown annotation @hyde.public')
+  })
+
+  it('D60: a leftover @ai.hidden warns and names @hyde.hidden', () => {
+    const result = readFieldAnnotations('User', fieldWithDoc('@ai.hidden\nLogin address'))
+    expect(result.visibility).toBeUndefined()
+    expect(result.text).toBe('@ai.hidden Login address')
+    expect(result.diagnostics).toEqual([
+      {
+        code: 'HYDE_LEGACY_ANNOTATION',
+        severity: 'warning',
+        location: 'User.email',
+        message: '@ai.hidden is the old prisma-ai-views annotation and has no effect',
+        hint: 'Rename it to @hyde.hidden.',
+      },
+    ])
+  })
+
+  it('D60: every old field and model annotation name warns, once per occurrence', () => {
+    const names = (doc: string) =>
+      readFieldAnnotations('User', fieldWithDoc(doc)).diagnostics.map((d) => d.message)
+    expect(names('@ai.visible @ai.default(hidden)\n@ai.exclude @ai.visible')).toEqual([
+      '@ai.visible is the old prisma-ai-views annotation and has no effect',
+      '@ai.default is the old prisma-ai-views annotation and has no effect',
+      '@ai.exclude is the old prisma-ai-views annotation and has no effect',
+      '@ai.visible is the old prisma-ai-views annotation and has no effect',
+    ])
+  })
+
+  it('D60: text that only resembles an old annotation does not warn', () => {
+    for (const doc of ['@ai.foo', '@ai.hiddenly', '@ai.visible_x', 'mail@ai', '@AI.hidden'])
+      expect(readFieldAnnotations('User', fieldWithDoc(doc)).diagnostics, doc).toEqual([])
   })
 
   it('reports model annotations written on a field', () => {

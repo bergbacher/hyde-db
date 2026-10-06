@@ -4,6 +4,7 @@ import type { Field, Model } from './datamodel.ts'
 import {
   conflictingAnnotations,
   invalidDefaultArgument,
+  legacyAnnotation,
   misplacedFieldAnnotation,
   misplacedModelAnnotation,
   unknownAnnotation,
@@ -11,6 +12,8 @@ import {
 import type { Diagnostic, Visibility } from './types.ts'
 
 const ANNOTATION_RE = /@hyde\.([a-zA-Z]+)(?:\(([^)]*)\))?/g
+/** The base package's namespace (D60): plain doc text since the rename, but worth a warning. */
+const LEGACY_RE = /@ai\.(visible|hidden|exclude|default)\b/g
 const FIELD_ANNOTATIONS: readonly string[] = ['visible', 'hidden']
 const MODEL_ANNOTATIONS: readonly string[] = ['exclude', 'default']
 
@@ -39,6 +42,11 @@ export function parseDoc(doc: string): ParsedDoc {
   return { tags, text: text.join(' ') }
 }
 
+/** One warning per leftover `@ai.<name>` in a doc comment (D60). */
+function legacyDiagnostics(location: string, doc: string): Diagnostic[] {
+  return Array.from(doc.matchAll(LEGACY_RE), (match) => legacyAnnotation(location, match[1] ?? ''))
+}
+
 export interface ModelAnnotations {
   readonly excluded: boolean
   /** Every valid `@hyde.default(...)` argument, in order. */
@@ -61,11 +69,12 @@ export function readModelAnnotations(model: Model): ModelAnnotations {
       diagnostics.push(misplacedModelAnnotation(model.name, tag.name))
     else diagnostics.push(unknownAnnotation(`model ${model.name}`, tag.name, MODEL_ANNOTATIONS))
   }
+  diagnostics.push(...legacyDiagnostics(`model ${model.name}`, model.documentation))
   return { excluded, defaults, text, diagnostics }
 }
 
 export interface FieldAnnotations {
-  /** The last `@hyde.visible` / `@hyde.hidden` tag, if any. */
+  /** `hidden` if the field carries `@hyde.hidden` (even together with `@hyde.visible`, D57), else `visible` if it carries `@hyde.visible`. */
   readonly visibility: Visibility | undefined
   readonly text: string
   readonly diagnostics: readonly Diagnostic[]
@@ -80,10 +89,12 @@ export function readFieldAnnotations(modelName: string, field: Field): FieldAnno
     if (tag.name === 'visible' || tag.name === 'hidden') {
       if (visibility !== undefined && visibility !== tag.name)
         diagnostics.push(conflictingAnnotations(location))
-      visibility = tag.name
+      // D57: a conflict fails closed; the conflict itself is still reported as an error.
+      visibility = visibility === 'hidden' ? 'hidden' : tag.name
     } else if (tag.name === 'exclude' || tag.name === 'default')
       diagnostics.push(misplacedFieldAnnotation(location, tag.name))
     else diagnostics.push(unknownAnnotation(location, tag.name, FIELD_ANNOTATIONS))
   }
+  diagnostics.push(...legacyDiagnostics(location, field.documentation))
   return { visibility, text, diagnostics }
 }

@@ -38,8 +38,24 @@ export function parseSchema(source: string, major: PrismaMajor = 7): ParsedSchem
     datamodel: DmmfDatamodel
   }
   const loaded = JSON.parse(engine.get_config(JSON.stringify({ prismaSchema }))) as {
-    config: { generators: { name: string; config: Record<string, unknown> }[] }
+    config: {
+      generators: {
+        name: string
+        provider: { value: string | null }
+        config: Record<string, unknown>
+      }[]
+    }
   }
-  const generator = loaded.config.generators.find((g) => g.name === 'redacted')
+  const { generators } = loaded.config
+  const generator = generators.find((g) => g.name === 'redacted')
+  if (generator === undefined) {
+    // A schema with a hyde-db generator under another name would silently get the default
+    // config; fail instead. Schemas with no hyde-db generator at all have no config.
+    const others = generators.filter((g) => g.provider.value === 'hyde-db').map((g) => g.name)
+    if (others.length > 0)
+      throw new Error(
+        `schema declares a generator with provider "hyde-db" but none is named "redacted" (found: ${others.join(', ')})`,
+      )
+  }
   return { datamodel: dmmf.datamodel, config: generator?.config ?? {} }
 }

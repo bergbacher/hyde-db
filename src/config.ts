@@ -1,6 +1,7 @@
-// Config validation (D17, D25, D29): every problem becomes a diagnostic; nothing throws.
+// Config validation (D17, D25, D29): every problem becomes a diagnostic; nothing throws, whatever
+// a JavaScript caller passes (D9).
 // An invalid value keeps the safe default for its key so analysis can go on.
-import { invalidConfigValue, unknownConfigKey } from './diagnostics.ts'
+import { invalidConfigValue, timeoutDisabled, unknownConfigKey } from './diagnostics.ts'
 import type { Diagnostic, GeneratorConfig, ResolvedConfig } from './types.ts'
 
 export const CONFIG_KEYS: readonly string[] = [
@@ -24,7 +25,8 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
 /** PostgreSQL truncates longer identifiers (NAMEDATALEN - 1). */
 const MAX_IDENTIFIER_LENGTH = 63
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/
-const TIMEOUT = /^\d+\s*(ms|s|min)?$/
+/** What PostgreSQL accepts in a role setting: digits, one optional plain space, an optional unit. */
+const TIMEOUT = /^\d+( ?(ms|s|min))?$/
 
 export interface ConfigResult {
   readonly config: ResolvedConfig
@@ -33,7 +35,9 @@ export interface ConfigResult {
 
 type Mutable<T> = { -readonly [K in keyof T]: T[K] }
 
-export function validateConfig(raw: GeneratorConfig = {}): ConfigResult {
+export function validateConfig(rawConfig?: GeneratorConfig | null): ConfigResult {
+  // `Object()` keeps `null`, `undefined` and primitives from reaching `in`, which would throw.
+  const raw: GeneratorConfig = Object(rawConfig ?? {})
   const config: Mutable<ResolvedConfig> = { ...DEFAULT_CONFIG }
   const diagnostics: Diagnostic[] = []
   // Prisma 6 and 7 deliver config keys in different orders; a canonical order keeps
@@ -44,7 +48,8 @@ export function validateConfig(raw: GeneratorConfig = {}): ConfigResult {
     .sort()
   for (const key of [...known, ...unknown]) {
     const value = raw[key]
-    if (value === undefined || value === null) continue
+    // An unset known key keeps its default; an unknown key is reported whatever its value.
+    if (CONFIG_KEYS.includes(key) && (value === undefined || value === null)) continue
     switch (key) {
       case 'strict':
         if (value === true || value === 'true') config.strict = true
@@ -88,5 +93,8 @@ export function validateConfig(raw: GeneratorConfig = {}): ConfigResult {
         diagnostics.push(unknownConfigKey(key, CONFIG_KEYS))
     }
   }
+  // D59: a zero timeout is valid but turns the reader role's statement timeout off.
+  if (Number.parseInt(config.statementTimeout, 10) === 0)
+    diagnostics.push(timeoutDisabled(config.statementTimeout, config.role))
   return { config, diagnostics }
 }

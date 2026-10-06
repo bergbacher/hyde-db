@@ -81,25 +81,82 @@ describe('analysis rules', () => {
     expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
   })
 
+  it('D57: analyze never returns a conflicting column as visible', () => {
+    for (const doc of ['@hyde.visible\n@hyde.hidden', '@hyde.hidden\n@hyde.visible']) {
+      const a = analyze(datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('x', doc)])))
+      expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
+      expect(a.diagnostics).toMatchObject([
+        { code: 'HYDE_ANNOTATION_CONFLICT', severity: 'error', location: 'User.x' },
+      ])
+      expect(a.counts).toEqual({ visible: 1, hidden: 1 })
+    }
+  })
+
+  it('D54: under strict mode an unannotated field stays hidden even with default visible', () => {
+    const a = analyze(
+      datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('nickname')])),
+      { strict: 'true', default: 'visible' },
+    )
+    expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
+    expect(a.diagnostics).toMatchObject([
+      { code: 'HYDE_STRICT_UNANNOTATED', location: 'User.nickname' },
+    ])
+  })
+
   it('D54: a field annotated only with the old @ai.visible is unannotated under strict mode', () => {
     const a = analyze(
       datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('phone', '@ai.visible')])),
       strict,
     )
     expect(a.diagnostics).toMatchObject([
+      { code: 'HYDE_LEGACY_ANNOTATION', location: 'User.phone' },
       { code: 'HYDE_STRICT_UNANNOTATED', location: 'User.phone' },
     ])
     expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
   })
 
+  it('D60: under strict mode a leftover @ai.hidden warns and the field is still unannotated', () => {
+    const a = analyze(
+      datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('phone', '@ai.hidden')])),
+      strict,
+    )
+    expect(a.diagnostics).toMatchObject([
+      { code: 'HYDE_LEGACY_ANNOTATION', severity: 'warning', location: 'User.phone' },
+      { code: 'HYDE_STRICT_UNANNOTATED', severity: 'error', location: 'User.phone' },
+    ])
+    expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
+  })
+
+  it('D60: a leftover @ai.hidden does not hide anything; the field stays under @hyde.* and defaults', () => {
+    const a = analyze(datamodel(model('Note', [scalar('title', '@ai.hidden')])), {
+      ...loose,
+      default: 'visible',
+    })
+    expect(codes(a)).toEqual(['HYDE_LEGACY_ANNOTATION'])
+    expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['title'])
+  })
+
+  it('D60: a leftover @ai.exclude on a model warns and the model keeps its view', () => {
+    const a = analyze(
+      datamodel(model('Note', [scalar('id', '@hyde.visible')], { documentation: '@ai.exclude' })),
+    )
+    expect(a.diagnostics).toMatchObject([
+      { code: 'HYDE_LEGACY_ANNOTATION', severity: 'warning', location: 'model Note' },
+    ])
+    expect(a.views.map((v) => v.model)).toEqual(['Note'])
+  })
+
   it('strict mode rejects @hyde.default on models', () => {
     const a = analyze(
       datamodel(
-        model('User', [scalar('id', '@hyde.visible')], { documentation: '@hyde.default(visible)' }),
+        model('User', [scalar('id', '@hyde.visible'), scalar('nickname')], {
+          documentation: '@hyde.default(visible)',
+        }),
       ),
       strict,
     )
-    expect(codes(a)).toEqual(['HYDE_STRICT_MODEL_DEFAULT'])
+    expect(codes(a)).toEqual(['HYDE_STRICT_MODEL_DEFAULT', 'HYDE_STRICT_UNANNOTATED'])
+    expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
   })
 
   it('non-strict: unannotated fields follow the global default, then the model default', () => {

@@ -18,7 +18,7 @@ export interface PsqlResult {
 export interface TestDb {
   /** Database name; unique per test. */
   readonly name: string
-  /** reader role name; unique per test because roles are cluster-wide. */
+  /** Reader role name; unique per test because roles are cluster-wide. */
   readonly role: string
   readonly password: string
   readonly files: OutputFiles
