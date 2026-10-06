@@ -213,7 +213,7 @@ describe('relation fix', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toBe(
-      `${inOneTransaction(`SET ROLE ${db.role}; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
+      `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
@@ -233,7 +233,7 @@ describe('relation fix', () => {
       `role ${db.role} can read relations outside schema redacted: public.api_keys. Fix: `,
     )
     expect(suggestedFix(failed)).toBe(
-      `${inOneTransaction(`SET ROLE ${db.role}; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
+      `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
@@ -253,7 +253,7 @@ describe('relation fix', () => {
     expect(failed.status).toBe(3)
     // Revoking as the reader alone would change nothing: it no longer holds the grant option.
     expect(suggestedFix(failed)).toBe(
-      `${inOneTransaction(`GRANT SELECT (secret) ON public.api_keys TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
+      `${inOneTransaction(`GRANT SELECT (secret) ON public.api_keys TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
@@ -309,8 +309,8 @@ describe('relation fix', () => {
     const fix = suggestedFix(failed)
     expect(fix).toBe(
       `${inOneTransaction(
-        `GRANT SELECT (secret) ON public.api_keys TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE; ` +
-          `GRANT SELECT (secret) ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE GRANT OPTION FOR SELECT (secret) ON public.api_keys FROM ${grantor} CASCADE;`,
+        `GRANT SELECT (secret) ON public.api_keys TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE; ` +
+          `GRANT SELECT (secret) ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE GRANT OPTION FOR SELECT (secret) ON public.api_keys FROM ${grantor} CASCADE;`,
       )}${AS_SUPERUSER}`,
     )
     // A statement that fails halfway through the pasted fix leaves every ACL as it was.
@@ -341,9 +341,103 @@ describe('relation fix', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toBe(
-      `${inOneTransaction(`SET ROLE ${grantor}; REVOKE ALL (secret) ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE;`)}${AS_SUPERUSER}`,
+      `${inOneTransaction(`SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
+  })
+  /** A third party that belongs to a group holding ALL on public.api_keys WITH GRANT OPTION. */
+  async function grantorInGroup(db: TestDb): Promise<{ grantor: string; group: string }> {
+    const group = await extraRole(`${db.name}_grp`)
+    const grantor = await extraRole(`${db.name}_g3`)
+    await adminQuery('postgres', `GRANT "${group}" TO "${grantor}"`)
+    await adminQuery(db.name, `GRANT ALL ON public.api_keys TO "${group}" WITH GRANT OPTION`)
+    return { grantor, group }
+  }
+  /** The privileges a role holds on public.api_keys itself, with their grant options. */
+  async function tableEntries(db: TestDb, role: string): Promise<unknown[]> {
+    return adminQuery(
+      db.name,
+      `SELECT a.privilege_type, a.is_grantable FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
+       WHERE c.oid = 'public.api_keys'::regclass AND a.grantee = '${role}'::regrole ORDER BY 1`,
+    )
+  }
+
+  it('A87, D122: a column grant passed on by a grantor whose own option is gone, while its group holds one, is revoked after giving the grantor back its own option', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const { grantor, group } = await grantorInGroup(db)
+    await adminQuery(
+      db.name,
+      `GRANT SELECT ON public.api_keys TO "${grantor}" WITH GRANT OPTION;
+       SET ROLE "${grantor}"; GRANT SELECT (secret) ON public.api_keys TO PUBLIC; RESET ROLE;
+       REVOKE SELECT ON public.api_keys FROM "${grantor}" CASCADE`,
+    )
+    // The group's option hides that the grantor lost its own (A87).
+    const [row] = await adminQuery(
+      db.name,
+      `SELECT has_column_privilege('${grantor}', 'public.api_keys', 'secret', 'SELECT WITH GRANT OPTION') AS inherited`,
+    )
+    expect(row?.inherited).toBe(true)
+    expect(await publicReadsSecret(db)).toBe(true)
+    const groupBefore = await tableEntries(db, group)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(
+      `${inOneTransaction(`GRANT SELECT (secret) ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${grantor} CASCADE;`)}${AS_SUPERUSER}`,
+    )
+    pasteFixAndReapply(db, failed)
+    expect(await publicReadsSecret(db)).toBe(false)
+    expect(await tableEntries(db, group)).toEqual(groupBefore)
+  })
+
+  it('A87, D122: a grantor that holds its own option revokes exactly what it passed on, so a group with more options cannot act for it', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const { grantor } = await grantorInGroup(db)
+    await adminQuery(
+      db.name,
+      `GRANT SELECT (secret) ON public.api_keys TO "${grantor}" WITH GRANT OPTION;
+       SET ROLE "${grantor}"; GRANT SELECT (secret) ON public.api_keys TO PUBLIC; RESET ROLE`,
+    )
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(
+      `${inOneTransaction(`SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE;`)}${AS_SUPERUSER}`,
+    )
+    // REVOKE ALL (secret) needs options the grantor lacks, so it acts as the group and changes nothing (A87).
+    const asGroup = psql(
+      db.name,
+      `SET ROLE "${grantor}"; REVOKE ALL (secret) ON public.api_keys FROM PUBLIC CASCADE;`,
+    )
+    expect(asGroup.status, asGroup.stderr).toBe(0)
+    expect(await publicReadsSecret(db)).toBe(true)
+    pasteFixAndReapply(db, failed)
+    expect(await publicReadsSecret(db)).toBe(false)
+  })
+
+  it('A87, D122: a table grant passed on by a grantor whose own option is gone, while its group holds one, is revoked after giving the grantor back its own option', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const { grantor, group } = await grantorInGroup(db)
+    await adminQuery(
+      db.name,
+      `GRANT SELECT ON public.api_keys TO "${grantor}" WITH GRANT OPTION;
+       SET ROLE "${grantor}"; GRANT SELECT ON public.api_keys TO "${db.role}"; RESET ROLE;
+       REVOKE SELECT ON public.api_keys FROM "${grantor}" CASCADE`,
+    )
+    // CASCADE kept the reader's grant: the group's option counts as the grantor's (A87).
+    const groupBefore = await tableEntries(db, group)
+    expect(await tableEntries(db, db.role)).toEqual([
+      { privilege_type: 'SELECT', is_grantable: false },
+    ])
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(
+      `${inOneTransaction(`GRANT SELECT ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE SELECT ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE; REVOKE SELECT ON public.api_keys FROM ${grantor} CASCADE;`)}${AS_SUPERUSER}`,
+    )
+    pasteFixAndReapply(db, failed)
+    expect(await tableEntries(db, db.role)).toEqual([])
+    expect(await tableEntries(db, group)).toEqual(groupBefore)
   })
 })
 
@@ -418,6 +512,19 @@ describe('sequence fix', () => {
       `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (last_value) ON public.orders_id_seq FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON SEQUENCE public.orders_id_seq FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
+  })
+  it('A88, D124: a temporary sequence that the reader holds open does not block the deploy', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const reader = await connectAsReader(db)
+    try {
+      await reader.query('SET default_transaction_read_only = off')
+      await reader.query('CREATE TEMP SEQUENCE scratch')
+      const result = apply(db)
+      expect(result.status, result.stderr).toBe(0)
+    } finally {
+      await reader.end()
+    }
   })
 })
 

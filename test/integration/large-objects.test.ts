@@ -205,6 +205,8 @@ describe('lo_compat_privileges on the server command line', () => {
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${newRole}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${newRole} NOLOGIN; ALTER ROLE ${newRole} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
     )
+    // A superuser deployer needs no ADMIN grant on the reader it creates (D123).
+    expect(suggestedFix(failed)).not.toContain('ADMIN')
     // The apply created the role in its transaction, so the abort rolled the creation back (A81).
     expect(run(exists).stdout).toContain('exists=0')
     expect(run(suggestedFix(failed)).status).toBe(0)
@@ -214,5 +216,61 @@ describe('lo_compat_privileges on the server command line', () => {
       `SELECT 'config=' || array_to_string(setconfig, ',') FROM pg_db_role_setting WHERE setrole = '${newRole}'::regrole AND setdatabase = 0;`,
     )
     expect(shown.stdout).toContain('config=lo_compat_privileges=off')
+  })
+
+  /** A non-superuser CREATEROLE deployer, as on a managed server, that owns the views schema it recreates. */
+  const deployer = 'hyde_cmdline_deployer'
+  function managedDeployer(): void {
+    const setup = run(
+      `DO $$ BEGIN
+         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${deployer}') THEN
+           CREATE ROLE ${deployer} LOGIN CREATEROLE;
+         END IF;
+         EXECUTE format('GRANT CREATE ON DATABASE %I TO ${deployer}', current_database());
+       END $$;
+       ALTER SCHEMA public OWNER TO ${deployer};
+       GRANT ALL ON ALL TABLES IN SCHEMA public TO ${deployer};
+       DROP SCHEMA IF EXISTS redacted CASCADE;`,
+    )
+    expect(setup.status, setup.stderr).toBe(0)
+  }
+
+  it("A89, D123: on a first deploy by a non-superuser deployer, the fix also grants it ADMIN on the reader it creates again, so the deployer's re-apply can set the reader's settings", () => {
+    managedDeployer()
+    const reader = 'hyde_cmdline_owned_reader'
+    const ownScript = buildFiles(reader)['redacted-views.sql']
+    const failed = run(ownScript, deployer)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(
+      `${COMPAT} for role ${reader}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${reader} NOLOGIN; GRANT ${reader} TO ${deployer} WITH ADMIN OPTION; ALTER ROLE ${reader} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
+    )
+    // A superuser pastes it verbatim; then the deployer's own re-apply passes.
+    expect(run(suggestedFix(failed)).status).toBe(0)
+    const reapplied = run(ownScript, deployer)
+    expect(reapplied.status, reapplied.stderr).toBe(0)
+  })
+
+  it('A89: without ADMIN on a reader that a superuser created, a non-superuser deployer cannot set its settings on PostgreSQL 16+; on 14 CREATEROLE suffices', () => {
+    managedDeployer()
+    const reader = 'hyde_cmdline_bare_reader'
+    const ownScript = buildFiles(reader)['redacted-views.sql']
+    const failed = run(ownScript, deployer)
+    expect(failed.status).toBe(3)
+    const grant = `GRANT ${reader} TO ${deployer} WITH ADMIN OPTION; `
+    const fix = suggestedFix(failed)
+    expect(fix).toContain(grant)
+    expect(run(fix.replace(grant, '')).status).toBe(0)
+    const reapplied = run(ownScript, deployer)
+    const version = Number(
+      /version=(\d+)/.exec(
+        run("SELECT 'version=' || current_setting('server_version_num');").stdout,
+      )?.[1],
+    )
+    if (version >= 160000) {
+      expect(reapplied.status).toBe(3)
+      expect(reapplied.stderr).toContain('permission denied to alter role')
+    } else {
+      expect(reapplied.status, reapplied.stderr).toBe(0)
+    }
   })
 })
