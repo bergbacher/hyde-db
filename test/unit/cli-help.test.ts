@@ -150,7 +150,7 @@ describe('usage', () => {
   })
 
   it('D56: says Prisma runs it and that running it directly only prints the help', () => {
-    expect(text).toContain('Prisma runs it during `prisma generate`')
+    expect(text).toContain('Prisma runs it during prisma generate')
     expect(text).toContain('Running hyde-db directly only prints this help.')
   })
 
@@ -279,16 +279,28 @@ describe('usage', () => {
     expect(text).toMatch(/password, once\./)
   })
 
-  it('A49: the login note says to export READER_PASSWORD, that ps shows it, and the interactive alternative', () => {
+  it('A49: the login note says to export READER_PASSWORD in prose, that history and ps show an inline password, and the interactive alternative', () => {
     const index = lines.findIndex((l) => l.includes('ALTER ROLE'))
     const note = lines.slice(0, index).join('\n')
     expect(note).toContain('export READER_PASSWORD=...')
+    expect(note).toMatch(/shell history/)
+    expect(note).toMatch(/\bps\b/)
     expect(note).toContain('single quote')
-    expect(note).toContain('visible in `ps`')
     expect(note).toContain('\\password redacted_reader')
     expect(note.indexOf('export READER_PASSWORD=...')).toBeLessThan(
       note.indexOf('\\password redacted_reader'),
     )
+    expect(commandsIn(text).filter((c) => c.includes('READER_PASSWORD='))).toEqual([])
+  })
+
+  it('D68: pasting the whole help runs only the indented commands: no prose line can run anything', () => {
+    const commandWords = /^(psql|npx|export|pnpm|prisma|npm|sh|bash|printf|echo)\b/
+    for (const line of lines) {
+      if (/^ {2}(psql|npx) /.test(line)) continue
+      expect(line, line).not.toMatch(commandWords)
+      expect(line, line).not.toContain('`')
+      expect(line, line).not.toContain('$(')
+    }
   })
 
   it('D56: the login step takes the password from READER_PASSWORD, with no <placeholder> to paste', () => {
@@ -350,7 +362,7 @@ describe('usage', () => {
   it('D56: warns that psql needs DATABASE_URL exported as a plain libpq URL', () => {
     const caveats = lines.filter((l) => l.includes('DATABASE_URL') && !/^ {2}psql /.test(l))
     expect(caveats).toHaveLength(1)
-    expect(caveats[0]).toContain('export')
+    expect(caveats[0]).toContain('Export DATABASE_URL')
     expect(caveats[0]).toContain('.env')
     expect(caveats[0]).toContain('libpq')
     expect(caveats[0]).toContain('?schema=public')

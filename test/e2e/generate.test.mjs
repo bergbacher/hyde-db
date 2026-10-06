@@ -114,7 +114,7 @@ for (const version of PRISMA_VERSIONS) {
       assert.match(result.stdout, /warning HYDE_SENSITIVE_EXPLICIT at User\.email/)
     })
 
-    it(`D20: the installed hyde-db bin resolves into the project's node_modules/hyde-db (Prisma ${version})`, () => {
+    it(`the installed hyde-db bin resolves into the project's node_modules/hyde-db (Prisma ${version})`, () => {
       const bin = realpathSync(join(dir, 'node_modules', '.bin', 'hyde-db'))
       assert.ok(
         bin.startsWith(join(realpathSync(dir), 'node_modules', 'hyde-db', '')),

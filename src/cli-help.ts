@@ -92,7 +92,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
   return [
     `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role.`,
     '',
-    `Prisma runs it during \`prisma generate\`. Running ${BRAND} directly only prints this help.`,
+    `Prisma runs it during prisma generate. Running ${BRAND} directly only prints this help.`,
     '',
     `Usage: ${BRAND} [-h | --help] [-v | --version]`,
     '',
@@ -120,19 +120,22 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     `Deploy in this order. <output> = the generator's output directory, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
     'Write the three files:',
     '  npx prisma generate',
-    'psql does not read .env: export DATABASE_URL in your shell as a plain libpq URL, without Prisma-only parameters such as ?schema=public. Drop the views schema:',
+    'Note: psql does not read .env. Export DATABASE_URL in your shell first, as a plain libpq URL without Prisma-only parameters such as ?schema=public.',
+    'Drop the views schema:',
     `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql`,
     'Migrate:',
     '  npx prisma migrate deploy',
     'Create the views and the role:',
     `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
-    'Give the reader role a login password, once. Run export READER_PASSWORD=... first; it must not contain a single quote. The password then appears in the psql command line (visible in `ps`); to avoid that, run \\password ' +
-      `${config.role} in an interactive psql instead:`,
+    'Give the reader role a login password, once. First export READER_PASSWORD=... in your shell;',
+    'the password must not contain a single quote. Typed inline, it lands in your shell history and',
+    `in ps output. To avoid that, run \\password ${config.role} in an interactive psql instead.`,
+    'Otherwise run:',
     // The shell aborts, running nothing, when READER_PASSWORD is unset or empty: no placeholder to paste.
     `  psql "${DB_URL}" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,
     '',
     'Problems are diagnostics with stable HYDE_* codes (for example HYDE_STRICT_UNANNOTATED).',
-    'Each error carries a fix hint, and any error fails `prisma generate` before writing files.',
+    'Each error carries a fix hint, and any error fails prisma generate before writing files.',
     '',
     repository === undefined
       ? `Full documentation: the README in the ${BRAND} npm package.`
