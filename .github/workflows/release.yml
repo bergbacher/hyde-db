@@ -1,0 +1,76 @@
+name: Release
+
+# The only workflow that builds and publishes the npm package, and only for a release tag (D62, D63).
+on:
+  push:
+    tags: ['v*.*.*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  pack:
+    name: check, gate and pack
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # the main-branch check needs history
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
+      - run: pnpm install --frozen-lockfile
+      - name: Fail unless the tag equals the package version
+        run: |
+          version="$(node -p "require('./package.json').version")"
+          if [ "${GITHUB_REF_NAME#v}" != "$version" ]; then
+            echo "::error::Tag $GITHUB_REF_NAME does not match package.json version $version. Delete the tag, fix the version, tag again."
+            exit 1
+          fi
+      - name: Fail unless the tagged commit is on main
+        run: |
+          git fetch --no-tags origin main
+          if ! git merge-base --is-ancestor "$GITHUB_SHA" origin/main; then
+            echo "::error::$GITHUB_SHA is not on main. Tag the merge commit of the version pull request."
+            exit 1
+          fi
+      # Integration and end-to-end already ran in CI on this commit; this job needs no Docker.
+      - run: pnpm lint
+      - run: pnpm typecheck
+      - run: pnpm test:coverage
+      - run: pnpm build
+      - run: pnpm pack --pack-destination "$RUNNER_TEMP/pack"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: hyde-db-tarball
+          path: ${{ runner.temp }}/pack/*.tgz
+          if-no-files-found: error
+
+  publish:
+    needs: pack
+    runs-on: ubuntu-latest # a GitHub-hosted runner is required for npm trusted publishing (OIDC)
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/setup-node@v7 # Node 24 bundles npm 11.5.1 or newer, which trusted publishing needs (A27)
+        with:
+          node-version: 24
+          registry-url: https://registry.npmjs.org
+      - uses: actions/download-artifact@v8
+        with:
+          name: hyde-db-tarball
+          path: ${{ runner.temp }}/pack
+      - name: Publish with provenance
+        run: npm publish "$(ls "$RUNNER_TEMP"/pack/*.tgz)" --provenance --access public
+        env:
+          # First publish only: a short-lived token, because trusted publishing cannot create a
+          # package. npm prefers OIDC once the trusted publisher is configured; delete the secret then.
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

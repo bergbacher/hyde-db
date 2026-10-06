@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { readRepoFile } from '../helpers/files.ts'
 
 const ci = readRepoFile('.github', 'workflows', 'ci.yml')
+const release = readRepoFile('.github', 'workflows', 'release.yml')
+const version = readRepoFile('.github', 'workflows', 'version.yml')
 const dependabot = readRepoFile('.github', 'dependabot.yml')
 
 /** The text of one top-level job, from its key to the next job or the end. */
@@ -101,5 +103,64 @@ describe('Dependabot', () => {
     expect(dependabot).toContain('package-ecosystem: npm')
     expect(dependabot).toContain('package-ecosystem: github-actions')
     expect(dependabot.match(/interval: weekly/g)).toHaveLength(2)
+  })
+})
+
+describe('release workflow', () => {
+  it('D62, D63: triggers only on a push of a v*.*.* tag', () => {
+    expect(release).toContain("on:\n  push:\n    tags: ['v*.*.*']\n")
+    for (const trigger of [
+      'branches:',
+      'pull_request',
+      'workflow_dispatch',
+      'schedule:',
+      'workflow_run',
+    ]) {
+      expect(release).not.toContain(trigger)
+    }
+  })
+
+  it('D63: fails unless the tag equals the package version and the commit is on main', () => {
+    expect(release).toContain(`\${GITHUB_REF_NAME#v}`)
+    expect(release).toContain("require('./package.json').version")
+    expect(release).toContain('git merge-base --is-ancestor "$GITHUB_SHA" origin/main')
+    expect(release).toContain('fetch-depth: 0')
+  })
+
+  it('D63: runs the gate that needs no Docker, then packs and publishes the tarball with provenance', () => {
+    for (const command of [
+      'pnpm lint',
+      'pnpm typecheck',
+      'pnpm test:coverage',
+      'pnpm build',
+      'pnpm pack',
+    ]) {
+      expect(release).toContain(`- run: ${command}`)
+    }
+    expect(release).not.toMatch(/test:integration|test:e2e|docker/)
+    expect(release).toContain('actions/upload-artifact@')
+    expect(release).toContain('--provenance --access public')
+    expect(release).not.toContain('continue-on-error')
+  })
+
+  it('D63, A27: publishes through OIDC on Node 24 with the token only on the publish step', () => {
+    expect(release).toContain('id-token: write')
+    expect(release.match(/id-token: write/g)).toHaveLength(1)
+    expect(release).toContain('node-version: 24')
+    expect(release).toContain(`NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}`)
+    expect(release.match(/secrets\./g)).toHaveLength(1)
+    expect(release.slice(0, release.indexOf('  publish:\n'))).not.toContain('NPM_TOKEN')
+  })
+})
+
+describe('version workflow', () => {
+  it('D63: opens the version pull request on main and never builds, packs or publishes', () => {
+    expect(version).toContain('on:\n  push:\n    branches: [main]\n')
+    expect(version).toContain('uses: changesets/action/version@v2')
+    expect(version).toContain('contents: write')
+    expect(version).toContain('pull-requests: write')
+    expect(version.replace(/#.*$/gm, '')).not.toMatch(
+      /publish|pack|build|id-token|NPM_TOKEN|provenance/,
+    )
   })
 })

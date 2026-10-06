@@ -11,9 +11,16 @@
     "redaction",
     "views",
     "read-only",
-    "llm"
+    "llm",
+    "mcp"
   ],
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/bergbacher/hyde-db.git"
+  },
+  "homepage": "https://github.com/bergbacher/hyde-db#readme",
+  "bugs": "https://github.com/bergbacher/hyde-db/issues",
   "type": "module",
   "files": [
     "dist"
@@ -24,6 +31,14 @@
   },
   "bin": {
     "hyde-db": "./dist/generator.mjs"
+  },
+  "engines": {
+    "node": "^20.19 || ^22.12 || >=24"
+  },
+  "packageManager": "pnpm@10.34.1",
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
   },
   "scripts": {
     "build": "tsdown",

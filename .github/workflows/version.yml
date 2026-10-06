@@ -1,0 +1,25 @@
+name: Version
+
+# Opens or updates the "Version Packages" pull request. It never builds, packs or publishes (D63).
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24 }
+      - run: pnpm install --frozen-lockfile
+      - uses: changesets/action/version@v2

@@ -1,0 +1,49 @@
+# Releasing hyde-db
+
+Only a release tag builds and publishes the package, and only on GitHub Actions. No version is built or published from a laptop.
+
+| Workflow | Runs on | Builds or publishes? |
+| --- | --- | --- |
+| `ci.yml` | pull requests, branch pushes | Builds and packs only to test the artifact. Never publishes. |
+| `version.yml` | push to `main` | Never. Opens or updates the "Version Packages" pull request. |
+| `release.yml` | push of a tag `v*.*.*` | Yes: gate, pack, upload the tarball, publish with provenance. |
+
+## Day to day
+
+1. For every user-facing change, add a changeset: `pnpm changeset`, commit the file with the change.
+2. Merge to `main`. `version.yml` opens or updates the "Version Packages" pull request.
+3. Wait for CI to pass on that pull request, then merge it.
+4. Tag the merge commit and push the tag:
+
+```bash
+git checkout main && git pull
+git tag v<version> <merge-commit>
+git push origin v<version>
+```
+
+5. Watch the `Release` workflow. It publishes `hyde-db@<version>` and keeps the `.tgz` as a workflow artifact.
+
+The repository setting "Allow GitHub Actions to create and approve pull requests" must be on, or `version.yml` cannot open the pull request.
+
+## First release
+
+npm trusted publishing cannot create a package, so the first publish authenticates with a token. The owner does these steps in order:
+
+1. On npmjs.com create a granular access token with publish rights to `hyde-db` and a short expiry.
+2. Add it as the repository secret `NPM_TOKEN` (Settings, Secrets and variables, Actions).
+3. Merge the version pull request, then push the tag `v1.0.0` as in "Day to day".
+4. Watch `release.yml` publish.
+5. On npmjs.com open the package, Settings, Trusted Publisher: repository `bergbacher/hyde-db`, workflow `release.yml`.
+6. Delete the `NPM_TOKEN` secret and revoke the token. Optionally set the package to require two-factor authentication and disallow tokens.
+
+From then on `release.yml` authenticates through OIDC and no long-lived npm token exists.
+
+## What `release.yml` checks
+
+| Check | Why |
+| --- | --- |
+| The tag minus the leading `v` equals `package.json` `version` | A tag that does not match the version would publish the wrong release, so it fails. Fix the version, delete the tag locally and on `origin`, tag again. |
+| The tagged commit is an ancestor of `main` | Only reviewed code that passed CI on `main` is released. |
+| Lint, type check, unit tests with the coverage gate, build with publint and attw | The release job needs no Docker. The attack suite and end-to-end matrices already ran in CI on that commit (D64). |
+
+The publish step runs `npm publish <tarball> --provenance --access public` on Node 24 (npm 11.5.1 or newer) with `id-token: write`.
