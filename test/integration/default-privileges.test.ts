@@ -8,6 +8,7 @@ import {
   connectAsReader,
   createTestDatabase,
   dropTestDatabase,
+  inOneTransaction,
   pasteFixAndReapply,
   serverVersion,
   suggestedFix,
@@ -82,7 +83,9 @@ describe('default privileges', () => {
       `(default privileges): sequences created by ${admin}, functions created by ${admin}. Fix: `,
     )
     expect(suggestedFix(failed)).toBe(
-      `ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON SEQUENCES FROM PUBLIC; ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON FUNCTIONS FROM ${db.role};`,
+      inOneTransaction(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON SEQUENCES FROM PUBLIC; ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON FUNCTIONS FROM ${db.role};`,
+      ),
     )
     pasteFixAndReapply(db, failed)
   })

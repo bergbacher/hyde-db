@@ -1,14 +1,16 @@
-// D90: the reader must not read other roles' large objects, through their ACL or because
-// lo_compat_privileges turns the checks off, from whichever source sets it (A58, A61, A70).
+// D109: the reader must not read other roles' large objects, through their ACL or because
+// lo_compat_privileges turns the checks off, from whichever source sets it (A58, A61, A70, A81).
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest'
 import { readRepoFile } from '../helpers/files.ts'
 import {
+  AS_SUPERUSER,
   adminQuery,
   apply,
   buildFiles,
   createTestDatabase,
   dropTestDatabase,
+  inOneTransaction,
   type PsqlResult,
   pasteFixAndReapply,
   psql,
@@ -29,7 +31,7 @@ const COMPAT = 'lo_compat_privileges is on, which turns off privilege checks on 
 const SUPERUSER = ' -- run as a superuser'
 
 describe('large objects', () => {
-  it("D90: an ACL entry for the reader or PUBLIC on another role's large object aborts apply, and the printed REVOKEs fix it", async () => {
+  it("D109: an ACL entry for the reader or PUBLIC on another role's large object aborts apply, and the printed REVOKEs fix it", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const [first, second] = await adminQuery(
@@ -47,12 +49,14 @@ describe('large objects', () => {
       `role ${db.role} can read large objects it does not own: ${first?.oid}, ${second?.oid}. Fix: `,
     )
     expect(suggestedFix(failed)).toBe(
-      `REVOKE ALL ON LARGE OBJECT ${first?.oid} FROM PUBLIC CASCADE; REVOKE ALL ON LARGE OBJECT ${second?.oid} FROM ${db.role} CASCADE;`,
+      inOneTransaction(
+        `REVOKE ALL ON LARGE OBJECT ${first?.oid} FROM PUBLIC CASCADE; REVOKE ALL ON LARGE OBJECT ${second?.oid} FROM ${db.role} CASCADE;`,
+      ),
     )
     pasteFixAndReapply(db, failed)
   })
 
-  it('D90: lo_compat_privileges set for the database aborts apply, and the printed fix resets it', async () => {
+  it('D109: lo_compat_privileges set for the database aborts apply, and the printed fix resets it', async () => {
     const db = await freshDb()
     await adminQuery('postgres', `ALTER DATABASE ${db.name} SET lo_compat_privileges = on`)
     const failed = apply(db)
@@ -63,7 +67,7 @@ describe('large objects', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it("A61, D90: lo_compat_privileges set for the reader's role, also in this database, aborts apply though the applying session does not see it", async () => {
+  it("A61, D109: lo_compat_privileges set for the reader's role, also in this database, aborts apply though the applying session does not see it", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -74,7 +78,7 @@ describe('large objects', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
-      `${COMPAT} for role ${db.role}: role ${db.role}, role ${db.role} in database ${db.name}. Fix: ALTER ROLE ${db.role} RESET lo_compat_privileges; ALTER ROLE ${db.role} IN DATABASE ${db.name} RESET lo_compat_privileges;${SUPERUSER}`,
+      `${COMPAT} for role ${db.role}: role ${db.role}, role ${db.role} in database ${db.name}. Fix: ${inOneTransaction(`ALTER ROLE ${db.role} RESET lo_compat_privileges; ALTER ROLE ${db.role} IN DATABASE ${db.name} RESET lo_compat_privileges;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
   })
@@ -112,7 +116,7 @@ describe('lo_compat_privileges for the whole server', () => {
     await container?.stop()
   })
 
-  it('D90: lo_compat_privileges turned on with ALTER SYSTEM aborts apply, and the printed ALTER SYSTEM fixes it', async () => {
+  it('D109: lo_compat_privileges turned on with ALTER SYSTEM aborts apply, and the printed ALTER SYSTEM fixes it', async () => {
     expect(
       run('ALTER SYSTEM SET lo_compat_privileges = on;\nSELECT pg_reload_conf();').status,
     ).toBe(0)
@@ -128,7 +132,7 @@ describe('lo_compat_privileges for the whole server', () => {
     expect(reapplied.status, reapplied.stderr).toBe(0)
   })
 
-  it('A61, D90: lo_compat_privileges set for all roles aborts apply, and the printed fix resets it for all roles', async () => {
+  it('A61, D109: lo_compat_privileges set for all roles aborts apply, and the printed fix resets it for all roles', async () => {
     expect(run('ALTER ROLE ALL SET lo_compat_privileges = on;').status).toBe(0)
     const failed = run(script)
     expect(failed.status).toBe(3)
@@ -178,7 +182,7 @@ describe('lo_compat_privileges on the server command line', () => {
     return shown.stdout.trim()
   }
 
-  it('A70, D90: lo_compat_privileges set on the server command line reaches the reader and aborts apply; the printed setting for the reader turns it off', () => {
+  it('A70, D109: lo_compat_privileges set on the server command line reaches the reader and aborts apply; the printed setting for the reader turns it off', () => {
     expect(readerSetting()).toBe('on')
     const failed = run(script)
     expect(failed.status).toBe(3)
@@ -189,5 +193,26 @@ describe('lo_compat_privileges on the server command line', () => {
     const reapplied = run(script)
     expect(reapplied.status, reapplied.stderr).toBe(0)
     expect(readerSetting()).toBe('off')
+  })
+
+  it('A81, D109: on a first deploy the fix creates the reader the failed apply rolled back, then turns lo_compat_privileges off for it', () => {
+    const newRole = 'hyde_cmdline_new_reader'
+    const exists = `SELECT 'exists=' || count(*) FROM pg_roles WHERE rolname = '${newRole}';`
+    expect(run(exists).stdout).toContain('exists=0')
+    const newScript = buildFiles(newRole)['redacted-views.sql']
+    const failed = run(newScript)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(
+      `${COMPAT} for role ${newRole}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${newRole} NOLOGIN; ALTER ROLE ${newRole} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
+    )
+    // The apply created the role in its transaction, so the abort rolled the creation back (A81).
+    expect(run(exists).stdout).toContain('exists=0')
+    expect(run(suggestedFix(failed)).status).toBe(0)
+    const reapplied = run(newScript)
+    expect(reapplied.status, reapplied.stderr).toBe(0)
+    const shown = run(
+      `SELECT 'config=' || array_to_string(setconfig, ',') FROM pg_db_role_setting WHERE setrole = '${newRole}'::regrole AND setdatabase = 0;`,
+    )
+    expect(shown.stdout).toContain('config=lo_compat_privileges=off')
   })
 })

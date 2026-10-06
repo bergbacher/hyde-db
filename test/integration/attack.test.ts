@@ -1,6 +1,6 @@
 // Attack suite (D1): apply the generated script to a real PostgreSQL, then attack the reader role.
 import pg from 'pg'
-import { afterEach, describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, inject, it } from 'vitest'
 import {
   adminQuery,
   apply,
@@ -144,7 +144,7 @@ describe('final check', () => {
     ).toEqual([])
   })
 
-  it('D69, D89: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D69, D108: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -193,7 +193,7 @@ describe('final check', () => {
     expect(result.stderr).toContain(`role ${db.role} must not be a member of other roles`)
   })
 
-  it('D1, D89: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D1, D108: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery('postgres', `GRANT pg_read_all_data TO "${db.role}"`)
@@ -388,6 +388,33 @@ describe('cluster', () => {
     } finally {
       await reader.end()
     }
+  })
+
+  it('A82, D108: a table privilege the reader passed on to PUBLIC is fixed by the owner alone, in a session of its own, with no SET ROLE', async () => {
+    const db = await freshDb()
+    const owner = await managedOwner(db)
+    await adminQuery(db.name, `ALTER TABLE public.api_keys OWNER TO ${owner}`)
+    const script = `SET ROLE ${owner};\n${db.files['redacted-views.sql']}`
+    expect(psql(db.name, script).status).toBe(0)
+    await adminQuery(
+      db.name,
+      `SET ROLE ${owner}; GRANT SELECT ON public.api_keys TO "${db.role}" WITH GRANT OPTION;
+       SET ROLE "${db.role}"; GRANT SELECT ON public.api_keys TO PUBLIC; RESET ROLE`,
+    )
+    const failed = psql(db.name, script)
+    expect(failed.status).toBe(3)
+    // CASCADE on the reader's grant removes what it passed on in the same ACL.
+    const fix = suggestedFix(failed)
+    expect(fix).toBe(`REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)
+    const asOwner = { containerId: inject('pg').containerId, user: owner }
+    // The owner holds no SET on the reader it created, so a fix that needed SET ROLE would fail.
+    const setRole = psql(db.name, `SET ROLE "${db.role}";`, { server: asOwner })
+    expect(setRole.status).toBe(3)
+    expect(setRole.stderr).toContain('permission denied to set role')
+    const pasted = psql(db.name, fix, { server: asOwner })
+    expect(pasted.status, pasted.stderr).toBe(0)
+    const reapplied = psql(db.name, script)
+    expect(reapplied.status, reapplied.stderr).toBe(0)
   })
 
   it("A39: a reader role that already exists as SUPERUSER stops the owner's apply before any change", async () => {

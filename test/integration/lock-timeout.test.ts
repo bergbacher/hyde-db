@@ -1,5 +1,6 @@
-// D92: a reader that holds a lock on a view makes the apply and drop scripts fail at lock_timeout
-// instead of waiting for it forever (A72); the failed script changes nothing.
+// D110: a reader that holds a lock on a view makes the apply and drop scripts fail at lock_timeout
+// instead of waiting for it forever (A72); the failed script changes nothing, and the setting does
+// not outlive the script (A84).
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -21,12 +22,12 @@ async function freshDb(): Promise<TestDb> {
   return db
 }
 
-const LOCK_TIMEOUT = "SET lock_timeout = '60s';"
+const LOCK_TIMEOUT = "SET LOCAL lock_timeout = '60s';"
 
 /** The script as generated, with its lock_timeout shortened so the test waits 1s rather than 60s. */
 function withShortLockTimeout(script: string): string {
   expect(script.split('\n')).toContain(LOCK_TIMEOUT)
-  return script.replace(LOCK_TIMEOUT, "SET lock_timeout = '1s';")
+  return script.replace(LOCK_TIMEOUT, "SET LOCAL lock_timeout = '1s';")
 }
 
 /** The OID of the view redacted.users, which changes whenever the script recreates the schema. */
@@ -37,7 +38,7 @@ async function viewOid(db: TestDb): Promise<unknown> {
 
 describe('lock_timeout', () => {
   for (const file of ['redacted-views.sql', 'redacted-views-drop.sql'] as const) {
-    it(`A72, D92: a reader holding a transaction open on a view makes ${file} fail at lock_timeout, changing nothing`, async () => {
+    it(`A72, D110: a reader holding a transaction open on a view makes ${file} fail at lock_timeout, changing nothing`, async () => {
       const db = await freshDb()
       expect(apply(db).status).toBe(0)
       const before = await viewOid(db)
@@ -53,9 +54,14 @@ describe('lock_timeout', () => {
         await reader.query('ROLLBACK')
         await reader.end()
       }
-      // Once the reader's transaction has ended, the script as generated runs.
-      const result = psql(db.name, db.files[file])
+      // Once the reader's transaction has ended, the script as generated runs, and its
+      // lock_timeout ends with its transaction instead of staying with the session (A84).
+      const result = psql(
+        db.name,
+        `${db.files[file]}\nSELECT 'after=' || current_setting('lock_timeout');`,
+      )
       expect(result.status, result.stderr).toBe(0)
+      expect(result.stdout).toContain('after=0')
     })
   }
 })

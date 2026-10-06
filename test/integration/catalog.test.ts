@@ -3,10 +3,12 @@
 // refuses them.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  AS_SUPERUSER,
   adminQuery,
   apply,
   createTestDatabase,
   dropTestDatabase,
+  inOneTransaction,
   pasteFixAndReapply,
   psql,
   suggestedFix,
@@ -79,7 +81,9 @@ describe('catalog privileges', () => {
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} ${ABORT}: pg_catalog.pg_statistic. Fix: `)
     expect(suggestedFix(failed)).toBe(
-      `REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM PUBLIC CASCADE; REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM ${db.role} CASCADE;`,
+      inOneTransaction(
+        `REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM PUBLIC CASCADE; REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM ${db.role} CASCADE;`,
+      ),
     )
     pasteFixAndReapply(db, failed)
   })
@@ -98,7 +102,9 @@ describe('catalog privileges', () => {
       `role ${db.role} ${ABORT}: information_schema._pg_user_mappings, pg_catalog.pg_authid. Fix: `,
     )
     expect(suggestedFix(failed)).toBe(
-      `REVOKE SELECT ON TABLE information_schema._pg_user_mappings FROM PUBLIC CASCADE; REVOKE SELECT (rolname), SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+      inOneTransaction(
+        `REVOKE SELECT ON TABLE information_schema._pg_user_mappings FROM PUBLIC CASCADE; REVOKE SELECT (rolname), SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+      ),
     )
     pasteFixAndReapply(db, failed)
   })
@@ -118,12 +124,14 @@ describe('catalog privileges', () => {
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} ${ABORT}: pg_toast, ${toast?.name}. Fix: `)
     expect(suggestedFix(failed)).toBe(
-      `REVOKE USAGE ON SCHEMA pg_toast FROM ${db.role} CASCADE; REVOKE SELECT ON TABLE ${toast?.name} FROM ${db.role} CASCADE;`,
+      inOneTransaction(
+        `REVOKE USAGE ON SCHEMA pg_toast FROM ${db.role} CASCADE; REVOKE SELECT ON TABLE ${toast?.name} FROM ${db.role} CASCADE;`,
+      ),
     )
     pasteFixAndReapply(db, failed)
   })
 
-  it('A69, D89: a column privilege the reader passed on from its pg_authid grant is revoked as the reader before its own grant', async () => {
+  it('A69, D108: a column privilege the reader passed on from its pg_authid grant is revoked as the reader before its own grant', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await readerPassesOnPassword(db)
@@ -131,13 +139,13 @@ describe('catalog privileges', () => {
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} ${ABORT}: pg_catalog.pg_authid. Fix: `)
     expect(suggestedFix(failed)).toBe(
-      `SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+      `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
     expect(await publicReadsPasswords(db)).toBe(false)
   })
 
-  it('A69, D89: a column privilege the reader passed on outlives CASCADE on its pg_authid grant; the fix gives the reader the grant option back to revoke it', async () => {
+  it('A69, D108: a column privilege the reader passed on outlives CASCADE on its pg_authid grant; the fix gives the reader the grant option back to revoke it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await readerPassesOnPassword(db)
@@ -148,7 +156,7 @@ describe('catalog privileges', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toBe(
-      `GRANT SELECT (rolpassword) ON TABLE pg_catalog.pg_authid TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+      `${inOneTransaction(`GRANT SELECT (rolpassword) ON TABLE pg_catalog.pg_authid TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
     pasteFixAndReapply(db, failed)
     expect(await publicReadsPasswords(db)).toBe(false)

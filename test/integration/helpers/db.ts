@@ -27,8 +27,11 @@ export interface TestDb {
 /** docker exec's own failure statuses: daemon error (125), command not invokable (126), command not found (127). */
 const DOCKER_EXEC_FAILURES: ReadonlySet<number> = new Set([125, 126, 127])
 const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the Docker daemon)/
-/** A hyde-db abort whose fix is empty or built from a NULL: nothing an administrator could paste (D89). */
-const NO_FIX = /ERROR:\s+hyde-db: .*Fix:(?:[ \t]*$|.*<NULL>)/m
+/**
+ * A hyde-db abort whose fix is empty or built from a NULL, which leaves nothing to paste, or that
+ * grants ALL, which a failed paste could leave behind (D108).
+ */
+const NO_FIX = /ERROR:\s+hyde-db: .*Fix:(?:[ \t]*$|.*<NULL>|.*GRANT ALL)/m
 
 export interface PsqlOptions {
   /** Pass `-v ON_ERROR_STOP=1`, as the docs do. Default true; false mimics a client that runs past errors (D58). */
@@ -184,7 +187,15 @@ export async function connectAsReader(db: TestDb, database: string = db.name): P
   return client
 }
 
-/** The statements an aborted apply suggests after "Fix: " (D13, D24, D49, D89). */
+/** A fix of several statements as the final check prints it: one transaction (D108). */
+export function inOneTransaction(statements: string): string {
+  return `BEGIN; ${statements} COMMIT;`
+}
+
+/** The note after a fix that only a superuser can run (D108, D109). */
+export const AS_SUPERUSER = ' -- run as a superuser'
+
+/** The statements an aborted apply suggests after "Fix: " (D13, D24, D49, D108). */
 export function suggestedFix(result: PsqlResult): string {
   const match = /Fix: (.*)$/m.exec(result.stderr)
   if (match?.[1] === undefined) throw new Error(`no fix in: ${result.stderr}`)
