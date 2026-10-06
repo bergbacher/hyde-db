@@ -220,21 +220,45 @@ describe('usage', () => {
     expect([...named].sort()).toEqual(Object.keys(files ?? {}).sort())
   })
 
-  /** The command lines of the deploy block (D68: none carries a trailing comment, so each pastes as is). */
-  const commandsIn = (usageText: string): string[] =>
+  /** A command line: two spaces, then psql or npx (D68: no trailing comment, so each pastes as is). */
+  const isCommand = (line: string): boolean => /^ {2}(psql|npx) /.test(line)
+  /** The command lines as printed, ` &&` included. */
+  const commandLines = (usageText: string): string[] =>
     usageText
       .split('\n')
-      .filter((line) => /^ {2}(psql|npx) /.test(line))
+      .filter(isCommand)
       .map((line) => line.trim())
+  /** Each command on its own, without the ` &&` that chains it to the next (D136). */
+  const commandsIn = (usageText: string): string[] =>
+    commandLines(usageText).map((line) => line.replace(/ &&$/, ''))
 
-  it('D56: gives the deploy order as copy-pasteable commands, starting with prisma generate', () => {
-    expect(commandsIn(text)).toEqual([
+  it('D56, D136: gives the deploy order as copy-pasteable commands, starting with prisma generate', () => {
+    expect(commandLines(text)).toEqual([
       'npx prisma generate',
-      `psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql`,
-      'npx prisma migrate deploy',
+      `psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql &&`,
+      'npx prisma migrate deploy &&',
       `psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
       `psql "${DB_URL}" -c "ALTER ROLE redacted_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
     ])
+  })
+
+  it('D136: chains drop, migrate and apply with &&, so a refused step stops the rest', () => {
+    const start = lines.findIndex((l) => l.includes('<output>/redacted-views-drop.sql'))
+    const block = lines.slice(start, start + 3).join('\n')
+    expect(block).toContain('migrate deploy')
+    expect(block).toContain('<output>/redacted-views.sql')
+    // A refused drop script must stop the block: only the first stub runs. <output> stands for
+    // the directory, as the note says; pasted as is, the shell refuses it as a redirection (D66).
+    const stubs = 'psql() { echo psql; return 3; }; npx() { echo npx; return 1; }'
+    const pasted = block.replaceAll('<output>/', 'prisma/redacted/')
+    const { stdout } = spawnSync('sh', ['-c', `${stubs}\n${pasted}`], {
+      env: { PATH: process.env.PATH ?? '', DATABASE_URL: 'postgresql://db' },
+      encoding: 'utf8',
+    })
+    expect(stdout.trim().split('\n')).toEqual(['psql'])
+    // The note before the block names the steps and says a refusal stops the rest.
+    expect(lines[start - 1]).toMatch(/^Drop the views schema, migrate, then create the views/)
+    expect(lines[start - 1]).toContain('A refused step stops the rest')
   })
 
   it('D68: every command that uses the database URL stops while DATABASE_URL is unset', () => {
@@ -265,50 +289,62 @@ describe('usage', () => {
     expect(commandsIn(text)).toHaveLength(5)
   })
 
-  it('A49: each note is plain prose on its own line before its command, ending with a colon', () => {
-    const commandIndexes = lines.flatMap((l, i) => (/^ {2}(psql|npx) /.test(l) ? [i] : []))
+  it('A49, D136: a prose note ending with a colon comes before each command block, and only commands chain', () => {
+    const commandIndexes = lines.flatMap((l, i) => (isCommand(l) ? [i] : []))
     expect(commandIndexes).toHaveLength(5)
     for (const index of commandIndexes) {
-      expect(lines[index - 1], lines[index]).toMatch(/^[A-Za-z].*:$/)
+      const before = lines[index - 1] ?? ''
+      if (isCommand(before)) expect(before, lines[index]).toMatch(/ &&$/)
+      else expect(before, lines[index]).toMatch(/^[A-Za-z].*:$/)
+      // A chained line is followed by its next command, never by prose.
+      if (lines[index]?.endsWith(' &&')) expect(isCommand(lines[index + 1] ?? '')).toBe(true)
     }
   })
 
-  it('D56: says prisma generate writes the three files and the login step runs once', () => {
+  it('D56: says prisma generate writes the three files and the login step runs once, after the first deploy', () => {
     expect(lines[lines.findIndex((l) => l.includes('npx prisma generate')) - 1]).toContain(
       'three files',
     )
-    expect(text).toMatch(/password, once\./)
+    expect(text).toContain('Once, after the first deploy, let the reader log in.')
   })
 
-  it('A49: the login note says to export READER_PASSWORD in prose, that history and ps show an inline password, and the interactive alternative', () => {
-    const index = lines.findIndex((l) => l.includes('ALTER ROLE'))
-    const note = lines.slice(0, index).join('\n')
-    expect(note).toContain('export READER_PASSWORD=...')
-    expect(note).toMatch(/shell history/)
-    expect(note).toMatch(/\bps\b/)
-    expect(note).toContain('single quote')
-    expect(note).toContain('\\password redacted_reader')
-    expect(note.indexOf('export READER_PASSWORD=...')).toBeLessThan(
-      note.indexOf('\\password redacted_reader'),
+  it('A41, D66, D136: the login step sets the password with \\password first, then LOGIN, and the one-liner is the fallback with its costs', () => {
+    const login = lines.findIndex((l) => l.includes('LOGIN PASSWORD'))
+    const note = lines.slice(
+      lines.findIndex((l) => l.startsWith('Once, after the first deploy')),
+      login,
     )
+    const prose = note.join('\n')
+    const password = prose.indexOf('\\password redacted_reader')
+    const allow = prose.indexOf('ALTER ROLE redacted_reader LOGIN;')
+    const fallback = prose.indexOf('export READER_PASSWORD=...')
+    expect(password).toBeGreaterThan(-1)
+    expect(allow).toBeGreaterThan(password)
+    expect(fallback).toBeGreaterThan(allow)
+    expect(prose).toContain('In an interactive psql')
+    expect(prose).toMatch(/shell history/)
+    expect(prose).toMatch(/\bps\b/)
+    expect(prose).toContain('single quote')
     expect(commandsIn(text).filter((c) => c.includes('READER_PASSWORD='))).toEqual([])
+    // The interactive session is prose, not a command: pasted, it would read the lines after it.
+    expect(commandsIn(text).filter((c) => /^psql "[^"]*"$/.test(c))).toEqual([])
   })
 
   it('D68: pasting the whole help runs only the indented commands: every prose line starts with an uppercase letter', () => {
     // The title line starts with the product name (the one lowercase start); every other prose line
-    // is blank or starts with an uppercase ASCII letter, which no command does.
+    // is blank or starts with an uppercase ASCII letter, which no command does. No line, indented
+    // or not, holds a backtick or a command substitution.
     for (const line of lines) {
-      if (/^ {2}(psql|npx) /.test(line)) continue
+      expect(line, line).not.toContain('`')
+      expect(line, line).not.toContain('$(')
       if (line.startsWith(' ')) continue
       if (line === lines[0]) expect(line.startsWith(`${BRAND}: `)).toBe(true)
       else expect(line, line).toMatch(/^([A-Z]|$)/)
-      expect(line, line).not.toContain('`')
-      expect(line, line).not.toContain('$(')
     }
   })
 
   it('D56: the login step takes the password from READER_PASSWORD, with no <placeholder> to paste', () => {
-    const login = lines.find((l) => l.includes('ALTER ROLE')) ?? ''
+    const login = lines.find((l) => l.includes('LOGIN PASSWORD')) ?? ''
     expect(login).toContain('${READER_PASSWORD:?')
     expect(login).not.toMatch(/<[^>]*>/)
     expect(login).not.toContain('…')
@@ -360,6 +396,47 @@ describe('usage', () => {
     expect(definitions[0]).toContain(`(default ${DEFAULT_OUTPUT})`)
     expect(lines.indexOf(definitions[0] ?? '')).toBeLessThan(
       lines.findIndex((l) => l.includes('<output>/redacted-views-drop.sql')),
+    )
+  })
+
+  it('A15, A95, D24: says the PostgreSQL 14 step runs once before the first apply, in the application database, as the owner of public or a superuser', () => {
+    const step = lines.filter((l) => l.includes('REVOKE CREATE ON SCHEMA public FROM PUBLIC'))
+    expect(step).toHaveLength(1)
+    expect(step[0]).toMatch(/^On PostgreSQL 14 and older, once before the first apply/)
+    expect(step[0]).toContain('in the application database')
+    expect(step[0]).toContain('as the owner of schema public or a superuser')
+    expect(lines.indexOf(step[0] ?? '')).toBeLessThan(
+      lines.findIndex((l) => l.includes('<output>/redacted-views.sql')),
+    )
+  })
+
+  it('D108, A95: says how to recover when apply aborts: an administrator pastes the printed fix and runs apply again until it passes', () => {
+    const recovery = lines.filter((l) => l.startsWith('If apply aborts'))
+    expect(recovery).toHaveLength(1)
+    expect(recovery[0]).toContain('an administrator pastes the statements printed after Fix:')
+    expect(recovery[0]).toContain('runs apply again, until it passes')
+    expect(recovery[0]).toContain('(README: Running fixes without a superuser)')
+    expect(lines.indexOf(recovery[0] ?? '')).toBeGreaterThan(
+      lines.findIndex((l) => l.includes('<output>/redacted-views.sql')),
+    )
+  })
+
+  it('D136, D137: sends a Prisma URL with parameters to prisma db execute, with sourceSchema set to its schema, and the login step to a libpq URL', () => {
+    const route = lines.filter((l) => l.includes('npx prisma db execute --file'))
+    expect(route).toHaveLength(1)
+    expect(route[0]).toMatch(/^If the URL Prisma uses carries such parameters/)
+    expect(route[0]).toContain('set sourceSchema to its ?schema= name')
+    expect(text).toContain(
+      'Do not strip the parameters for psql: prisma migrate deploy would then run against the stripped URL',
+    )
+    const login = lines.find((l) => l.startsWith('Once, after the first deploy')) ?? ''
+    expect(login).toContain('a libpq URL of the same database without Prisma parameters')
+    expect(login).toContain('in a shell where you run no Prisma command')
+  })
+
+  it('A99, D140: says roles are cluster-wide, so each database and generator block gets its own role', () => {
+    expect(text).toContain(
+      'Roles belong to the whole cluster, not to one database: give each database, and each generator block, its own role.',
     )
   })
 

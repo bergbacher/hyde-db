@@ -238,6 +238,73 @@ const ROW_PINS: Readonly<
   },
 }
 
+/** README prose with inline-code backticks removed, to compare with the plain ASCII usage (D66). */
+const plainProse = prose.replaceAll('`', '')
+
+describe('the CLI usage and the README agree', () => {
+  it('A41, D66: the login step comes in the same order: \\password, then ALTER ROLE … LOGIN;, then the READER_PASSWORD one-liner', () => {
+    const order = (text: string): number[] =>
+      ['\\password redacted_reader', 'ALTER ROLE redacted_reader LOGIN;', 'READER_PASSWORD'].map(
+        (phrase) => text.indexOf(phrase),
+      )
+    for (const [name, text] of [
+      ['usage', help],
+      ['README', section('After the first deploy', '###')],
+    ] as const) {
+      const [password = -1, login = -1, fallback = -1] = order(text)
+      expect(password, name).toBeGreaterThan(-1)
+      expect(login, name).toBeGreaterThan(password)
+      expect(fallback, name).toBeGreaterThan(login)
+    }
+  })
+
+  it('A15, A95, D24: the PostgreSQL 14 step: the same statement, run once before the first apply by the owner of public or a superuser', () => {
+    const step = helpLines.find((line) => line.startsWith('On PostgreSQL 14 and older')) ?? ''
+    const before = withoutComments(section('Before the first deploy', '###')).replaceAll('`', '')
+    for (const phrase of [
+      'REVOKE CREATE ON SCHEMA public FROM PUBLIC',
+      'as the owner of schema public or a superuser',
+    ]) {
+      expect(step, phrase).toContain(phrase)
+      expect(before, phrase).toContain(phrase)
+    }
+  })
+
+  it('D108: the recovery line points at the README section on who runs a fix, and both say to apply again until it passes', () => {
+    const recovery = helpLines.find((line) => line.startsWith('If apply aborts')) ?? ''
+    const heading = /\(README: ([^)]+)\)/.exec(recovery)?.[1] ?? ''
+    expect(readme).toContain(`\n### ${heading}\n`)
+    expect(recovery).toContain('until it passes')
+    expect(prose).toContain('run the apply script again; repeat until it passes')
+  })
+
+  it('D136, D137: both send a Prisma URL with parameters to prisma db execute, keep the parameters for Prisma, and set sourceSchema to its schema', () => {
+    expect(help).toContain('deploy with npx prisma db execute --file instead')
+    expect(shellLines).toContain('npx prisma db execute --file prisma/redacted/redacted-views.sql')
+    const keep =
+      'Do not strip the parameters for psql: prisma migrate deploy would then run against the stripped URL, which can point at another schema.'
+    expect(help).toContain(keep)
+    expect(plainProse).toContain(keep)
+    expect(help).toContain('set sourceSchema to its ?schema= name')
+    expect(plainProse).toContain('?schema=<name>, set sourceSchema to that name')
+    for (const phrase of [
+      'a libpq URL of the same database without Prisma parameters',
+      'in a shell where you run no Prisma command',
+    ]) {
+      expect(help, phrase).toContain(phrase)
+      expect(plainProse, phrase).toContain(phrase)
+    }
+  })
+
+  it('A99, D140: both say a role belongs to the whole cluster and give each database and generator block its own role', () => {
+    const sentence = 'give each database, and each generator block, its own role'
+    expect(help).toContain(sentence)
+    expect(plainProse).toContain(sentence)
+    expect(help).toContain('Roles belong to the whole cluster, not to one database')
+    expect(plainProse).toContain('Roles belong to the whole cluster, not to one database')
+  })
+})
+
 describe('README (a view of LEDGER.md)', () => {
   it('D51: the diagnostics reference lists every code with its severity, and no other code', () => {
     for (const code of DIAGNOSTIC_CODES) {
@@ -442,13 +509,15 @@ describe('README (a view of LEDGER.md)', () => {
     expect(deploy).toContain('`prisma migrate deploy` would then run against the stripped URL')
   })
 
-  it('D68: the psql commands are the CLI usage commands for output ./redacted, with the same guards', () => {
-    const helpCommands = helpLines
-      .filter((line) => line.startsWith('  psql '))
+  it('D68, D136: the CLI usage deploy block is the README psql block for output ./redacted, chained the same way, with the same guards', () => {
+    const start = helpLines.findIndex((line) => line.includes('<output>/redacted-views-drop.sql'))
+    const helpBlock = helpLines
+      .slice(start, start + 3)
       .map((line) => line.trim().replaceAll('<output>/', 'prisma/redacted/'))
-    expect(helpCommands).toHaveLength(3)
-    const readmePsql = shellLines.filter((line) => line.startsWith('psql '))
-    for (const command of helpCommands) expect(readmePsql).toContain(command)
+      .join('\n')
+    expect(deployBlocks.find((block) => block.startsWith('psql '))).toBe(`${helpBlock}\n`)
+    const helpLogin = helpLines.find((line) => line.includes('LOGIN PASSWORD'))?.trim()
+    expect(shellLines).toContain(helpLogin)
   })
 
   it('D68: every shell command that uses DATABASE_URL stops while it is unset or empty, running nothing', () => {
