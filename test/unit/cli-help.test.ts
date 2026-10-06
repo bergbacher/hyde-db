@@ -181,7 +181,7 @@ describe('usage', () => {
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
       'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '…'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
     ])
   })
 
@@ -189,7 +189,31 @@ describe('usage', () => {
     expect(lines.find((l) => l.includes('npx prisma generate'))).toMatch(
       /# writes the three files$/,
     )
-    expect(lines.find((l) => l.includes('ALTER ROLE'))).toMatch(/# once: .*login/)
+    expect(lines.find((l) => l.includes('ALTER ROLE'))).toMatch(
+      /# once: give the role a login; replace the placeholder first$/,
+    )
+  })
+
+  it('D56: the login step has an ASCII <placeholder> for the password, never a pasteable value', () => {
+    const login = lines.find((l) => l.includes('ALTER ROLE')) ?? ''
+    expect(login).toMatch(/PASSWORD '<[a-z-]+>'/)
+    expect(login).not.toContain('…')
+  })
+
+  it('D56: the help is pure ASCII, so a pasted command carries no look-alike character', () => {
+    expect(text).toMatch(/^[\x20-\x7e\n]*$/)
+    expect(usage(DEFAULT_CONFIG, 'https://github.com/acme/hyde-db')).toMatch(/^[\x20-\x7e\n]*$/)
+  })
+
+  it('D56: says where <output> is: the generator output directory, relative to schema.prisma', () => {
+    const definitions = lines.filter((l) => l.includes('<output> ='))
+    expect(definitions).toHaveLength(1)
+    expect(definitions[0]).toContain("the generator's output directory")
+    expect(definitions[0]).toContain('relative to schema.prisma')
+    expect(definitions[0]).toContain(`(default ${DEFAULT_OUTPUT})`)
+    expect(lines.indexOf(definitions[0] ?? '')).toBeLessThan(
+      lines.findIndex((l) => l.includes('<output>/redacted-views-drop.sql')),
+    )
   })
 
   it('D56: warns that psql needs DATABASE_URL exported as a plain libpq URL', () => {
@@ -204,7 +228,7 @@ describe('usage', () => {
   it('D56: names the role from the config it is given in the login step', () => {
     const custom = { ...DEFAULT_CONFIG, role: 'masked_reader' }
     expect(commandsIn(usage(custom)).at(-1)).toBe(
-      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD '…'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
     )
   })
 

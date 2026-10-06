@@ -88,12 +88,14 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
       'npx prisma migrate deploy',
       'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '…'"`,
+      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '<choose-a-strong-password>'"`,
     ]
     const positions = deploy.map((command) => stdout.indexOf(command))
     expect(positions).not.toContain(-1)
     expect(positions).toEqual([...positions].sort((a, b) => a - b))
     expect(stdout).toContain('(needs strict "false")')
+    expect(stdout).toContain(`(default ${DEFAULT_OUTPUT})`)
+    expect(stdout).toMatch(/^[\x20-\x7e\n]*$/)
     expect(stdout).toContain(`output   = "${DEFAULT_OUTPUT}"`)
     expect(stdout).toContain('HYDE_')
     expect(stdout.endsWith('\n')).toBe(true)
