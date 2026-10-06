@@ -10,7 +10,7 @@ Single source of truth for the product in this repository. Every non-fact is mar
 |---|---|---|---|---|
 | A1 | Base apply SQL runs `DROP SCHEMA IF EXISTS <schema> CASCADE` without checking that the generator created the schema. | verified | source: base `src/core.js:223` | Claude |
 | A2 | `ai_reader` can override its role-level `default_transaction_read_only` and `statement_timeout` with `SET`. | verified | source: PostgreSQL docs; attack suite `test/integration/attack.test.ts` (A2 tests) on PostgreSQL 14 and 18, 2026-10-06 (9ee3bb7) | Claude |
-| A3 | `ai_reader` can execute functions in `public`, including `SECURITY DEFINER` ones, through PUBLIC's default `USAGE` and `EXECUTE` grants. | open | source: PostgreSQL defaults; unverified here | Claude |
+| A3 | `ai_reader` can execute functions in `public`, including `SECURITY DEFINER` ones, through PUBLIC's default `USAGE` and `EXECUTE` grants. | verified | source: PostgreSQL defaults; attack suite `test/integration/definer.test.ts` (A3 test) on PostgreSQL 14 and 18, 2026-10-06 (5e2efbf) | Claude |
 | A4 | Base leak check covers tables, partitioned tables, views, materialized views and foreign tables; not sequences or functions. | verified | source: base `src/core.js:261` | Claude |
 | A5 | Base sensitive-name pattern matches inside unrelated names: `isPrivate` (vat), `footprint` (otp), `passenger` (pass), `discarded` (card), `flat` (lat). | verified | source: base `src/core.js:24`, run 2026-10-05 | Claude |
 | A6 | Base tests check one example schema without a database; `@prisma/prisma-schema-wasm` is unpinned (`*`). | verified | source: base `test/run.js`, `package.json` | Claude |
@@ -128,3 +128,4 @@ Single source of truth for the product in this repository. Every non-fact is mar
 - 2026-10-06 — Task 12 review (by: Claude): added A35, D57.
 - 2026-10-06 — Attack suite (9ee3bb7) on PostgreSQL 14 and 18 (by: Claude): A2, A14, A15 open → verified; A31, A32 confirmed by committed tests. Affected: D14, D15, D21, D24, D49, D50 → hold (their reasons are now verified).
 - 2026-10-06 — Task 22 review (by: Claude): added A36, D58. Affected: D11 → holds, strengthened by D58.
+- 2026-10-06 — Task 23 (5e2efbf..d805e3f) (by: Claude): A3 open → verified on PostgreSQL 14 and 18. Affected: D1, D13 → hold.
