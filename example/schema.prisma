@@ -3,7 +3,7 @@ generator client {
 }
 
 generator ai {
-  provider = "prisma-ai-views"
+  provider = "hyde-db"
   output   = "./ai"     // ai-views.sql, ai-views-drop.sql, ai-schema.md (commit these)
   // default = "hidden"  // unannotated fields are hidden (the default)
   strict   = "true"     // every field must be classified, so new columns fail CI until someone decides

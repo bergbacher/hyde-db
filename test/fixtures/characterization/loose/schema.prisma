@@ -2,7 +2,7 @@
 // (global hidden default, @ai.default(visible), relation hints, a model without
 // visible columns, an explicitly visible sensitive name).
 generator ai {
-  provider = "prisma-ai-views"
+  provider = "hyde-db"
   output   = "./ai"
 }
 
