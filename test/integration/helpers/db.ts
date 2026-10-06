@@ -28,17 +28,24 @@ export interface TestDb {
 const DOCKER_EXEC_FAILURES: ReadonlySet<number> = new Set([125, 126, 127])
 const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the Docker daemon)/
 
+export interface PsqlOptions {
+  /** Pass `-v ON_ERROR_STOP=1`, as the docs do. Default true; false mimics a client that runs past errors (D58). */
+  readonly onErrorStop?: boolean
+}
+
 /**
  * Runs a script with `psql -v ON_ERROR_STOP=1 -f -` inside the database container, as the docs do.
  *
  * A returned PsqlResult always means psql itself ran: status 0 is success and status 3 is a
- * script error under ON_ERROR_STOP (psql's own 1 and 2 are returned as they are). Every way in
- * which docker or the container, not psql, failed throws, so an attack test cannot pass
- * vacuously on a result that never reached the database: a missing docker CLI (D22), a
- * timeout, no exit status (signal), exit 125/126/127, or a docker daemon error.
+ * script error under ON_ERROR_STOP (psql's own 1 and 2 are returned as they are; without
+ * ON_ERROR_STOP a script error still exits 0). Every way in which docker or the container,
+ * not psql, failed throws, so an attack test cannot pass vacuously on a result that never
+ * reached the database: a missing docker CLI (D22), a timeout, no exit status (signal),
+ * exit 125/126/127, or a docker daemon error.
  */
-export function psql(database: string, script: string): PsqlResult {
+export function psql(database: string, script: string, options: PsqlOptions = {}): PsqlResult {
   const { containerId, user } = inject('pg')
+  const onErrorStop = options.onErrorStop ?? true
   const result = spawnSync(
     'docker',
     [
@@ -52,8 +59,7 @@ export function psql(database: string, script: string): PsqlResult {
       user,
       '-d',
       database,
-      '-v',
-      'ON_ERROR_STOP=1',
+      ...(onErrorStop ? ['-v', 'ON_ERROR_STOP=1'] : []),
       '-f',
       '-',
     ],
