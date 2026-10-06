@@ -21,7 +21,7 @@ pnpm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Environment files: never commit credentials (e.g. the ai_reader password)
+# Environment files: never commit credentials (e.g. the redacted_reader password)
 .env
 .env.*
 !.env.example
