@@ -1,7 +1,15 @@
 // Drives src/generator.ts the way the Prisma CLI does: PRISMA_GENERATOR_INVOCATION=true (A34),
 // JSON-RPC requests on stdin, responses on stderr, one JSON object per line (A19).
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import {
+  existsSync,
+  linkSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, relative } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -221,6 +229,50 @@ describe('generator protocol', () => {
     const { responses } = await runGenerator([request])
     expect(responses).toEqual([{ jsonrpc: '2.0', id: 2, result: null }])
     for (const file of OUTPUT_FILES) expect(existsSync(join(output, file)), file).toBe(true)
+  })
+
+  it('writes each file under a temporary name and renames it into place, leaving no temporary file', async () => {
+    const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+    const target = join(output, 'redacted-views.sql')
+    // A hard link shares the old file's content: writing in place would change it too, while a
+    // rename gives the output name a new file and leaves the link as it was.
+    writeFileSync(target, 'old content')
+    const link = join(mkdtempSync(join(tmpdir(), 'hyde-link-')), 'old.sql')
+    linkSync(target, link)
+    const { request } = generateRequest(example, { output })
+    const { responses } = await runGenerator([request])
+    expect(responses).toEqual([{ jsonrpc: '2.0', id: 2, result: null }])
+    expect(readFileSync(link, 'utf8')).toBe('old content')
+    expect(readFileSync(target, 'utf8')).toContain('CREATE VIEW')
+    expect(readdirSync(output).sort()).toEqual([...OUTPUT_FILES].sort())
+  })
+
+  it('a file it cannot put in place fails generate with "hyde-db: could not write <path>: <reason>", leaving no temporary file', async () => {
+    const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+    // A non-empty directory where the schema doc goes: no file can be renamed onto it.
+    mkdirSync(join(output, 'redacted-schema.md', 'keep'), { recursive: true })
+    const { request } = generateRequest(example, { output })
+    const { responses, stdout } = await runGenerator([request])
+    expect(responses[0]?.error?.code).toBe(-32000)
+    const message = responses[0]?.error?.message ?? ''
+    const prefix = `hyde-db: could not write ${join(output, 'redacted-schema.md')}: `
+    expect(message.startsWith(prefix), message).toBe(true)
+    expect(message.length).toBeGreaterThan(prefix.length)
+    expect(readdirSync(output).sort()).toEqual([...OUTPUT_FILES].sort())
+    expect(stdout).toBe('')
+  })
+
+  it('an output directory it cannot create fails generate with "hyde-db: could not write <path>: <reason>"', async () => {
+    const parent = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+    writeFileSync(join(parent, 'file'), '')
+    const output = join(parent, 'file', 'redacted')
+    const { request } = generateRequest(example, { output })
+    const { responses, stdout } = await runGenerator([request])
+    expect(responses[0]?.error?.code).toBe(-32000)
+    const message = responses[0]?.error?.message ?? ''
+    expect(message.startsWith(`hyde-db: could not write ${output}: `), message).toBe(true)
+    expect(message).toContain('ENOTDIR')
+    expect(stdout).toBe('')
   })
 
   it('A19: answers getManifest then generate in one session, in order', async () => {

@@ -4,7 +4,7 @@
 // on stdin, responses go to stderr, one JSON object per line (A19). Warnings and the success line
 // go to stdout, which Prisma shows (D51, D28, A20). Anywhere else it prints help or the version
 // and exits without touching stdin (D56).
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
@@ -25,7 +25,7 @@ import {
   noOutputDirectory,
   unsupportedProvider,
 } from './diagnostics.ts'
-import type { Diagnostic, DmmfDatamodel, GeneratorConfig } from './types.ts'
+import type { Diagnostic, DmmfDatamodel, GeneratorConfig, OutputFiles } from './types.ts'
 
 interface GenerateParams {
   readonly generator: {
@@ -51,6 +51,36 @@ function send(message: Record<string, unknown>): void {
   process.stderr.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
 }
 
+/** Runs one file-system step; a failure names the path it was for and the reason. */
+function attempt<T>(path: string, step: () => T): T {
+  try {
+    return step()
+  } catch (error) {
+    const reason = error instanceof Error ? error.message : String(error)
+    throw new Error(`${BRAND}: could not write ${path}: ${reason}`)
+  }
+}
+
+/**
+ * Writes every file under a temporary name in a directory inside `outDir`, then renames each into
+ * place, so no output file is ever half-written; the temporary directory goes in any case.
+ */
+function writeOutput(outDir: string, files: OutputFiles): void {
+  attempt(outDir, () => mkdirSync(outDir, { recursive: true }))
+  const staging = attempt(outDir, () => mkdtempSync(join(outDir, `.${BRAND}-`)))
+  const names = Object.keys(files) as (keyof OutputFiles)[]
+  try {
+    for (const name of names) {
+      attempt(join(outDir, name), () => writeFileSync(join(staging, name), files[name]))
+    }
+    for (const name of names) {
+      attempt(join(outDir, name), () => renameSync(join(staging, name), join(outDir, name)))
+    }
+  } finally {
+    attempt(staging, () => rmSync(staging, { recursive: true, force: true }))
+  }
+}
+
 function generate(params: GenerateParams): void {
   const datasource = params.datasources?.[0]
   const provider = datasource?.activeProvider ?? datasource?.provider
@@ -67,10 +97,7 @@ function generate(params: GenerateParams): void {
     throw new Error(formatReport(diagnostics))
   }
 
-  mkdirSync(outDir, { recursive: true })
-  for (const [name, content] of Object.entries(result.files)) {
-    writeFileSync(join(outDir, name), content)
-  }
+  writeOutput(outDir, result.files)
   for (const warning of diagnostics)
     process.stdout.write(`${BRAND}: ${formatDiagnostic(warning)}\n`)
   const where = relative(process.cwd(), outDir) || '.'
