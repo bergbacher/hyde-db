@@ -32,7 +32,7 @@ A portable SQL script with the same workflow and output files as PostgreSQL, run
 | Key | Meaning on MySQL | Records |
 |---|---|---|
 | `schema` | the views database; default `redacted`; at most 64 characters | D97 |
-| `role` | the account user name; default `redacted_reader`; at most 32 characters | D97 |
+| `role` | the account user name — not a MySQL `ROLE`; default `redacted_reader`; at most 32 characters | D97, D120 |
 | `readerHost` | MySQL only: the account host; default `%` | D97 |
 | `sourceSchema` | error on MySQL (no schemas; the source database is the connection's) | D97, A80 |
 | `statementTimeout` | error on MySQL (no per-account timeout) | D97, A78 |
@@ -59,7 +59,7 @@ The administrator unlocks the account once — `ALTER USER '<reader>'@'<host>' I
 
 ## Drop script
 
-Checks the marker (D115), drops the views database and revokes the reader's view grants with `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader> IGNORE UNKNOWN USER` — after an apply the reader holds only those grants, which would otherwise survive and re-attach (D100, D119, A74).
+Checks the marker (D115) — a views database that is already gone is not an error (D121) — drops the views database and revokes the reader's view grants with `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader> IGNORE UNKNOWN USER` — after an apply the reader holds only those grants, which would otherwise survive and re-attach (D100, D119, A74).
 
 ## Guarantee on MySQL (docs, D101)
 
@@ -67,6 +67,7 @@ Checks the marker (D115), drops the views database and revokes the reader's view
 - A refused deploy never grants the reader more than before, but it may leave the views rebuilt without the reader grant (A74).
 - The reader sees no other database names or columns (A78) — stricter than PostgreSQL.
 - Only per-account resource limits stick; read-only and timeout are session settings the reader can change (A78).
+- A server with a non-empty `mandatory_roles` is unsupported; apply refuses it (D120).
 
 ## Supported services (D118, A79)
 
