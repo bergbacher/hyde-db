@@ -227,10 +227,50 @@ export async function aclEntries(database: string): Promise<Set<string>> {
   return new Set(rows.map((row) => String(row.entry)))
 }
 
-/** Whether an ACL entry (`grantee=privilege/grantor`) is granted to or by `role`, or to PUBLIC. */
+/** Schemas on which the catalog check refuses every privilege beyond the initial ones (D81). */
+const CATALOG_SCHEMAS: ReadonlySet<string> = new Set([
+  'pg_catalog',
+  'information_schema',
+  'pg_toast',
+])
+
+/**
+ * The privilege types the final check refuses on an object, by its kind as `aclEntries` names it
+ * (D130): every type on relations, their columns and sequences; otherwise only the ones it checks.
+ */
+function refusedTypes(object: string): readonly string[] | 'all' {
+  const [, kind = '', name = ''] = /^(large object|\S+) (.*)$/.exec(object) ?? []
+  switch (kind) {
+    case 'relation':
+    case 'column':
+      return 'all'
+    case 'database':
+      return ['CREATE']
+    case 'schema':
+      return CATALOG_SCHEMAS.has(name) ? ['CREATE', 'USAGE'] : ['CREATE']
+    case 'server':
+      return ['USAGE']
+    case 'routine':
+      return ['EXECUTE']
+    case 'large object':
+      return ['SELECT', 'UPDATE']
+    default:
+      throw new Error(`no refused privilege types for ${object}`)
+  }
+}
+
+/**
+ * Whether a fix may remove an ACL entry (`<object>: grantee=privilege[*]/grantor`): one of the
+ * privilege types the final check refuses on that object, granted to PUBLIC or `role`, or passed
+ * on by `role` (D130, D135).
+ */
 function refused(entry: string, role: string): boolean {
-  const item = entry.slice(entry.indexOf(': ') + 2)
-  return item.startsWith('=') || item.startsWith(`${role}=`) || item.endsWith(`/${role}`)
+  const split = entry.indexOf(': ')
+  const [, grantee, privilege = '', grantor] =
+    /^(.*)=([A-Z ]+)\*?\/(.*)$/.exec(entry.slice(split + 2)) ?? []
+  const types = refusedTypes(entry.slice(0, split))
+  if (types !== 'all' && !types.includes(privilege)) return false
+  return grantee === '' || grantee === role || grantor === role
 }
 
 export interface PasteOptions {
@@ -241,11 +281,12 @@ export interface PasteOptions {
 }
 
 /**
- * Pastes the fix an aborted apply printed, verbatim, then re-applies; both must succeed. The fix
- * may remove only the ACL entries that let the reader or PUBLIC in, the grants the reader made
- * itself, and the given orphans; every other entry stays exactly as it was (D128).
+ * Pastes the fix an aborted apply printed, verbatim, as the suite's superuser; it must succeed.
+ * The fix may remove only the refused ACL entries: those that let the reader or PUBLIC in, the
+ * grants the reader made itself, and the given orphans; every other entry stays exactly as it was
+ * (D135).
  */
-export async function pasteFixAndReapply(
+export async function pasteFix(
   db: TestDb,
   failed: PsqlResult,
   options: PasteOptions = {},
@@ -264,7 +305,21 @@ export async function pasteFixAndReapply(
       'the fix removed ACL entries other than the refused ones',
     ).toEqual([])
   }
-  const reapplied = apply(db)
+}
+
+export interface ReapplyOptions extends PasteOptions {
+  /** The script to apply again, such as the apply script after `SET ROLE <deployer>`; default the apply script. */
+  readonly script?: string
+}
+
+/** `pasteFix`, then applies again; the apply must pass. */
+export async function pasteFixAndReapply(
+  db: TestDb,
+  failed: PsqlResult,
+  options: ReapplyOptions = {},
+): Promise<void> {
+  await pasteFix(db, failed, options)
+  const reapplied = apply(db, options.script)
   expect(reapplied.status, reapplied.stderr).toBe(0)
 }
 

@@ -131,4 +131,23 @@ describe('CREATE on the database', () => {
     )
     await pasteFixAndReapply(db, failed)
   })
+
+  it('D130, D135: the ACL snapshot refuses a pasted fix that also takes privileges no check refuses', async () => {
+    const db = await freshDb(true)
+    expect(apply(db).status).toBe(0)
+    await adminQuery('postgres', `GRANT CREATE ON DATABASE ${db.name} TO PUBLIC, "${db.role}"`)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    // REVOKE ALL also takes PUBLIC's CONNECT and TEMPORARY, which the final check never refuses.
+    const tooBroad = {
+      ...failed,
+      stderr: failed.stderr.replace(
+        suggestedFix(failed),
+        `REVOKE ALL ON DATABASE ${db.name} FROM PUBLIC, ${db.role} CASCADE;`,
+      ),
+    }
+    await expect(pasteFixAndReapply(db, tooBroad)).rejects.toThrow(
+      'the fix removed ACL entries other than the refused ones',
+    )
+  })
 })
