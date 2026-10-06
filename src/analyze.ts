@@ -151,7 +151,7 @@ export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): 
   diagnostics.push(...viewCollisions(candidates))
 
   // A join is worth describing only when the reader can write it: the target has a view, and that
-  // view shows every target column, each paired with a source column (D139).
+  // view shows every target column, each paired with a source column (D146).
   const shown = new Map(candidates.map((v) => [v.name, new Set(v.columns.map((c) => c.column))]))
   const views = candidates.map((v) => ({
     ...v,

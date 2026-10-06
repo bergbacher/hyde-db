@@ -31,7 +31,7 @@ export const RESERVED_WORDS: ReadonlySet<string> = new Set(
 )
 
 /**
- * A name as a reader must write it in SQL (D139): bare when it is lower-case letters, digits and
+ * A name as a reader must write it in SQL (D146): bare when it is lower-case letters, digits and
  * underscores and no reserved word, which PostgreSQL reads as written; double-quoted otherwise,
  * because PostgreSQL folds an unquoted name to lower case and refuses reserved words.
  */

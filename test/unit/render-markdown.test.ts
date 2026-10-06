@@ -13,17 +13,19 @@ describe('Markdown', () => {
     expect(md).toContain('Statements time out after 15s.')
   })
 
-  it("D54, D139: the intro names the reader role's search_path, how names are written, and says other columns were removed", () => {
+  it("D54, D146: the intro names the reader role's search_path, how names are written, and says other columns were removed", () => {
     expect(md).toContain(
       "Query the views in schema `redacted` (it is the reader role's default search_path, so " +
         'unqualified names work). Names are written as SQL needs them: a name in double quotes ' +
-        'is case-sensitive and works only with its quotes. Only the columns listed here exist; ' +
+        'is case-sensitive and works only with its quotes. A view named like a `pg_catalog` relation, ' +
+        'or like a temporary table you created, is shadowed in unqualified queries: qualify it ' +
+        'with the schema. Only the columns listed here exist; ' +
         'every other column was removed on purpose. Statements time out after 15s.',
     )
     expect(md).not.toContain('deliberately')
   })
 
-  it('A98, D139: writes view, column and join names as SQL needs them', () => {
+  it('A98, D146: writes view, column and join names as SQL needs them', () => {
     const category: View = {
       ...users,
       model: 'Category',
@@ -70,7 +72,7 @@ describe('Markdown', () => {
     expect(quoted).toContain('Joins:\n- products."categoryId" = "Category".id')
   })
 
-  it('D139: names the views schema as SQL needs it', () => {
+  it('D146: names the views schema as SQL needs it', () => {
     const reserved = renderMarkdown({ config: { ...config, schema: 'user' }, views: [] })
     expect(reserved).toContain('Query the views in schema `"user"`')
   })
@@ -84,7 +86,7 @@ describe('Markdown', () => {
   })
 
   it('lists columns with type and notes, escaping pipes', () => {
-    expect(md).toContain("## users\n\nA customer's account.\n\n| column | type | notes |")
+    expect(md).toContain("## users\n\nA customer's account.\n\n| column | Prisma type | notes |")
     expect(md).toContain('| `id` | Int | primary key |')
     expect(md).toContain('| `country` | String | nullable; ISO \\| code |')
   })

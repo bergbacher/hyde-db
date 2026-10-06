@@ -1,5 +1,5 @@
 // Renders redacted-schema.md: the columns a reader of the database can see, each name written as
-// the reader must write it in SQL (D139).
+// the reader must write it in SQL (D146).
 import { BRAND } from '../brand.ts'
 import { sqlName } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -19,7 +19,9 @@ export function renderMarkdown({
     '',
     `PostgreSQL, read-only. Query the views in schema \`${sqlName(config.schema)}\` (it is the reader role's default search_path, so ` +
       'unqualified names work). Names are written as SQL needs them: a name in double quotes is ' +
-      'case-sensitive and works only with its quotes. Only the columns listed here exist; every ' +
+      'case-sensitive and works only with its quotes. A view named like a `pg_catalog` relation, or ' +
+      'like a temporary table you created, is shadowed in unqualified queries: qualify it with the ' +
+      'schema. Only the columns listed here exist; every ' +
       `other column was removed on purpose. Statements time out after ${config.statementTimeout}.`,
     '',
   )
@@ -27,14 +29,14 @@ export function renderMarkdown({
     const name = sqlName(view.name)
     out.push(`## ${name}`, '')
     if (view.doc) out.push(view.doc, '')
-    out.push('| column | type | notes |', '|---|---|---|')
+    out.push('| column | Prisma type | notes |', '|---|---|---|')
     for (const c of view.columns) {
       const notes = [c.isId ? 'primary key' : '', c.nullable ? 'nullable' : '', c.doc]
         .filter(Boolean)
         .join('; ')
       out.push(`| \`${sqlName(c.column)}\` | ${c.type} | ${notes.replace(/\|/g, '\\|')} |`)
     }
-    // analyze() keeps only joins whose target columns its target view shows (D139); a target
+    // analyze() keeps only joins whose target columns its target view shows (D146); a target
     // column missing from the list, which it never passes, shows as `?`.
     if (view.relations.length) {
       out.push('', 'Joins:')

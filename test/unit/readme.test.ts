@@ -655,13 +655,32 @@ describe('README (a view of LEDGER.md)', () => {
     expectSentence(ENDS, !sessionLevel)
   })
 
-  it('A98, D139: says the schema doc writes names as SQL needs them, as the generated doc does', () => {
+  it('A98, D146: says the schema doc writes names as SQL needs them, as the generated doc does', () => {
     const md = readRepoFile('example', 'redacted', 'redacted-schema.md')
     expect(md).toContain('a name in double quotes is case-sensitive and works only with its quotes')
     const after = section('After the first deploy', '###')
     expect(after).toContain('`redacted-schema.md` writes each name as SQL needs it')
     expect(after).toContain('is case-sensitive and works only with its quotes')
     expect(after).toContain('unqualified view names work')
+  })
+
+  it('D146: says what the schema doc adds: Prisma type names in the type column, and the shadowing of views for unqualified queries', () => {
+    const md = readRepoFile('example', 'redacted', 'redacted-schema.md')
+    expect(md).toContain('| column | Prisma type | notes |')
+    expect(md).toContain('is shadowed in unqualified queries: qualify it with the schema')
+    const after = section('After the first deploy', '###')
+    expect(after).toContain('The type column shows Prisma type names, not SQL types.')
+    expect(after).toContain(
+      'A view named like a `pg_catalog` relation, or like a temporary table the reader creates, is shadowed in unqualified queries: qualify it with the schema.',
+    )
+  })
+
+  it('D147: says what a failed write reports and that the three files may be replaced in part', () => {
+    const quick = section('Quick start')
+    expect(quick).toContain('hyde-db: could not write <path>: <reason>')
+    expect(quick).toContain('the three files are not replaced as one unit')
+    expect(quick).toContain('some may be new and some old')
+    expect(quick).toContain('never replaces an earlier error')
   })
 
   it('D11, D13, D24, D49, D108: the refusal table lists every abort the apply script raises, in order', () => {
@@ -687,10 +706,12 @@ describe('README (a view of LEDGER.md)', () => {
       'Temporary objects, and objects that depend on a temporary object, are the exception',
       'Both go anyway when the session that created the temporary object ends.',
       "a temporary table loses only its column of a view's row type",
+      'a view or function goes',
     ]) {
       expect(notes, phrase).toContain(phrase)
     }
     expect(notes).not.toContain('they go with the schema')
+    expect(notes).not.toContain('a temporary view or function goes')
   })
 
   it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111, D138: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {

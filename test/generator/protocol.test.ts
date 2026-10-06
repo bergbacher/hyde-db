@@ -18,6 +18,8 @@ import { build } from '../../src/index.ts'
 import { OUTPUT_FILES, readRepoFile, repoRoot } from '../helpers/files.ts'
 import { parseSchema } from '../helpers/prisma.ts'
 
+const FAILING_RM = join(repoRoot, 'test', 'helpers', 'failing-rm.ts')
+
 interface RpcResponse {
   readonly id: number | null
   readonly result?: unknown
@@ -48,12 +50,19 @@ function parseResponses(stderr: string): RpcResponse[] {
 }
 
 /** Objects are sent as JSON lines; strings are sent verbatim. */
-function runGenerator(requests: readonly (object | string)[]): Promise<Session> {
+function runGenerator(
+  requests: readonly (object | string)[],
+  nodeArguments: readonly string[] = [],
+): Promise<Session> {
   return new Promise((resolvePromise, reject) => {
-    const child = spawn(process.execPath, [join(repoRoot, 'src', 'generator.ts')], {
-      cwd: repoRoot,
-      env: { ...process.env, PRISMA_GENERATOR_INVOCATION: 'true' },
-    })
+    const child = spawn(
+      process.execPath,
+      [...nodeArguments, join(repoRoot, 'src', 'generator.ts')],
+      {
+        cwd: repoRoot,
+        env: { ...process.env, PRISMA_GENERATOR_INVOCATION: 'true' },
+      },
+    )
     let stdout = ''
     let stderr = ''
     child.stdout.on('data', (chunk: Buffer) => {
@@ -231,7 +240,7 @@ describe('generator protocol', () => {
     for (const file of OUTPUT_FILES) expect(existsSync(join(output, file)), file).toBe(true)
   })
 
-  it('D145: writes each file under a temporary name and renames it into place, leaving no temporary file', async () => {
+  it('D147: writes each file under a temporary name and renames it into place, leaving no temporary file', async () => {
     const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     const target = join(output, 'redacted-views.sql')
     // A hard link shares the old file's content: writing in place would change it too, while a
@@ -247,7 +256,7 @@ describe('generator protocol', () => {
     expect(readdirSync(output).sort()).toEqual([...OUTPUT_FILES].sort())
   })
 
-  it('D145: a file it cannot put in place fails generate with "hyde-db: could not write <path>: <reason>", leaving no temporary file', async () => {
+  it('D147: a file it cannot put in place fails generate with "hyde-db: could not write <path>: <reason>", leaving no temporary file', async () => {
     const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     // A non-empty directory where the schema doc goes: no file can be renamed onto it.
     mkdirSync(join(output, 'redacted-schema.md', 'keep'), { recursive: true })
@@ -262,7 +271,7 @@ describe('generator protocol', () => {
     expect(stdout).toBe('')
   })
 
-  it('D145: an output directory it cannot create fails generate with "hyde-db: could not write <path>: <reason>"', async () => {
+  it('D147: an output directory it cannot create fails generate with "hyde-db: could not write <path>: <reason>"', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     writeFileSync(join(parent, 'file'), '')
     const output = join(parent, 'file', 'redacted')
@@ -273,6 +282,29 @@ describe('generator protocol', () => {
     expect(message.startsWith(`hyde-db: could not write ${output}: `), message).toBe(true)
     expect(message).toContain('ENOTDIR')
     expect(stdout).toBe('')
+  })
+
+  it('D147: a cleanup that fails does not fail a generate whose files are in place', async () => {
+    const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+    const { request } = generateRequest(example, { output })
+    const { responses, stdout } = await runGenerator([request], ['--import', FAILING_RM])
+    expect(responses).toEqual([{ jsonrpc: '2.0', id: 2, result: null }])
+    expect(stdout).toContain('hyde-db: ')
+    for (const file of OUTPUT_FILES)
+      expect(readFileSync(join(output, file), 'utf8'), file).not.toBe('')
+  })
+
+  it('D147: a cleanup that fails does not replace the earlier error', async () => {
+    const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+    mkdirSync(join(output, 'redacted-schema.md', 'keep'), { recursive: true })
+    const { request } = generateRequest(example, { output })
+    const { responses } = await runGenerator([request], ['--import', FAILING_RM])
+    const message = responses[0]?.error?.message ?? ''
+    expect(
+      message.startsWith(`hyde-db: could not write ${join(output, 'redacted-schema.md')}: `),
+      message,
+    ).toBe(true)
+    expect(message).not.toContain('cleanup refused')
   })
 
   it('A19: answers getManifest then generate in one session, in order', async () => {

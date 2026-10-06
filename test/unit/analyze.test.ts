@@ -310,11 +310,11 @@ describe('analysis rules', () => {
         ]),
       ),
     )
-    // The self relation's target column is no column of the view, so it is not described (D139).
+    // The self relation's target column is no column of the view, so it is not described (D146).
     expect(a.views[0]?.relations).toEqual([])
   })
 
-  it('A98, D139: describes a join only when the target view shows every target column', () => {
+  it('D146, A98: describes a join only when the target view shows every target column', () => {
     const user = (idDoc: string) =>
       model(
         'User',

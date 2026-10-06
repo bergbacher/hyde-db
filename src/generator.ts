@@ -63,7 +63,7 @@ function attempt<T>(path: string, step: () => T): T {
 
 /**
  * Writes every file under a temporary name in a directory inside `outDir`, then renames each into
- * place, so no output file is ever half-written; the temporary directory goes in any case.
+ * place, so no output file is ever half-written; the temporary directory goes best-effort (D147).
  */
 function writeOutput(outDir: string, files: OutputFiles): void {
   attempt(outDir, () => mkdirSync(outDir, { recursive: true }))
@@ -77,7 +77,12 @@ function writeOutput(outDir: string, files: OutputFiles): void {
       attempt(join(outDir, name), () => renameSync(join(staging, name), join(outDir, name)))
     }
   } finally {
-    attempt(staging, () => rmSync(staging, { recursive: true, force: true }))
+    // Best-effort (D147): a failed cleanup must not replace an earlier error or fail a success.
+    try {
+      rmSync(staging, { recursive: true, force: true })
+    } catch {
+      // The staging directory stays; the output files are already old or new.
+    }
   }
 }
 
