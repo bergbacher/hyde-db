@@ -96,6 +96,11 @@ describe('apply SQL', () => {
     expect(sql).toContain('REVOKE ALL ON SEQUENCE %s FROM %s;')
   })
 
+  it('D13: names the role in the fix when it owns the function or sequence', () => {
+    expect(sql).toContain('r.oid = p.proowner')
+    expect(sql).toContain('r.oid = c.relowner')
+  })
+
   it('uses the configured schema, role and timeout everywhere', () => {
     const custom = renderApplySql({
       config: {

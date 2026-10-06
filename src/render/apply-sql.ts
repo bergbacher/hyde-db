@@ -12,15 +12,21 @@ export interface RenderInput {
 }
 
 /**
- * SQL listing who must lose a privilege: PUBLIC when it holds it, and the AI role when it holds
- * it directly. The role may not exist yet when the fix is run (a failed first apply rolls back
- * its creation), so it is only named when it has a direct grant.
+ * SQL listing who must lose a privilege: PUBLIC when it holds it, and the AI role when it owns
+ * the object (an owner holds its privileges with no ACL entry) or holds it directly. The role may
+ * not exist yet when the fix is run (a failed first apply rolls back its creation), so it is only
+ * named when it owns the object or has a direct grant.
  */
-function grantees(publicHolds: string, acl: string, privileges: readonly string[]): string {
+function grantees(
+  publicHolds: string,
+  owner: string,
+  acl: string,
+  privileges: readonly string[],
+): string {
   const list = privileges.map((p) => `'${p}'`).join(', ')
   return (
     `concat_ws(', ', CASE WHEN ${publicHolds} THEN 'PUBLIC' END, ` +
-    `CASE WHEN EXISTS (SELECT 1 FROM aclexplode(${acl}) a WHERE a.grantee = r.oid AND a.privilege_type IN (${list})) ` +
+    `CASE WHEN r.oid = ${owner} OR EXISTS (SELECT 1 FROM aclexplode(${acl}) a WHERE a.grantee = r.oid AND a.privilege_type IN (${list})) ` +
     'THEN quote_ident(r.rolname) END)'
   )
 }
@@ -54,8 +60,9 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `             WHERE r.rolname = ${role}) THEN`,
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} must not be a member of other roles';`,
     '  END IF;',
+    '  -- The joins on pg_roles below always find the role: this transaction created it above if missing.',
     `  SELECT string_agg(${routine}, ', ' ORDER BY n.nspname, p.proname),`,
-    `         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', ${routine}, ${grantees("has_function_privilege('public', p.oid, 'EXECUTE')", 'p.proacl', ['EXECUTE'])}), ' ' ORDER BY n.nspname, p.proname)`,
+    `         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', ${routine}, ${grantees("has_function_privilege('public', p.oid, 'EXECUTE')", 'p.proowner', 'p.proacl', ['EXECUTE'])}), ' ' ORDER BY n.nspname, p.proname)`,
     '    INTO leaks, fixes',
     '  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
@@ -68,7 +75,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} can execute SECURITY DEFINER functions: %. Fix: %', leaks, fixes;`,
     '  END IF;',
     `  SELECT string_agg(${sequence}, ', ' ORDER BY n.nspname, c.relname),`,
-    `         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', ${sequence}, ${grantees("has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE')", 'c.relacl', ['SELECT', 'USAGE', 'UPDATE'])}), ' ' ORDER BY n.nspname, c.relname)`,
+    `         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', ${sequence}, ${grantees("has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE')", 'c.relowner', 'c.relacl', ['SELECT', 'USAGE', 'UPDATE'])}), ' ' ORDER BY n.nspname, c.relname)`,
     '    INTO leaks, fixes',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,

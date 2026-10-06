@@ -65,6 +65,18 @@ describe('SECURITY DEFINER functions', () => {
     expect(apply(db).status).toBe(0)
   })
 
+  it('D13: a function the role owns names the role in the fix', async () => {
+    expect(apply(db).status).toBe(0)
+    await adminQuery(db.name, `${PEEK}; ALTER FUNCTION public.peek(integer) OWNER TO "${db.role}"`)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(
+      `REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC, ${db.role};`,
+    )
+    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
+    expect(apply(db).status).toBe(0)
+  })
+
   it('D13: definer functions in schemas the role cannot use, and invoker functions, are allowed', async () => {
     await adminQuery(db.name, 'CREATE SCHEMA private; REVOKE ALL ON SCHEMA private FROM PUBLIC')
     await adminQuery(db.name, PEEK.replace('public.peek', 'private.peek'))
@@ -89,6 +101,30 @@ describe('sequences', () => {
   it('D13: the suggested REVOKE fixes a readable sequence', async () => {
     await adminQuery(db.name, 'GRANT USAGE ON SEQUENCE public.orders_id_seq TO PUBLIC')
     const failed = apply(db)
+    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
+    expect(apply(db).status).toBe(0)
+  })
+
+  it('D13: a direct sequence grant to the role is named in the fix', async () => {
+    expect(apply(db).status).toBe(0)
+    await adminQuery(db.name, `GRANT SELECT ON SEQUENCE public.users_id_seq TO "${db.role}"`)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(`REVOKE ALL ON SEQUENCE public.users_id_seq FROM ${db.role};`)
+    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
+    expect(apply(db).status).toBe(0)
+  })
+
+  it('D13: a sequence the role owns names the role in the fix', async () => {
+    expect(apply(db).status).toBe(0)
+    // A serial's sequence is linked to its table and cannot change owner, so use a standalone one.
+    await adminQuery(
+      db.name,
+      `CREATE SEQUENCE public.tickets_seq; ALTER SEQUENCE public.tickets_seq OWNER TO "${db.role}"`,
+    )
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(`REVOKE ALL ON SEQUENCE public.tickets_seq FROM ${db.role};`)
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })

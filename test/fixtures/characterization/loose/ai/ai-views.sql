@@ -79,8 +79,9 @@ BEGIN
              WHERE r.rolname = 'ai_reader') THEN
     RAISE EXCEPTION 'hyde-db: role ai_reader must not be a member of other roles';
   END IF;
+  -- The joins on pg_roles below always find the role: this transaction created it above if missing.
   SELECT string_agg(format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), ', ' ORDER BY n.nspname, p.proname),
-         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), concat_ws(', ', CASE WHEN has_function_privilege('public', p.oid, 'EXECUTE') THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('EXECUTE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, p.proname)
+         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), concat_ws(', ', CASE WHEN has_function_privilege('public', p.oid, 'EXECUTE') THEN 'PUBLIC' END, CASE WHEN r.oid = p.proowner OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('EXECUTE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, p.proname)
     INTO leaks, fixes
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'ai_reader'
@@ -93,7 +94,7 @@ BEGIN
     RAISE EXCEPTION 'hyde-db: role ai_reader can execute SECURITY DEFINER functions: %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),
-         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', format('%I.%I', n.nspname, c.relname), concat_ws(', ', CASE WHEN has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE') THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, c.relname)
+         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', format('%I.%I', n.nspname, c.relname), concat_ws(', ', CASE WHEN has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE') THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, c.relname)
     INTO leaks, fixes
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'ai_reader'
