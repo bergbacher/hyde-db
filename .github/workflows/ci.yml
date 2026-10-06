@@ -3,6 +3,7 @@ name: CI
 # Pull requests and branch pushes only; never tags. CI builds and packs only to test the
 # artifact and never publishes (D62, D63). Release publishing lives in release.yml.
 on:
+  workflow_dispatch: # version.yml starts CI on the version PR, which GITHUB_TOKEN pushes cannot trigger
   pull_request:
   push:
     branches: ['**']
@@ -12,7 +13,7 @@ permissions:
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
-  cancel-in-progress: true
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   lint:
@@ -133,7 +134,7 @@ jobs:
           E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
   ci-ok:
-    name: all jobs passed
+    name: ci-ok
     if: always()
     needs: [lint, typecheck, build, test, attack, e2e]
     runs-on: ubuntu-latest

@@ -18,7 +18,7 @@ function job(workflow: string, name: string): string {
 
 describe('CI workflow', () => {
   it('D38, D62: runs on pull requests and branch pushes, never on tags, with read-only permissions', () => {
-    expect(ci).toContain("on:\n  pull_request:\n  push:\n    branches: ['**']\n")
+    expect(ci).toContain("  pull_request:\n  push:\n    branches: ['**']\n")
     expect(ci).not.toMatch(/^\s+tags:/m)
     expect(ci).toContain('permissions:\n  contents: read\n')
   })
@@ -78,6 +78,15 @@ describe('CI workflow', () => {
     for (const name of ['lint', 'typecheck', 'build', 'attack']) {
       expect(job(ci, name)).toContain('node-version: 24')
     }
+  })
+
+  it('D38: ci-ok always runs, so a skipped aggregate cannot count as passing', () => {
+    expect(job(ci, 'ci-ok')).toContain('if: always()')
+  })
+
+  it('D63: CI can be dispatched by hand and never cancels a run on main', () => {
+    expect(ci).toContain('  workflow_dispatch:')
+    expect(ci).toContain(`cancel-in-progress: \${{ github.ref != 'refs/heads/main' }}`)
   })
 
   it('D38: one aggregate job fails unless every other job succeeded', () => {
@@ -144,12 +153,28 @@ describe('release workflow', () => {
   })
 
   it('D63, A27: publishes through OIDC on Node 24 with the token only on the publish step', () => {
-    expect(release).toContain('id-token: write')
     expect(release.match(/id-token: write/g)).toHaveLength(1)
+    expect(job(release, 'publish')).toContain('id-token: write')
+    expect(release.slice(0, release.indexOf('\njobs:\n'))).not.toContain('id-token')
     expect(release).toContain('node-version: 24')
     expect(release).toContain(`NODE_AUTH_TOKEN: \${{ secrets.NPM_TOKEN }}`)
     expect(release.match(/secrets\./g)).toHaveLength(1)
     expect(release.slice(0, release.indexOf('  publish:\n'))).not.toContain('NPM_TOKEN')
+  })
+
+  it('D64: refuses to publish unless ci-ok succeeded on the tagged commit', () => {
+    const passed = job(release, 'ci-passed')
+    expect(passed).toContain('checks: read')
+    expect(passed).toContain('commits/$GITHUB_SHA/check-runs')
+    expect(passed).toContain('"ci-ok"')
+    expect(passed).toContain('CI has not passed on this commit')
+    expect(release.match(/checks: read/g)).toHaveLength(1)
+    expect(job(release, 'pack')).toContain('needs: ci-passed')
+  })
+
+  it('D63: relies on full history for the main check, with no extra fetch', () => {
+    expect(release).toContain('fetch-depth: 0')
+    expect(release).not.toContain('git fetch')
   })
 })
 
@@ -159,6 +184,11 @@ describe('version workflow', () => {
     expect(version).toContain('uses: changesets/action/version@v2')
     expect(version).toContain('contents: write')
     expect(version).toContain('pull-requests: write')
+    expect(version).toContain('actions: write')
+    expect(version).toContain('id: changesets')
+    expect(version).toContain("if: steps.changesets.outputs.pr-number != ''")
+    expect(version).toContain('gh workflow run ci.yml --ref changeset-release/main')
+    expect(version).toContain(`GH_TOKEN: \${{ github.token }}`)
     expect(version.replace(/#.*$/gm, '')).not.toMatch(
       /publish|pack|build|id-token|NPM_TOKEN|provenance/,
     )

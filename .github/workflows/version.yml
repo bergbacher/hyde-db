@@ -8,6 +8,7 @@ on:
 permissions:
   contents: write
   pull-requests: write
+  actions: write # to dispatch ci.yml on the version branch
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -22,4 +23,11 @@ jobs:
       - uses: actions/setup-node@v7
         with: { node-version: 24 }
       - run: pnpm install --frozen-lockfile
-      - uses: changesets/action/version@v2
+      - id: changesets
+        uses: changesets/action/version@v2
+      # Pushes made with GITHUB_TOKEN trigger no workflows, so start CI on the version branch by hand.
+      - name: Dispatch CI for the version pull request
+        if: steps.changesets.outputs.pr-number != ''
+        run: gh workflow run ci.yml --ref changeset-release/main
+        env:
+          GH_TOKEN: ${{ github.token }}
