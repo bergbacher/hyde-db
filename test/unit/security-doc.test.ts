@@ -106,6 +106,12 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     expect(CHECKLIST).toContain('REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;')
   })
 
+  it('D141, D144: the drop refusal excepts temporary objects and objects that depend on one, as the README does', () => {
+    const phrase = 'temporary objects and objects that depend on a temporary object excepted'
+    expect(prose).toContain(phrase)
+    expect(readmeProse).toContain(phrase)
+  })
+
   it('A99, D140: the cluster step says a role belongs to the whole cluster and gives each database its own role, as the README does', () => {
     const sentence = 'give each database, and each generator block, its own `role`'
     expect(CHECKLIST).toContain('A role belongs to the whole cluster')

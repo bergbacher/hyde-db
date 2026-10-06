@@ -593,25 +593,42 @@ describe('README (a view of LEDGER.md)', () => {
       'exits 0 and changes nothing',
       'schema `public` belongs to the bootstrap superuser',
       'catalog objects and `pg_temp_N` schemas',
-      'run it as the owner, a member of the owner role, or a superuser',
+      "run it as the owner, a role that inherits the owner role's privileges, or a superuser",
     ]) {
       expect(withoutSuperuser, phrase).toContain(phrase)
     }
   })
 
-  it('A95, D134: a member of the owner role revokes as the owner, and a deploy user can make itself one', () => {
+  it("A95, D134, D144: a role that inherits the owner role's privileges revokes as the owner, and a deploy user can become one", () => {
     const withoutSuperuser = section('Running fixes without a superuser', '###')
     for (const phrase of [
-      'it works only when the owner, a member of the owner role, or a superuser runs it',
-      'owns the object or is a member of the owner role that inherits its privileges',
-      "A member counts only when it inherits the owner role's privileges.",
-      'a `CREATEROLE` deploy user by default does not inherit the roles it creates',
+      "it works only when the owner, a role that inherits the owner role's privileges, or a superuser runs it",
+      "owns the object or inherits the owner role's privileges",
+      'a `CREATEROLE` deploy user is by default a member of each role it creates without inheriting its privileges',
       'GRANT <owner> TO CURRENT_USER;',
       'REVOKE <owner> FROM CURRENT_USER;',
     ]) {
       expect(withoutSuperuser, phrase).toContain(phrase)
     }
-    expect(withoutSuperuser).not.toContain('so it works only when the owner or a superuser runs it')
+    // The marker follows pg_has_role(owner, 'USAGE'): membership alone, as a creator's ADMIN
+    // without INHERIT on PostgreSQL 16 and later, does not count.
+    expect(section('How a printed fix is built', '###')).toContain(
+      "is not that owner, does not inherit the owner role's privileges, and is not a superuser",
+    )
+    expect(applySql).toMatch(/bool_and\(pg_has_role\([\w.]+, 'USAGE'\)\)/)
+    expect(applySql).not.toMatch(/pg_has_role\([\w.]+, 'MEMBER'\)/)
+    expect(prose).not.toContain('member of the owner role')
+  })
+
+  it('D134, D144: the managed-service row gives both marker forms, the owner and the several-owners one', () => {
+    const row =
+      section('Running fixes without a superuser', '###')
+        .split('\n')
+        .find((line) => line.startsWith('| A `REVOKE` without `SET ROLE` |')) ?? ''
+    expect(row).toContain('the fix ends with `-- run as <owner> or a superuser`')
+    expect(row).toContain('or with `-- run as a superuser` when it revokes as several owners')
+    expect(applySql).toContain("' -- run as %s or a superuser'")
+    expect(applySql).toContain("' -- run as a superuser'")
   })
 
   it('D134: says, both ways, whether a fix that needs the owner is marked', () => {
@@ -647,7 +664,9 @@ describe('README (a view of LEDGER.md)', () => {
 
   it('A97, D141: row 1 and the deploy notes say both scripts refuse to drop objects outside the views schema that depend on its views', () => {
     const row = refusalRows[1] ?? []
-    expect(row[1]).toContain('temporary objects excepted')
+    expect(row[1]).toContain(
+      'temporary objects and objects that depend on a temporary object excepted',
+    )
     expect(row[3]).toBe('none: drop them before the deploy, and create them again after it')
     expect(dropSql).toContain(
       "RAISE EXCEPTION 'hyde-db: objects outside schema redacted depend on its views: %;",
@@ -656,9 +675,13 @@ describe('README (a view of LEDGER.md)', () => {
     for (const phrase of [
       'both scripts stop, name it, and change nothing',
       "a reader's own cannot block a deploy",
+      'Temporary objects, and objects that depend on a temporary object, are the exception',
+      'Both go anyway when the session that created the temporary object ends.',
+      "a temporary table loses only its column of a view's row type",
     ]) {
       expect(notes, phrase).toContain(phrase)
     }
+    expect(notes).not.toContain('they go with the schema')
   })
 
   it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111, D138: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {
