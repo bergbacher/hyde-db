@@ -67,7 +67,7 @@ const SHORT_TERMS: readonly (readonly string[])[] = [
 export function splitWords(name: string): string[] {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z])([A-Z][a-z]{2,})/g, '$1 $2')
+    .replace(/([A-Z])([A-Z](?:[a-z]{2,}|[a-z](?<!s)(?![a-z])))/g, '$1 $2')
     .replace(/([A-Za-z])([0-9])/g, '$1 $2')
     .replace(/([0-9])([A-Za-z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)

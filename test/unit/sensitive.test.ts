@@ -19,6 +19,8 @@ describe('splitWords', () => {
     expect(splitWords('IDNumber')).toEqual(['id', 'number'])
     expect(splitWords('userIPAddress')).toEqual(['user', 'ip', 'address'])
     expect(splitWords('SSNToken')).toEqual(['ssn', 'token'])
+    expect(splitWords('SSNId')).toEqual(['ssn', 'id'])
+    expect(splitWords('IDsList')).toEqual(['ids', 'list'])
   })
 })
 
@@ -119,6 +121,9 @@ describe('sensitive-name lint', () => {
     'APIKey',
     'userIP',
     'clientIP',
+    'SSNId',
+    'userIPId',
+    'clientIPId',
   ])('D16: flags %s', (name) => {
     expect(isSensitiveName(name)).toBe(true)
   })
