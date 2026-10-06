@@ -124,6 +124,26 @@ describe('sensitive-name lint', () => {
     'SSNId',
     'userIPId',
     'clientIPId',
+    'userSSNIsVerified',
+    'clientIPIsPrivate',
+    'IBANIsValid',
+    'OTPIsUsed',
+    'CVVIsSet',
+    'DOBIs',
+    'SSNAs',
+    'userIPAs',
+    'userSSNUs',
+    'IPOs',
+    'IPv4',
+    'clientIPv4',
+    'clientIPv6',
+    'IPV4',
+    'ip_v4',
+    'unhashed',
+    'unhashedValue',
+    'unsalted',
+    'hashing',
+    'saltingKey',
   ])('D16: flags %s', (name) => {
     expect(isSensitiveName(name)).toBe(true)
   })
@@ -153,6 +173,14 @@ describe('sensitive-name lint', () => {
     'geometry',
     'placedAt',
     'categoryId',
+    'hashtags',
+    'IDs',
+    'userIDs',
+    'URLs',
+    'UUIDs',
+    'HTMLs',
+    'TIPS',
+    'Pipeline',
   ])('D16: does not flag %s (short terms match whole words only)', (name) => {
     expect(isSensitiveName(name)).toBe(false)
   })

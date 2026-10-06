@@ -29,6 +29,10 @@ const LONG_STEMS: readonly string[] = [
   'geoip',
   'ipaddr',
   'cardnumber',
+  'ipv4',
+  'ipv6',
+  'hashed',
+  'salted',
 ]
 
 /**
@@ -38,9 +42,9 @@ const LONG_STEMS: readonly string[] = [
 const SHORT_TERMS: readonly (readonly string[])[] = [
   ['pass'],
   ['hash'],
-  ['hashed'],
+  ['hashing'],
   ['salt'],
-  ['salted'],
+  ['salting'],
   ['otp'],
   ['mfa'],
   ['totp'],
@@ -63,16 +67,29 @@ const SHORT_TERMS: readonly (readonly string[])[] = [
   ['note'],
 ]
 
-/** Splits camelCase, PascalCase, snake_case, kebab-case and digit boundaries into lowercase words. */
-export function splitWords(name: string): string[] {
+/**
+ * An acronym is split from a following capitalized word unless only a lone plural `s` follows:
+ * `SSNs` stays one word, `SSNId` splits.
+ */
+const ACRONYM_BEFORE_WORD = /([A-Z])([A-Z](?:[a-z]{2,}|[a-z](?<!s)(?![a-z])))/g
+
+/** An acronym is always split from a following capitalized word: `SSNIs` reads as `SSN Is`. */
+const ACRONYM_BEFORE_ANY_WORD = /([A-Z])([A-Z][a-z])/g
+
+function splitWith(name: string, acronymBoundary: RegExp): string[] {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z])([A-Z](?:[a-z]{2,}|[a-z](?<!s)(?![a-z])))/g, '$1 $2')
+    .replace(acronymBoundary, '$1 $2')
     .replace(/([A-Za-z])([0-9])/g, '$1 $2')
     .replace(/([0-9])([A-Za-z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)
     .filter((word) => word.length > 0)
     .map((word) => word.toLowerCase())
+}
+
+/** Splits camelCase, PascalCase, snake_case, kebab-case and digit boundaries into lowercase words. */
+export function splitWords(name: string): string[] {
+  return splitWith(name, ACRONYM_BEFORE_WORD)
 }
 
 function isWordOrPlural(word: string | undefined, term: string): boolean {
@@ -92,11 +109,18 @@ function containsTerm(words: readonly string[], term: readonly string[]): boolea
   return false
 }
 
-export function isSensitiveName(name: string): boolean {
-  const words = splitWords(name)
+function hasSensitiveWords(words: readonly string[]): boolean {
   const compact = words.join('')
   return (
     LONG_STEMS.some((stem) => compact.includes(stem)) ||
     SHORT_TERMS.some((term) => containsTerm(words, term))
+  )
+}
+
+/** `SSNs` (plural) and `SSNIs` (`SSN Is`) read alike, so a name is flagged under either reading. */
+export function isSensitiveName(name: string): boolean {
+  return (
+    hasSensitiveWords(splitWords(name)) ||
+    hasSensitiveWords(splitWith(name, ACRONYM_BEFORE_ANY_WORD))
   )
 }
