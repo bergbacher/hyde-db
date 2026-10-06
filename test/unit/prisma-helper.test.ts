@@ -5,7 +5,7 @@ import { forMajor, parseSchema } from '../helpers/prisma.ts'
 const example = readRepoFile('example', 'schema.prisma')
 
 describe('Prisma schema helper', () => {
-  it('A22: returns the config of the generator named "ai" exactly as Prisma passes it', () => {
+  it('A22: returns the config of the generator named "redacted" exactly as Prisma passes it', () => {
     expect(parseSchema(example).config).toEqual({ strict: 'true' })
   })
 

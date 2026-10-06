@@ -1,4 +1,4 @@
-// D49: the final check refuses an AI role with elevated attributes instead of resetting them,
+// D49: the final check refuses a reader role with elevated attributes instead of resetting them,
 // so a non-superuser owner with CREATEROLE (managed PostgreSQL) can run the script (A31).
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -15,7 +15,7 @@ const created: TestDb[] = []
 afterEach(async () => {
   for (const db of created.splice(0)) await dropTestDatabase(db)
 })
-/** A fresh database whose AI role already exists with the given attributes. */
+/** A fresh database whose reader role already exists with the given attributes. */
 async function freshDb(attributes?: string): Promise<TestDb> {
   const db = await createTestDatabase()
   created.push(db)
@@ -25,7 +25,7 @@ async function freshDb(attributes?: string): Promise<TestDb> {
 }
 
 describe('role attributes', () => {
-  it('D49: apply aborts when the AI role was given CREATEDB, naming the attribute and the fix', async () => {
+  it('D49: apply aborts when the reader role was given CREATEDB, naming the attribute and the fix', async () => {
     const db = await freshDb('CREATEDB')
     const result = apply(db)
     expect(result.status).toBe(3)
@@ -43,7 +43,7 @@ describe('role attributes', () => {
     )
   })
 
-  it('D49: a superuser AI role is refused by the attribute check before any other check', async () => {
+  it('D49: a superuser reader role is refused by the attribute check before any other check', async () => {
     const db = await freshDb('SUPERUSER')
     const result = apply(db)
     expect(result.status).toBe(3)

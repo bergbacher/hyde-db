@@ -3,7 +3,7 @@ import { quoteLiteral } from '../sql.ts'
 import type { ResolvedConfig } from '../types.ts'
 
 /**
- * A DO block that aborts when the AI schema exists but its comment is neither the marker
+ * A DO block that aborts when the views schema exists but its comment is neither the marker
  * nor the marker followed by `.` (D11, D58), so a look-alike such as `hyde-dbx` is refused.
  */
 export function renderSchemaGuard(config: Pick<ResolvedConfig, 'schema'>): string {

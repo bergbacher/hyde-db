@@ -6,8 +6,8 @@ import { config } from '../helpers/views.ts'
 describe('drop SQL', () => {
   const sql = renderDropSql({ config })
 
-  it('drops the AI schema and nothing else', () => {
-    expect(sql).toContain('\nDROP SCHEMA IF EXISTS "ai" CASCADE;\n')
+  it('drops the redacted schema and nothing else', () => {
+    expect(sql).toContain('\nDROP SCHEMA IF EXISTS "redacted" CASCADE;\n')
     expect(sql.match(/DROP /g)).toHaveLength(1)
   })
 
@@ -30,14 +30,14 @@ describe('drop SQL', () => {
   it('D58: runs the guard and the drop in one transaction, so a refused drop changes nothing', () => {
     expect(sql).toContain('SET client_min_messages = warning;\nBEGIN;\n')
     expect(sql.indexOf('BEGIN;')).toBeLessThan(sql.indexOf('DO $$'))
-    expect(sql.endsWith('DROP SCHEMA IF EXISTS "ai" CASCADE;\nCOMMIT;\n')).toBe(true)
+    expect(sql.endsWith('DROP SCHEMA IF EXISTS "redacted" CASCADE;\nCOMMIT;\n')).toBe(true)
   })
 
   it('D11: the marker guard checks the configured schema', () => {
-    const custom = renderDropSql({ config: { ...config, schema: 'llm' } })
-    expect(custom).toContain("WHERE nspname = 'llm'")
-    expect(custom).toContain('hyde-db: schema llm exists but was not created by hyde-db')
-    expect(custom).toContain('DROP SCHEMA IF EXISTS "llm" CASCADE;')
-    expect(custom).not.toContain("'ai'")
+    const custom = renderDropSql({ config: { ...config, schema: 'safe' } })
+    expect(custom).toContain("WHERE nspname = 'safe'")
+    expect(custom).toContain('hyde-db: schema safe exists but was not created by hyde-db')
+    expect(custom).toContain('DROP SCHEMA IF EXISTS "safe" CASCADE;')
+    expect(custom).not.toContain("'redacted'")
   })
 })

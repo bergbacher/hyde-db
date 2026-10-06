@@ -1,4 +1,4 @@
-// Annotation parsing: reads `@ai.*` tags out of `///` doc comments and reports unknown,
+// Annotation parsing: reads `@hyde.*` tags out of `///` doc comments and reports unknown,
 // misplaced, conflicting or malformed tags (D25: unknown names get a "did you mean").
 import type { Field, Model } from './datamodel.ts'
 import {
@@ -10,7 +10,7 @@ import {
 } from './diagnostics.ts'
 import type { Diagnostic, Visibility } from './types.ts'
 
-const ANNOTATION_RE = /@ai\.([a-zA-Z]+)(?:\(([^)]*)\))?/g
+const ANNOTATION_RE = /@hyde\.([a-zA-Z]+)(?:\(([^)]*)\))?/g
 const FIELD_ANNOTATIONS: readonly string[] = ['visible', 'hidden']
 const MODEL_ANNOTATIONS: readonly string[] = ['exclude', 'default']
 
@@ -41,7 +41,7 @@ export function parseDoc(doc: string): ParsedDoc {
 
 export interface ModelAnnotations {
   readonly excluded: boolean
-  /** Every valid `@ai.default(...)` argument, in order. */
+  /** Every valid `@hyde.default(...)` argument, in order. */
   readonly defaults: readonly Visibility[]
   readonly text: string
   readonly diagnostics: readonly Diagnostic[]
@@ -65,7 +65,7 @@ export function readModelAnnotations(model: Model): ModelAnnotations {
 }
 
 export interface FieldAnnotations {
-  /** The last `@ai.visible` / `@ai.hidden` tag, if any. */
+  /** The last `@hyde.visible` / `@hyde.hidden` tag, if any. */
   readonly visibility: Visibility | undefined
   readonly text: string
   readonly diagnostics: readonly Diagnostic[]

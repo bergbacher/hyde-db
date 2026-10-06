@@ -69,7 +69,9 @@ function handle(request: Request): void {
     if (request.method === 'getManifest') {
       send({
         id: request.id,
-        result: { manifest: { prettyName: 'AI read-only views', defaultOutput: './ai' } },
+        result: {
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+        },
       })
     } else if (request.method === 'generate') {
       generate(request.params as GenerateParams)

@@ -12,9 +12,9 @@ for (const dir of CASES) {
   const result = build(datamodel, config)
   if (result.files === null)
     throw new Error(`${dir}: ${JSON.stringify(result.diagnostics, null, 2)}`)
-  mkdirSync(join(dir, 'ai'), { recursive: true })
+  mkdirSync(join(dir, 'redacted'), { recursive: true })
   for (const [name, content] of Object.entries(result.files)) {
-    writeFileSync(join(dir, 'ai', name), content)
+    writeFileSync(join(dir, 'redacted', name), content)
   }
-  console.log(`updated ${dir}/ai`)
+  console.log(`updated ${dir}/redacted`)
 }

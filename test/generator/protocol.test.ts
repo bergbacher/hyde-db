@@ -74,7 +74,7 @@ function generateRequest(schema: string, overrides: { config?: object; provider?
 const example = readRepoFile('example', 'schema.prisma')
 
 describe('generator protocol', () => {
-  it('A19: answers getManifest on stderr with the default output ./ai', async () => {
+  it('A19: answers getManifest on stderr with the default output ./redacted', async () => {
     const { responses, stdout } = await runGenerator([
       { jsonrpc: '2.0', id: 1, method: 'getManifest', params: {} },
     ])
@@ -82,7 +82,9 @@ describe('generator protocol', () => {
       {
         jsonrpc: '2.0',
         id: 1,
-        result: { manifest: { prettyName: 'AI read-only views', defaultOutput: './ai' } },
+        result: {
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+        },
       },
     ])
     expect(stdout).toBe('')
@@ -103,7 +105,7 @@ describe('generator protocol', () => {
   })
 
   it('D51: warnings go to stdout before the summary on success', async () => {
-    const schema = example.replace('/// @ai.hidden\n  email', '/// @ai.visible\n  email')
+    const schema = example.replace('/// @hyde.hidden\n  email', '/// @hyde.visible\n  email')
     const { request } = generateRequest(schema)
     const { responses, stdout } = await runGenerator([request])
     expect(responses[0]?.result).toBeNull()
@@ -125,7 +127,7 @@ describe('generator protocol', () => {
     )
     expect(message).toContain('error HYDE_CONFIG_INVALID_VALUE at config.default')
     expect(message).toContain('    fix: ')
-    expect(existsSync(join(output, 'ai-views.sql'))).toBe(false)
+    expect(existsSync(join(output, 'redacted-views.sql'))).toBe(false)
     expect(stdout).toBe('')
   })
 

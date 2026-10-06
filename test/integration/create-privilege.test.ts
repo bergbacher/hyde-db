@@ -1,4 +1,4 @@
-// D24: the AI role must not be able to create objects in any schema (CVE-2018-1058).
+// D24: the reader role must not be able to create objects in any schema (CVE-2018-1058).
 import pg from 'pg'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
@@ -84,7 +84,10 @@ describe('CREATE privilege', () => {
     const db = await freshDb(true)
     // A TEMP table earlier in the same session gives it a pg_temp_N schema, in which every role
     // with TEMP on the database (PUBLIC by default) counts as holding CREATE.
-    const result = psql(db.name, `CREATE TEMP TABLE scratch (id int);\n${db.files['ai-views.sql']}`)
+    const result = psql(
+      db.name,
+      `CREATE TEMP TABLE scratch (id int);\n${db.files['redacted-views.sql']}`,
+    )
     expect(result.status, result.stderr).toBe(0)
   })
 

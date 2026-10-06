@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BRAND } from '../../src/brand.ts'
+import { build } from '../../src/build.ts'
 import {
   conflictingAnnotations,
   DIAGNOSTIC_CODES,
@@ -12,7 +13,7 @@ import {
   levenshtein,
   misplacedFieldAnnotation,
   misplacedModelAnnotation,
-  modelInAiSchema,
+  modelInViewsSchema,
   noOutputDirectory,
   relationAnnotated,
   schemaEqualsSource,
@@ -26,14 +27,16 @@ import {
   viewNameCollision,
 } from '../../src/diagnostics.ts'
 import type { Diagnostic } from '../../src/types.ts'
+import { OUTPUT_FILES, readRepoFile } from '../helpers/files.ts'
+import { parseSchema } from '../helpers/prisma.ts'
 
 const ALL: Diagnostic[] = [
   unknownConfigKey('strickt', ['strict']),
   unknownConfigKey('zzz', ['strict']),
   invalidConfigValue('default', 'hiden', '"hidden" or "visible"', ['hidden', 'visible']),
-  invalidConfigValue('schema', 'AI_SCHEMA', 'a lowercase SQL identifier'),
+  invalidConfigValue('schema', 'VIEWS_SCHEMA', 'a lowercase SQL identifier'),
   schemaEqualsSource('public'),
-  modelInAiSchema('User', 'ai'),
+  modelInViewsSchema('User', 'redacted'),
   unknownAnnotation('User.id', 'visable', ['visible', 'hidden']),
   unknownAnnotation('User.id', 'zzz', ['visible', 'hidden']),
   misplacedModelAnnotation('User', 'visible'),
@@ -76,8 +79,8 @@ describe('diagnostics catalog', () => {
       code: 'HYDE_STRICT_UNANNOTATED',
       severity: 'error',
       location: 'User.phone',
-      message: 'strict mode requires /// @ai.visible or /// @ai.hidden',
-      hint: 'Add /// @ai.hidden above the field, or /// @ai.visible if the AI may see it.',
+      message: 'strict mode requires /// @hyde.visible or /// @hyde.hidden',
+      hint: 'Add /// @hyde.hidden above the field, or /// @hyde.visible if the reader may see it.',
     })
     expect(relationAnnotated('Order.user').message).toBe(
       'annotation on a relation field has no effect; annotate the scalar FK field(s) instead',
@@ -85,6 +88,31 @@ describe('diagnostics catalog', () => {
     expect(sensitiveImplicit('Gone.secret', 'model').message).toBe(
       'name looks sensitive but would be exposed via the model default',
     )
+  })
+})
+
+describe('privacy naming (D53, D54)', () => {
+  it('D54: hints name the @hyde.* annotations and the ./redacted output directory', () => {
+    expect(unknownAnnotation('User.id', 'zzz', ['visible', 'hidden']).hint).toBe(
+      'Use @hyde.visible or @hyde.hidden on fields, and @hyde.exclude or @hyde.default(visible|hidden) on models.',
+    )
+    expect(unknownAnnotation('User', 'zzz', ['exclude', 'default']).hint).toContain('@hyde.')
+    expect(unknownAnnotation('User.id', 'visable', ['visible', 'hidden']).hint).toBe(
+      'Replace @hyde.visable with @hyde.visible.',
+    )
+    expect(noOutputDirectory().hint).toBe('Set output = "./redacted" in the generator block.')
+    expect(schemaEqualsSource('public').hint).toContain('(the default is "redacted")')
+  })
+
+  it('D53: no AI-centric names remain in generated output or diagnostics', () => {
+    const aiCentric = /\bai\b|ai_reader|@ai\.|\bAI\b|LLM/
+    const { datamodel, config } = parseSchema(readRepoFile('example', 'schema.prisma'))
+    const { files, diagnostics } = build(datamodel, config)
+    for (const name of OUTPUT_FILES) expect(files?.[name], name).not.toMatch(aiCentric)
+    for (const d of [...ALL, ...diagnostics]) {
+      expect(d.message, d.code).not.toMatch(aiCentric)
+      expect(d.hint ?? '', d.code).not.toMatch(aiCentric)
+    }
   })
 })
 
@@ -117,10 +145,10 @@ describe('did you mean (D25)', () => {
       'Remove "zzz" from the generator block. Valid keys: schema.',
     )
     expect(unknownAnnotation('User.id', 'visable', ['visible', 'hidden']).message).toBe(
-      'unknown annotation @ai.visable (did you mean @ai.visible?)',
+      'unknown annotation @hyde.visable (did you mean @hyde.visible?)',
     )
     expect(invalidDefaultArgument('User', 'visble').message).toBe(
-      '@ai.default needs (visible) or (hidden), got (visble) (did you mean "visible"?)',
+      '@hyde.default needs (visible) or (hidden), got (visble) (did you mean "visible"?)',
     )
     expect(invalidConfigValue('strict', ['true'], '"true" or "false"', ['true']).message).toBe(
       'config "strict" must be "true" or "false", got ["true"]',
@@ -131,8 +159,8 @@ describe('did you mean (D25)', () => {
 describe('formatting', () => {
   it('formats one diagnostic with its fix line', () => {
     expect(formatDiagnostic(strictUnannotated('User.phone'))).toBe(
-      'error HYDE_STRICT_UNANNOTATED at User.phone: strict mode requires /// @ai.visible or /// @ai.hidden\n' +
-        '    fix: Add /// @ai.hidden above the field, or /// @ai.visible if the AI may see it.',
+      'error HYDE_STRICT_UNANNOTATED at User.phone: strict mode requires /// @hyde.visible or /// @hyde.hidden\n' +
+        '    fix: Add /// @hyde.hidden above the field, or /// @hyde.visible if the reader may see it.',
     )
     expect(formatDiagnostic(sensitiveExplicit('User.email'))).toBe(
       'warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible although the name looks sensitive — double-check',

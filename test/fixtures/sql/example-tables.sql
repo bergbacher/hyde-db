@@ -1,6 +1,6 @@
 -- Tables of example/schema.prisma, as `prisma migrate deploy` would create them, plus one row each.
 -- Idempotent: drops what it creates first.
-DROP SCHEMA IF EXISTS ai CASCADE;
+DROP SCHEMA IF EXISTS redacted CASCADE;
 DROP TABLE IF EXISTS public.orders, public.users, public.api_keys CASCADE;
 DROP TYPE IF EXISTS public."Plan";
 CREATE TYPE public."Plan" AS ENUM ('FREE', 'PRO');

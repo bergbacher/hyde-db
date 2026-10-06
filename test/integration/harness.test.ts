@@ -68,13 +68,13 @@ describe('integration harness', () => {
     expect(result.stdout.trim()).toBe(inject('pg').containerId.slice(0, 12))
   })
 
-  it('D1: the AI role sees exactly the visible columns of each view', async () => {
+  it('D1: the reader role sees exactly the visible columns of each view', async () => {
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
     try {
       const { rows } = await reader.query(
         `SELECT table_name, string_agg(column_name::text, ',' ORDER BY ordinal_position) AS columns
-           FROM information_schema.columns WHERE table_schema = 'ai' GROUP BY table_name ORDER BY table_name`,
+           FROM information_schema.columns WHERE table_schema = 'redacted' GROUP BY table_name ORDER BY table_name`,
       )
       expect(rows).toEqual([
         { table_name: 'orders', columns: 'id,user_id,total_cents,placed_at' },
@@ -123,7 +123,7 @@ describe('integration harness', () => {
     expect(apply(db)).toEqual({ status: 2, stdout: '', stderr: 'psql: error: connection failed\n' })
   })
 
-  it('D43: dropTestDatabase drops the database and the AI role created by the apply script', async () => {
+  it('D43: dropTestDatabase drops the database and the reader role created by the apply script', async () => {
     expect(apply(db).status).toBe(0)
     const roles = `SELECT rolname FROM pg_roles WHERE rolname = '${db.role}'`
     const databases = `SELECT datname FROM pg_database WHERE datname = '${db.name}'`

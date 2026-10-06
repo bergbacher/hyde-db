@@ -1,7 +1,7 @@
 // Contract fixture: Prisma features whose DMMF shape hyde-db depends on (A19, A21, D34).
-generator ai {
+generator redacted {
   provider        = "hyde-db"
-  output          = "./ai"
+  output          = "./redacted"
   previewFeatures = ["views"]
 }
 
@@ -12,18 +12,18 @@ datasource db {
 
 /// A user of the app
 model User {
-  /// @ai.visible
+  /// @hyde.visible
   id     Int                      @id @default(autoincrement())
-  /// @ai.hidden
+  /// @hyde.hidden
   email  String                   @unique @map("email_address")
   posts  Post[]
-  /// @ai.visible
+  /// @hyde.visible
   secret String?                  @ignore
-  /// @ai.visible
+  /// @hyde.visible
   geom   Unsupported("geometry")?
-  /// @ai.visible
+  /// @hyde.visible
   role   Role                     @default(USER)
-  /// @ai.visible
+  /// @hyde.visible
   tags   String[]
 
   @@map("users")
@@ -31,9 +31,9 @@ model User {
 }
 
 model Post {
-  /// @ai.visible
+  /// @hyde.visible
   id       Int  @id
-  /// @ai.visible
+  /// @hyde.visible
   authorId Int  @map("author_id")
   author   User @relation(fields: [authorId], references: [id])
 
@@ -49,9 +49,9 @@ model Legacy {
 
 /// A read-only report
 view UserInfo {
-  /// @ai.visible
+  /// @hyde.visible
   id    Int    @unique
-  /// @ai.hidden
+  /// @hyde.hidden
   email String
 
   @@schema("public")

@@ -102,15 +102,15 @@ export function schemaEqualsSource(schema: string): Diagnostic {
     'HYDE_SCHEMA_CONFLICT',
     'config.schema',
     `config "schema" (${schema}) must differ from the source schema; it is dropped and recreated on every apply.`,
-    'Point "schema" at a dedicated schema that no model uses (the default is "ai").',
+    'Point "schema" at a dedicated schema that no model uses (the default is "redacted").',
   )
 }
 
-export function modelInAiSchema(model: string, schema: string): Diagnostic {
+export function modelInViewsSchema(model: string, schema: string): Diagnostic {
   return make(
     'HYDE_SCHEMA_CONFLICT',
     `model ${model}`,
-    `model ${model} lives in schema "${schema}", the AI schema, which is dropped and recreated on every apply.`,
+    `model ${model} lives in schema "${schema}", which holds the generated views and is dropped and recreated on every apply.`,
     'Point "schema" in the generator block at a schema no model uses, or move the model with @@schema.',
   )
 }
@@ -124,10 +124,10 @@ export function unknownAnnotation(
   return make(
     'HYDE_ANNOTATION_UNKNOWN',
     location,
-    `unknown annotation @ai.${name}${suggestion === undefined ? '' : ` (did you mean @ai.${suggestion}?)`}`,
+    `unknown annotation @hyde.${name}${suggestion === undefined ? '' : ` (did you mean @hyde.${suggestion}?)`}`,
     suggestion === undefined
-      ? 'Use @ai.visible or @ai.hidden on fields, and @ai.exclude or @ai.default(visible|hidden) on models.'
-      : `Replace @ai.${name} with @ai.${suggestion}.`,
+      ? 'Use @hyde.visible or @hyde.hidden on fields, and @hyde.exclude or @hyde.default(visible|hidden) on models.'
+      : `Replace @hyde.${name} with @hyde.${suggestion}.`,
   )
 }
 
@@ -135,8 +135,8 @@ export function misplacedModelAnnotation(model: string, name: 'visible' | 'hidde
   return make(
     'HYDE_ANNOTATION_MISPLACED',
     `model ${model}`,
-    `use @ai.default(${name}) on models; @ai.${name} is for fields`,
-    `Move @ai.${name} into the comments of the fields, or write @ai.default(${name}) on the model.`,
+    `use @hyde.default(${name}) on models; @hyde.${name} is for fields`,
+    `Move @hyde.${name} into the comments of the fields, or write @hyde.default(${name}) on the model.`,
   )
 }
 
@@ -147,8 +147,8 @@ export function misplacedFieldAnnotation(
   return make(
     'HYDE_ANNOTATION_MISPLACED',
     location,
-    `@ai.${name} is a model annotation`,
-    `Move @ai.${name} into the /// comment above the model.`,
+    `@hyde.${name} is a model annotation`,
+    `Move @hyde.${name} into the /// comment above the model.`,
   )
 }
 
@@ -157,10 +157,10 @@ export function invalidDefaultArgument(model: string, arg: string | undefined): 
   return make(
     'HYDE_ANNOTATION_INVALID_ARGUMENT',
     `model ${model}`,
-    `@ai.default needs (visible) or (hidden), got (${arg ?? ''})${quoted(suggestion)}`,
+    `@hyde.default needs (visible) or (hidden), got (${arg ?? ''})${quoted(suggestion)}`,
     suggestion === undefined
-      ? 'Write @ai.default(visible) or @ai.default(hidden).'
-      : `Write @ai.default(${suggestion}).`,
+      ? 'Write @hyde.default(visible) or @hyde.default(hidden).'
+      : `Write @hyde.default(${suggestion}).`,
   )
 }
 
@@ -168,8 +168,8 @@ export function conflictingAnnotations(location: string): Diagnostic {
   return make(
     'HYDE_ANNOTATION_CONFLICT',
     location,
-    'both @ai.visible and @ai.hidden',
-    'Keep exactly one of @ai.visible and @ai.hidden.',
+    'both @hyde.visible and @hyde.hidden',
+    'Keep exactly one of @hyde.visible and @hyde.hidden.',
   )
 }
 
@@ -177,8 +177,8 @@ export function strictUnannotated(location: string): Diagnostic {
   return make(
     'HYDE_STRICT_UNANNOTATED',
     location,
-    'strict mode requires /// @ai.visible or /// @ai.hidden',
-    'Add /// @ai.hidden above the field, or /// @ai.visible if the AI may see it.',
+    'strict mode requires /// @hyde.visible or /// @hyde.hidden',
+    'Add /// @hyde.hidden above the field, or /// @hyde.visible if the reader may see it.',
   )
 }
 
@@ -186,8 +186,8 @@ export function strictModelDefault(model: string): Diagnostic {
   return make(
     'HYDE_STRICT_MODEL_DEFAULT',
     `model ${model}`,
-    '@ai.default is not allowed in strict mode; annotate each field',
-    'Remove @ai.default and annotate each field, or set strict = "false" in the generator block.',
+    '@hyde.default is not allowed in strict mode; annotate each field',
+    'Remove @hyde.default and annotate each field, or set strict = "false" in the generator block.',
   )
 }
 
@@ -196,7 +196,7 @@ export function sensitiveImplicit(location: string, via: 'model' | 'global'): Di
     'HYDE_SENSITIVE_IMPLICIT',
     location,
     `name looks sensitive but would be exposed via the ${via} default`,
-    'Add /// @ai.hidden, or /// @ai.visible if it really is safe.',
+    'Add /// @hyde.hidden, or /// @hyde.visible if it really is safe.',
   )
 }
 
@@ -205,7 +205,7 @@ export function viewNameCollision(name: string, first: string, second: string): 
     'HYDE_VIEW_NAME_COLLISION',
     `view ${name}`,
     `view name collision "${name}": ${first} and ${second}`,
-    'Exclude one of the two models with /// @ai.exclude.',
+    'Exclude one of the two models with /// @hyde.exclude.',
   )
 }
 
@@ -223,7 +223,7 @@ export function noOutputDirectory(): Diagnostic {
     'HYDE_NO_OUTPUT',
     'generator',
     'no output directory',
-    'Set output = "./ai" in the generator block.',
+    'Set output = "./redacted" in the generator block.',
   )
 }
 

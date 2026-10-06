@@ -9,7 +9,7 @@ describe('datamodel adapter', () => {
         model(
           'User',
           [
-            scalar('id', '@ai.visible', { isId: true }),
+            scalar('id', '@hyde.visible', { isId: true }),
             scalar('fullName', undefined, { dbName: 'full_name' }),
           ],
           {
@@ -34,7 +34,7 @@ describe('datamodel adapter', () => {
           isList: false,
           isRequired: true,
           isId: true,
-          documentation: '@ai.visible',
+          documentation: '@hyde.visible',
           relationFromFields: [],
           relationToFields: [],
         },

@@ -1,6 +1,6 @@
 // Parses a Prisma schema with the schema engine of a given Prisma major, returning exactly
 // what `prisma generate` hands a generator: the DMMF datamodel and the config of the
-// generator block named "ai" (A19, A22).
+// generator block named "redacted" (A19, A22).
 import { createRequire } from 'node:module'
 import type { DmmfDatamodel } from '../../src/types.ts'
 
@@ -40,6 +40,6 @@ export function parseSchema(source: string, major: PrismaMajor = 7): ParsedSchem
   const loaded = JSON.parse(engine.get_config(JSON.stringify({ prismaSchema }))) as {
     config: { generators: { name: string; config: Record<string, unknown> }[] }
   }
-  const generator = loaded.config.generators.find((g) => g.name === 'ai')
+  const generator = loaded.config.generators.find((g) => g.name === 'redacted')
   return { datamodel: dmmf.datamodel, config: generator?.config ?? {} }
 }

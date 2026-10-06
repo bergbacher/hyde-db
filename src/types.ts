@@ -110,9 +110,9 @@ export interface Analysis {
 }
 
 export interface OutputFiles {
-  readonly 'ai-views.sql': string
-  readonly 'ai-views-drop.sql': string
-  readonly 'ai-schema.md': string
+  readonly 'redacted-views.sql': string
+  readonly 'redacted-views-drop.sql': string
+  readonly 'redacted-schema.md': string
 }
 
 export interface BuildResult extends Analysis {

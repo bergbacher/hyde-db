@@ -15,11 +15,11 @@ describe('analysis rules', () => {
         model(
           'User',
           [
-            scalar('id', '@ai.visible', { type: 'Int', isId: true }),
-            scalar('plan', '@ai.visible', { kind: 'enum', type: 'Plan' }),
-            scalar('tags', '@ai.visible', { isList: true }),
-            scalar('nick', '@ai.visible\nShown name', { isRequired: false }),
-            scalar('fullName', '@ai.hidden', { dbName: 'full_name' }),
+            scalar('id', '@hyde.visible', { type: 'Int', isId: true }),
+            scalar('plan', '@hyde.visible', { kind: 'enum', type: 'Plan' }),
+            scalar('tags', '@hyde.visible', { isList: true }),
+            scalar('nick', '@hyde.visible\nShown name', { isRequired: false }),
+            scalar('fullName', '@hyde.hidden', { dbName: 'full_name' }),
           ],
           { dbName: 'users', documentation: 'A customer.' },
         ),
@@ -72,7 +72,7 @@ describe('analysis rules', () => {
 
   it('strict mode requires an annotation on every scalar field', () => {
     const a = analyze(
-      datamodel(model('User', [scalar('id', '@ai.visible'), scalar('phone')])),
+      datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('phone')])),
       strict,
     )
     expect(a.diagnostics).toMatchObject([
@@ -81,10 +81,21 @@ describe('analysis rules', () => {
     expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
   })
 
-  it('strict mode rejects @ai.default on models', () => {
+  it('D54: a field annotated only with the old @ai.visible is unannotated under strict mode', () => {
+    const a = analyze(
+      datamodel(model('User', [scalar('id', '@hyde.visible'), scalar('phone', '@ai.visible')])),
+      strict,
+    )
+    expect(a.diagnostics).toMatchObject([
+      { code: 'HYDE_STRICT_UNANNOTATED', location: 'User.phone' },
+    ])
+    expect(a.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
+  })
+
+  it('strict mode rejects @hyde.default on models', () => {
     const a = analyze(
       datamodel(
-        model('User', [scalar('id', '@ai.visible')], { documentation: '@ai.default(visible)' }),
+        model('User', [scalar('id', '@hyde.visible')], { documentation: '@hyde.default(visible)' }),
       ),
       strict,
     )
@@ -93,13 +104,13 @@ describe('analysis rules', () => {
 
   it('non-strict: unannotated fields follow the global default, then the model default', () => {
     const hidden = analyze(
-      datamodel(model('M', [scalar('id', '@ai.visible'), scalar('title')])),
+      datamodel(model('M', [scalar('id', '@hyde.visible'), scalar('title')])),
       loose,
     )
     expect(hidden.views[0]?.columns.map((c) => c.column)).toEqual(['id'])
     const visible = analyze(
       datamodel(
-        model('M', [scalar('id'), scalar('title')], { documentation: '@ai.default(visible)' }),
+        model('M', [scalar('id'), scalar('title')], { documentation: '@hyde.default(visible)' }),
       ),
       loose,
     )
@@ -113,7 +124,7 @@ describe('analysis rules', () => {
 
   it('a sensitive name exposed through a default is an error, naming which default', () => {
     const viaModel = analyze(
-      datamodel(model('Gone', [scalar('secret')], { documentation: '@ai.default(visible)' })),
+      datamodel(model('Gone', [scalar('secret')], { documentation: '@hyde.default(visible)' })),
       loose,
     )
     expect(viaModel.diagnostics).toMatchObject([
@@ -140,7 +151,7 @@ describe('analysis rules', () => {
   })
 
   it('an explicitly visible sensitive name is exposed with a warning', () => {
-    const a = analyze(datamodel(model('M', [scalar('email', '@ai.visible')])))
+    const a = analyze(datamodel(model('M', [scalar('email', '@hyde.visible')])))
     expect(a.diagnostics).toMatchObject([
       { code: 'HYDE_SENSITIVE_EXPLICIT', severity: 'warning', location: 'M.email' },
     ])
@@ -151,8 +162,8 @@ describe('analysis rules', () => {
     const a = analyze(
       datamodel(
         model('Order', [
-          scalar('id', '@ai.visible'),
-          scalar('user', '@ai.visible', {
+          scalar('id', '@hyde.visible'),
+          scalar('user', '@hyde.visible', {
             kind: 'object',
             type: 'User',
             relationFromFields: [],
@@ -171,8 +182,8 @@ describe('analysis rules', () => {
     const a = analyze(
       datamodel(
         model('M', [
-          scalar('id', '@ai.visible'),
-          scalar('geom', '@ai.visible', { kind: 'unsupported' }),
+          scalar('id', '@hyde.visible'),
+          scalar('geom', '@hyde.visible', { kind: 'unsupported' }),
         ]),
       ),
     )
@@ -180,11 +191,11 @@ describe('analysis rules', () => {
     expect(a.counts).toEqual({ visible: 1, hidden: 0 })
   })
 
-  it('@ai.exclude drops the model; a model without visible columns gets no view', () => {
+  it('@hyde.exclude drops the model; a model without visible columns gets no view', () => {
     const a = analyze(
       datamodel(
-        model('Secret', [scalar('id', '@ai.visible')], { documentation: '@ai.exclude' }),
-        model('Empty', [scalar('id', '@ai.hidden')]),
+        model('Secret', [scalar('id', '@hyde.visible')], { documentation: '@hyde.exclude' }),
+        model('Empty', [scalar('id', '@hyde.hidden')]),
       ),
     )
     expect(a.views).toEqual([])
@@ -192,7 +203,9 @@ describe('analysis rules', () => {
   })
 
   it('describes relations whose FK columns are visible and whose target has a view', () => {
-    const user = model('User', [scalar('id', '@ai.visible', { type: 'Int' })], { dbName: 'users' })
+    const user = model('User', [scalar('id', '@hyde.visible', { type: 'Int' })], {
+      dbName: 'users',
+    })
     const relation = (from: string[]) =>
       scalar('user', undefined, {
         kind: 'object',
@@ -204,7 +217,7 @@ describe('analysis rules', () => {
       model(
         'Order',
         [
-          scalar('id', '@ai.visible'),
+          scalar('id', '@hyde.visible'),
           scalar('userId', fkDoc, { dbName: 'user_id' }),
           relation(['userId']),
         ],
@@ -212,19 +225,19 @@ describe('analysis rules', () => {
           dbName: 'orders',
         },
       )
-    expect(analyze(datamodel(user, order('@ai.visible'))).views[1]?.relations).toEqual([
+    expect(analyze(datamodel(user, order('@hyde.visible'))).views[1]?.relations).toEqual([
       { fromCols: ['user_id'], target: 'users', targetModel: 'User', toCols: ['id'] },
     ])
-    expect(analyze(datamodel(user, order('@ai.hidden'))).views[1]?.relations).toEqual([])
-    const hiddenTarget = model('User', [scalar('id', '@ai.hidden')], { dbName: 'users' })
-    expect(analyze(datamodel(hiddenTarget, order('@ai.visible'))).views[0]?.relations).toEqual([])
+    expect(analyze(datamodel(user, order('@hyde.hidden'))).views[1]?.relations).toEqual([])
+    const hiddenTarget = model('User', [scalar('id', '@hyde.hidden')], { dbName: 'users' })
+    expect(analyze(datamodel(hiddenTarget, order('@hyde.visible'))).views[0]?.relations).toEqual([])
   })
 
   it('ignores relations to unknown models and keeps unknown field names as written', () => {
     const a = analyze(
       datamodel(
         model('Order', [
-          scalar('id', '@ai.visible'),
+          scalar('id', '@hyde.visible'),
           scalar('ghost', undefined, {
             kind: 'object',
             type: 'Nope',
@@ -248,8 +261,8 @@ describe('analysis rules', () => {
   it('reports view name collisions across schemas', () => {
     const a = analyze(
       datamodel(
-        model('A', [scalar('id', '@ai.visible')], { dbName: 'users', schema: 'public' }),
-        model('B', [scalar('id', '@ai.visible')], { dbName: 'users', schema: 'auth' }),
+        model('A', [scalar('id', '@hyde.visible')], { dbName: 'users', schema: 'public' }),
+        model('B', [scalar('id', '@hyde.visible')], { dbName: 'users', schema: 'auth' }),
       ),
     )
     expect(a.diagnostics).toMatchObject([
@@ -262,7 +275,7 @@ describe('analysis rules', () => {
   })
 
   it('D29: reports annotation and config problems together', () => {
-    const a = analyze(datamodel(model('M', [scalar('id', '@ai.visable')])), {
+    const a = analyze(datamodel(model('M', [scalar('id', '@hyde.visable')])), {
       ...strict,
       strickt: 'true',
     })
@@ -273,22 +286,22 @@ describe('analysis rules', () => {
     ])
   })
 
-  it('D12: the AI schema must differ from the source schema', () => {
+  it('D12: the redacted schema must differ from the source schema', () => {
     const a = analyze(datamodel(), { schema: 'public' })
     expect(a.diagnostics).toMatchObject([
       { code: 'HYDE_SCHEMA_CONFLICT', location: 'config.schema' },
     ])
   })
 
-  it("D12: the AI schema must differ from every model's @@schema, excluded models included (A13)", () => {
+  it("D12: the redacted schema must differ from every model's @@schema, excluded models included (A13)", () => {
     const a = analyze(
       datamodel(
-        model('Audit', [scalar('id', '@ai.visible')], { schema: 'ai' }),
-        model('Hidden', [scalar('id', '@ai.visible')], {
-          schema: 'ai',
-          documentation: '@ai.exclude',
+        model('Audit', [scalar('id', '@hyde.visible')], { schema: 'redacted' }),
+        model('Hidden', [scalar('id', '@hyde.visible')], {
+          schema: 'redacted',
+          documentation: '@hyde.exclude',
         }),
-        model('User', [scalar('id', '@ai.visible')], { schema: 'auth' }),
+        model('User', [scalar('id', '@hyde.visible')], { schema: 'auth' }),
       ),
     )
     expect(a.diagnostics.map((d) => [d.code, d.location])).toEqual([
@@ -297,9 +310,9 @@ describe('analysis rules', () => {
     ])
   })
 
-  it('D12: a multiSchema model in the AI schema fails as Prisma parses it', () => {
+  it('D12: a multiSchema model in the redacted schema fails as Prisma parses it', () => {
     const { datamodel: dmmf, config } = parseSchema(
-      'datasource db {\n  provider = "postgresql"\n  schemas  = ["ai", "public"]\n}\ngenerator ai {\n  provider = "hyde-db"\n}\nmodel Audit {\n  /// @ai.visible\n  id Int @id\n  @@schema("ai")\n}\n',
+      'datasource db {\n  provider = "postgresql"\n  schemas  = ["redacted", "public"]\n}\ngenerator redacted {\n  provider = "hyde-db"\n}\nmodel Audit {\n  /// @hyde.visible\n  id Int @id\n  @@schema("redacted")\n}\n',
     )
     expect(analyze(dmmf, config).diagnostics.map((d) => d.code)).toEqual(['HYDE_SCHEMA_CONFLICT'])
   })

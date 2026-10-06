@@ -20,4 +20,24 @@ describe('package.json', () => {
     expect(pkg.dependencies).toBeUndefined()
     expect(pkg.peerDependencies).toBeUndefined()
   })
+
+  it('D53: describes privacy, not one kind of reader, and stays discoverable', () => {
+    expect(pkg.description).toBe(
+      'Prisma generator that turns /// @hyde annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role',
+    )
+    expect(pkg.keywords).toEqual(
+      expect.arrayContaining([
+        'prisma',
+        'prisma-generator',
+        'postgresql',
+        'privacy',
+        'pii',
+        'redaction',
+        'views',
+        'read-only',
+        'llm',
+      ]),
+    )
+    expect(pkg.keywords).not.toContain('ai')
+  })
 })

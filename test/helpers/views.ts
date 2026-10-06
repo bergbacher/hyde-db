@@ -2,8 +2,8 @@
 import type { ResolvedConfig, View } from '../../src/types.ts'
 
 export const config: ResolvedConfig = {
-  schema: 'ai',
-  role: 'ai_reader',
+  schema: 'redacted',
+  role: 'redacted_reader',
   sourceSchema: 'public',
   default: 'hidden',
   strict: true,

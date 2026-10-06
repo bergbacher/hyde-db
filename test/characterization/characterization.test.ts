@@ -15,7 +15,7 @@ describe('characterization', () => {
       const result = build(datamodel, config)
       expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([])
       for (const file of OUTPUT_FILES) {
-        expect(result.files?.[file], file).toBe(readRepoFile(testCase.dir, 'ai', file))
+        expect(result.files?.[file], file).toBe(readRepoFile(testCase.dir, 'redacted', file))
       }
     })
   }
@@ -30,8 +30,8 @@ describe('characterization', () => {
       'country',
       'plan',
     ])
-    expect(result.files?.['ai-views.sql']).not.toContain('email')
-    expect(result.files?.['ai-views.sql']).not.toContain('api_keys')
+    expect(result.files?.['redacted-views.sql']).not.toContain('email')
+    expect(result.files?.['redacted-views.sql']).not.toContain('api_keys')
   })
 
   it('D54: without strict = "false" the loose schema fails with strict diagnostics', () => {

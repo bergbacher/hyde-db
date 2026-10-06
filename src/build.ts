@@ -12,9 +12,9 @@ export function build(datamodel: DmmfDatamodel, config?: GeneratorConfig): Build
   return {
     ...analysis,
     files: {
-      'ai-views.sql': renderApplySql(analysis),
-      'ai-views-drop.sql': renderDropSql(analysis),
-      'ai-schema.md': renderMarkdown(analysis),
+      'redacted-views.sql': renderApplySql(analysis),
+      'redacted-views-drop.sql': renderDropSql(analysis),
+      'redacted-schema.md': renderMarkdown(analysis),
     },
   }
 }

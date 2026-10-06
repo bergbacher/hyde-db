@@ -7,9 +7,18 @@ describe('Markdown', () => {
   const md = renderMarkdown({ config, views: [users, orders] })
 
   it('describes the schema, search_path and timeout', () => {
-    expect(md.split('\n')[0]).toBe('# Database schema available to the AI')
-    expect(md).toContain('Query the views in schema `ai`')
+    expect(md.split('\n')[0]).toBe('# Redacted database schema')
+    expect(md).toContain('Query the views in schema `redacted`')
     expect(md).toContain('Statements time out after 15s.')
+  })
+
+  it("D54: the intro names the reader role's search_path and says other columns were removed", () => {
+    expect(md).toContain(
+      "Query the views in schema `redacted` (it is the reader role's default search_path, so " +
+        'unqualified names work). Only the columns listed here exist; every other column was ' +
+        'removed on purpose. Statements time out after 15s.',
+    )
+    expect(md).not.toContain('deliberately')
   })
 
   it('carries the generated-file notice', () => {

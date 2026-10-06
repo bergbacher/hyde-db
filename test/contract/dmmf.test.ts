@@ -33,7 +33,7 @@ describe('DMMF contract', () => {
       expect(datamodel.models.map((m) => m.name)).not.toContain('Legacy')
       const result = build(datamodel, config)
       expect(result.diagnostics).toEqual([])
-      expect(result.files?.['ai-views.sql']).not.toMatch(/geom|secret|Legacy/)
+      expect(result.files?.['redacted-views.sql']).not.toMatch(/geom|secret|Legacy/)
     },
   )
 
@@ -53,10 +53,10 @@ describe('DMMF contract', () => {
     (major) => {
       const source = FIXTURES.example.replace(
         'strict   = "true"',
-        'strict   = "true"\n  role     = env("AI_ROLE")\n  schema   = ["ai"]',
+        'strict   = "true"\n  role     = env("READER_ROLE")\n  schema   = ["redacted"]',
       )
       const { datamodel, config } = parseSchema(source, major)
-      expect(config).toEqual({ strict: 'true', role: 'AI_ROLE', schema: ['ai'] })
+      expect(config).toEqual({ strict: 'true', role: 'READER_ROLE', schema: ['redacted'] })
       const locations = build(datamodel, config).diagnostics.map((d) => [d.code, d.location])
       expect(locations).toEqual([
         ['HYDE_CONFIG_INVALID_VALUE', 'config.schema'],
@@ -68,7 +68,7 @@ describe('DMMF contract', () => {
   it('A19: a multi-key config yields identical diagnostics on Prisma 6 and 7', () => {
     const source = FIXTURES.example.replace(
       'strict   = "true"',
-      'strict   = "ture"\n  zeta     = "1"\n  schema   = "AI"\n  alpha    = "2"\n  role     = "R"',
+      'strict   = "ture"\n  zeta     = "1"\n  schema   = "REDACTED"\n  alpha    = "2"\n  role     = "R"',
     )
     const [six, seven] = MAJORS.map((major) => {
       const { datamodel, config } = parseSchema(source, major)

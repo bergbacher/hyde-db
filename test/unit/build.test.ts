@@ -6,12 +6,12 @@ import { datamodel, model, scalar } from '../helpers/dmmf.ts'
 describe('build', () => {
   it('returns the analysis plus the three output files', () => {
     const result = build(
-      datamodel(model('User', [scalar('id', '@ai.visible')], { dbName: 'users' })),
+      datamodel(model('User', [scalar('id', '@hyde.visible')], { dbName: 'users' })),
     )
     expect(Object.keys(result.files ?? {})).toEqual([
-      'ai-views.sql',
-      'ai-views-drop.sql',
-      'ai-schema.md',
+      'redacted-views.sql',
+      'redacted-views-drop.sql',
+      'redacted-schema.md',
     ])
     expect(result.views.map((v) => v.name)).toEqual(['users'])
     expect(result.counts).toEqual({ visible: 1, hidden: 0 })
@@ -19,14 +19,14 @@ describe('build', () => {
 
   it('returns no files when any diagnostic is an error, but keeps warnings-only builds', () => {
     expect(build(datamodel(model('User', [scalar('phone')])), { strict: 'true' }).files).toBeNull()
-    expect(build(datamodel(model('User', [scalar('email', '@ai.visible')]))).files).not.toBeNull()
+    expect(build(datamodel(model('User', [scalar('email', '@hyde.visible')]))).files).not.toBeNull()
   })
 
   it('builds an empty datamodel into valid, view-less files', () => {
     const result = build(datamodel())
     expect(result.views).toEqual([])
     expect(result.counts).toEqual({ visible: 0, hidden: 0 })
-    expect(result.files?.['ai-views.sql']).toContain('CREATE SCHEMA "ai";')
+    expect(result.files?.['redacted-views.sql']).toContain('CREATE SCHEMA "redacted";')
   })
 })
 

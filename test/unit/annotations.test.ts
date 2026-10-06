@@ -18,7 +18,7 @@ function fieldWithDoc(documentation: string) {
 
 describe('parseDoc', () => {
   it('separates tags from doc text, line by line', () => {
-    expect(parseDoc('@ai.visible\nISO 3166 country code')).toEqual({
+    expect(parseDoc('@hyde.visible\nISO 3166 country code')).toEqual({
       tags: [{ name: 'visible', arg: undefined }],
       text: 'ISO 3166 country code',
     })
@@ -26,47 +26,57 @@ describe('parseDoc', () => {
   })
 
   it('reads arguments, trims them and strips surrounding quotes', () => {
-    expect(parseDoc('@ai.default( "visible" )').tags).toEqual([{ name: 'default', arg: 'visible' }])
-    expect(parseDoc("@ai.default('hidden')").tags).toEqual([{ name: 'default', arg: 'hidden' }])
-    expect(parseDoc('@ai.default()').tags).toEqual([{ name: 'default', arg: '' }])
+    expect(parseDoc('@hyde.default( "visible" )').tags).toEqual([
+      { name: 'default', arg: 'visible' },
+    ])
+    expect(parseDoc("@hyde.default('hidden')").tags).toEqual([{ name: 'default', arg: 'hidden' }])
+    expect(parseDoc('@hyde.default()').tags).toEqual([{ name: 'default', arg: '' }])
   })
 
   it('keeps text around tags on the same line and handles several tags per line', () => {
-    expect(parseDoc('Total in cents @ai.visible').text).toBe('Total in cents')
-    expect(parseDoc('@ai.visible @ai.hidden').tags.map((t) => t.name)).toEqual([
+    expect(parseDoc('Total in cents @hyde.visible').text).toBe('Total in cents')
+    expect(parseDoc('@hyde.visible @hyde.hidden').tags.map((t) => t.name)).toEqual([
       'visible',
       'hidden',
     ])
   })
 
+  it('D54: the old @ai. namespace is not an annotation', () => {
+    expect(parseDoc('@ai.visible')).toEqual({ tags: [], text: '@ai.visible' })
+    expect(parseDoc('@ai.default(visible)\n@ai.exclude').tags).toEqual([])
+    expect(readFieldAnnotations('User', fieldWithDoc('@ai.hidden')).visibility).toBeUndefined()
+  })
+
   it('treats CRLF line endings like LF', () => {
-    expect(parseDoc('@ai.visible\r\nISO code\r\n')).toEqual(parseDoc('@ai.visible\nISO code\n'))
+    expect(parseDoc('@hyde.visible\r\nISO code\r\n')).toEqual(parseDoc('@hyde.visible\nISO code\n'))
   })
 })
 
 describe('model annotations', () => {
-  it('reads @ai.exclude and valid @ai.default arguments', () => {
-    expect(readModelAnnotations(modelWithDoc('Internal only.\n@ai.exclude'))).toEqual({
+  it('reads @hyde.exclude and valid @hyde.default arguments', () => {
+    expect(readModelAnnotations(modelWithDoc('Internal only.\n@hyde.exclude'))).toEqual({
       excluded: true,
       defaults: [],
       text: 'Internal only.',
       diagnostics: [],
     })
-    expect(readModelAnnotations(modelWithDoc('@ai.default(visible)')).defaults).toEqual(['visible'])
+    expect(readModelAnnotations(modelWithDoc('@hyde.default(visible)')).defaults).toEqual([
+      'visible',
+    ])
   })
 
   it('D25: an unknown model annotation names the closest model annotation', () => {
-    const [d] = readModelAnnotations(modelWithDoc('@ai.exlude')).diagnostics
+    const [d] = readModelAnnotations(modelWithDoc('@hyde.exlude')).diagnostics
     expect(d).toMatchObject({
       code: 'HYDE_ANNOTATION_UNKNOWN',
       location: 'model User',
-      message: 'unknown annotation @ai.exlude (did you mean @ai.exclude?)',
+      message: 'unknown annotation @hyde.exlude (did you mean @hyde.exclude?)',
     })
   })
 
-  it('reports an invalid @ai.default argument and field annotations on a model', () => {
+  it('reports an invalid @hyde.default argument and field annotations on a model', () => {
     const { diagnostics, defaults } = readModelAnnotations(
-      modelWithDoc('@ai.default(maybe)\n@ai.visible'),
+      modelWithDoc('@hyde.default(maybe)\n@hyde.visible'),
     )
     expect(defaults).toEqual([])
     expect(diagnostics.map((d) => d.code)).toEqual([
@@ -74,14 +84,14 @@ describe('model annotations', () => {
       'HYDE_ANNOTATION_MISPLACED',
     ])
     expect(diagnostics[1]?.message).toBe(
-      'use @ai.default(visible) on models; @ai.visible is for fields',
+      'use @hyde.default(visible) on models; @hyde.visible is for fields',
     )
   })
 })
 
 describe('field annotations', () => {
   it('reads visibility and doc text', () => {
-    expect(readFieldAnnotations('User', fieldWithDoc('@ai.hidden\nLogin address'))).toEqual({
+    expect(readFieldAnnotations('User', fieldWithDoc('@hyde.hidden\nLogin address'))).toEqual({
       visibility: 'hidden',
       text: 'Login address',
       diagnostics: [],
@@ -89,28 +99,28 @@ describe('field annotations', () => {
     expect(readFieldAnnotations('User', fieldWithDoc('')).visibility).toBeUndefined()
   })
 
-  it('reports both @ai.visible and @ai.hidden; the last one wins', () => {
-    const result = readFieldAnnotations('User', fieldWithDoc('@ai.visible\n@ai.hidden'))
+  it('reports both @hyde.visible and @hyde.hidden; the last one wins', () => {
+    const result = readFieldAnnotations('User', fieldWithDoc('@hyde.visible\n@hyde.hidden'))
     expect(result.visibility).toBe('hidden')
     expect(result.diagnostics.map((d) => d.code)).toEqual(['HYDE_ANNOTATION_CONFLICT'])
     expect(result.diagnostics[0]?.location).toBe('User.email')
   })
 
   it('D25: an unknown field annotation names the closest field annotation', () => {
-    const [d] = readFieldAnnotations('User', fieldWithDoc('@ai.visable')).diagnostics
-    expect(d?.message).toBe('unknown annotation @ai.visable (did you mean @ai.visible?)')
-    const [far] = readFieldAnnotations('User', fieldWithDoc('@ai.public')).diagnostics
-    expect(far?.message).toBe('unknown annotation @ai.public')
+    const [d] = readFieldAnnotations('User', fieldWithDoc('@hyde.visable')).diagnostics
+    expect(d?.message).toBe('unknown annotation @hyde.visable (did you mean @hyde.visible?)')
+    const [far] = readFieldAnnotations('User', fieldWithDoc('@hyde.public')).diagnostics
+    expect(far?.message).toBe('unknown annotation @hyde.public')
   })
 
   it('reports model annotations written on a field', () => {
     const { diagnostics } = readFieldAnnotations(
       'User',
-      fieldWithDoc('@ai.exclude\n@ai.default(hidden)'),
+      fieldWithDoc('@hyde.exclude\n@hyde.default(hidden)'),
     )
     expect(diagnostics.map((d) => [d.code, d.message])).toEqual([
-      ['HYDE_ANNOTATION_MISPLACED', '@ai.exclude is a model annotation'],
-      ['HYDE_ANNOTATION_MISPLACED', '@ai.default is a model annotation'],
+      ['HYDE_ANNOTATION_MISPLACED', '@hyde.exclude is a model annotation'],
+      ['HYDE_ANNOTATION_MISPLACED', '@hyde.default is a model annotation'],
     ])
   })
 })

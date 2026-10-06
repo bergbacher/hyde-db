@@ -1,4 +1,4 @@
-// Attack suite (D1): apply the generated script to a real PostgreSQL, then attack the AI role.
+// Attack suite (D1): apply the generated script to a real PostgreSQL, then attack the reader role.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -18,7 +18,7 @@ async function freshDb(options?: Parameters<typeof createTestDatabase>[0]): Prom
   created.push(db)
   return db
 }
-/** Creates a cluster-wide role besides the AI role; it is dropped after the test's database. */
+/** Creates a cluster-wide role besides the reader role; it is dropped after the test's database. */
 async function extraRole(name: string, attributes: string): Promise<string> {
   extraRoles.push(name)
   await adminQuery('postgres', `CREATE ROLE ${name} ${attributes}`)
@@ -44,7 +44,7 @@ describe('reading', () => {
     }
   })
 
-  it('D1: the AI role cannot read base tables or excluded models', async () => {
+  it('D1: the reader role cannot read base tables or excluded models', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
@@ -62,7 +62,7 @@ describe('reading', () => {
 })
 
 describe('session settings', () => {
-  it('A2: ai_reader can SET default_transaction_read_only off but still cannot write', async () => {
+  it('A2: redacted_reader can SET default_transaction_read_only off but still cannot write', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
@@ -77,7 +77,7 @@ describe('session settings', () => {
       await expect(reader.query("UPDATE users SET country = 'XX'")).rejects.toMatchObject({
         code: '42501',
       })
-      await expect(reader.query('CREATE TABLE ai.planted (id int)')).rejects.toMatchObject({
+      await expect(reader.query('CREATE TABLE redacted.planted (id int)')).rejects.toMatchObject({
         code: '42501',
       })
     } finally {
@@ -85,7 +85,7 @@ describe('session settings', () => {
     }
   })
 
-  it('A2: ai_reader can override its role-level statement_timeout with SET', async () => {
+  it('A2: redacted_reader can override its role-level statement_timeout with SET', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
@@ -102,7 +102,7 @@ describe('session settings', () => {
     }
   })
 
-  it('A32: after SET default_transaction_read_only off, ai_reader can create TEMP tables', async () => {
+  it('A32: after SET default_transaction_read_only off, redacted_reader can create TEMP tables', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
@@ -125,9 +125,11 @@ describe('final check', () => {
     const result = apply(db)
     expect(result.status).toBe(3)
     expect(result.stderr).toContain(
-      `role ${db.role} can read relations outside schema ai: public.users`,
+      `role ${db.role} can read relations outside schema redacted: public.users`,
     )
-    expect(await adminQuery(db.name, "SELECT 1 FROM pg_namespace WHERE nspname = 'ai'")).toEqual([])
+    expect(
+      await adminQuery(db.name, "SELECT 1 FROM pg_namespace WHERE nspname = 'redacted'"),
+    ).toEqual([])
   })
 
   it('D1: apply revokes direct grants on source-schema tables, column grants included', async () => {
@@ -159,7 +161,7 @@ describe('final check', () => {
     const result = apply(db)
     expect(result.status).toBe(3)
     expect(result.stderr).toContain(
-      `role ${db.role} can read relations outside schema ai: billing.cards`,
+      `role ${db.role} can read relations outside schema redacted: billing.cards`,
     )
   })
 
@@ -179,7 +181,7 @@ describe('final check', () => {
     await adminQuery('postgres', `GRANT pg_read_all_data TO "${db.role}"`)
     const result = apply(db)
     expect(result.status).toBe(3)
-    expect(result.stderr).toContain(`role ${db.role} can read relations outside schema ai: `)
+    expect(result.stderr).toContain(`role ${db.role} can read relations outside schema redacted: `)
   })
 })
 
@@ -190,7 +192,7 @@ describe('deploy workflow', () => {
     expect(apply(db).status).toBe(0)
     const views = await adminQuery(
       db.name,
-      "SELECT viewname FROM pg_views WHERE schemaname = 'ai' ORDER BY 1",
+      "SELECT viewname FROM pg_views WHERE schemaname = 'redacted' ORDER BY 1",
     )
     expect(views).toEqual([{ viewname: 'orders' }, { viewname: 'users' }])
   })
@@ -202,7 +204,7 @@ describe('deploy workflow', () => {
     const blocked = psql(db.name, migration)
     expect(blocked.status).toBe(3)
     expect(blocked.stderr).toContain('cannot alter type of a column used by a view or rule')
-    expect(psql(db.name, db.files['ai-views-drop.sql']).status).toBe(0)
+    expect(psql(db.name, db.files['redacted-views-drop.sql']).status).toBe(0)
     expect(psql(db.name, migration).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })
@@ -211,14 +213,14 @@ describe('deploy workflow', () => {
     const db = await freshDb()
     const empty = buildFiles(
       db.role,
-      'datasource db {\n  provider = "postgresql"\n}\ngenerator ai {\n  provider = "hyde-db"\n}\n',
+      'datasource db {\n  provider = "postgresql"\n}\ngenerator redacted {\n  provider = "hyde-db"\n}\n',
     )
-    expect(apply(db, empty['ai-views.sql']).status).toBe(0)
+    expect(apply(db, empty['redacted-views.sql']).status).toBe(0)
   })
 })
 
 describe('cluster', () => {
-  it('A14: ai_reader can connect to another database in the cluster through PUBLIC CONNECT', async () => {
+  it('A14: redacted_reader can connect to another database in the cluster through PUBLIC CONNECT', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const other = `${db.name}_other`
@@ -235,7 +237,7 @@ describe('cluster', () => {
       await adminQuery('postgres', `REVOKE CONNECT ON DATABASE ${other} FROM PUBLIC`)
       await expect(connectAsReader(db, other)).rejects.toMatchObject({ code: '42501' })
     } finally {
-      // Dropped before the AI role, so the role holds nothing in another database when the
+      // Dropped before the reader role, so the role holds nothing in another database when the
       // harness drops it.
       await adminQuery('postgres', `DROP DATABASE IF EXISTS ${other} WITH (FORCE)`)
     }
@@ -265,7 +267,7 @@ describe('cluster', () => {
   it('A31: a non-superuser owner with CREATEROLE cannot reset role attributes', async () => {
     const db = await freshDb()
     const owner = await managedOwner(db)
-    // The owner creates the AI role, as the script does on its first deploy.
+    // The owner creates the reader role, as the script does on its first deploy.
     expect(psql(db.name, `SET ROLE ${owner};\nCREATE ROLE "${db.role}" NOLOGIN;`).status).toBe(0)
     const result = psql(
       db.name,
@@ -278,7 +280,7 @@ describe('cluster', () => {
   it('D49: a non-superuser owner with CREATEROLE can apply the script', async () => {
     const db = await freshDb()
     const owner = await managedOwner(db)
-    const result = psql(db.name, `SET ROLE ${owner};\n${db.files['ai-views.sql']}`)
+    const result = psql(db.name, `SET ROLE ${owner};\n${db.files['redacted-views.sql']}`)
     expect(result.status, result.stderr).toBe(0)
     const reader = await connectAsReader(db)
     try {

@@ -1,9 +1,9 @@
 // Characterization case "loose": exercises the non-strict rules of the base
-// (global hidden default, @ai.default(visible), relation hints, a model without
+// (global hidden default, @hyde.default(visible), relation hints, a model without
 // visible columns, an explicitly visible sensitive name).
-generator ai {
+generator redacted {
   provider = "hyde-db"
-  output   = "./ai"
+  output   = "./redacted"
   strict   = "false"
 }
 
@@ -12,13 +12,13 @@ datasource db {
 }
 
 /// Product catalogue entry.
-/// @ai.default(visible)
+/// @hyde.default(visible)
 model Product {
   id          Int       @id
   title       String
   /// Price in cents
   priceCents  Int       @map("price_cents")
-  /// @ai.hidden
+  /// @hyde.hidden
   supplierRef String    @map("supplier_ref")
   tags        String[]
   status      Status
@@ -29,13 +29,13 @@ model Product {
 }
 
 model Category {
-  /// @ai.visible
+  /// @hyde.visible
   id           Int       @id
-  /// @ai.visible
+  /// @hyde.visible
   /// Display label
   label        String
   internalCode String    @map("internal_code")
-  /// @ai.visible
+  /// @hyde.visible
   /// Public support inbox
   supportEmail String    @map("support_email")
   products     Product[]

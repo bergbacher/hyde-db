@@ -1,5 +1,5 @@
-// Renders ai-views.sql: one transaction that recreates the AI schema with column-filtered
-// views, grants the AI role SELECT on exactly those views, and aborts if the role could
+// Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
+// views, grants the reader role SELECT on exactly those views, and aborts if the role could
 // reach anything else (D11, D13, D24, D49).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
@@ -12,7 +12,7 @@ export interface RenderInput {
 }
 
 /**
- * SQL listing who must lose a privilege: PUBLIC when it holds it, and the AI role when it owns
+ * SQL listing who must lose a privilege: PUBLIC when it holds it, and the reader role when it owns
  * the object (an owner holds its privileges with no ACL entry) or holds it directly. The role may
  * not exist yet when the fix is run (a failed first apply rolls back its creation), so it is only
  * named when it owns the object or has a direct grant.
@@ -31,7 +31,7 @@ function grantees(
   )
 }
 
-/** Role attributes the AI role must not have, as pg_roles columns, in the order the abort lists them (D49). */
+/** Role attributes the reader role must not have, as pg_roles columns, in the order the abort lists them (D49). */
 const ATTRIBUTES: readonly (readonly [column: string, name: string])[] = [
   ['rolsuper', 'SUPERUSER'],
   ['rolcreatedb', 'CREATEDB'],
@@ -56,7 +56,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
   const sequence = "format('%I.%I', n.nspname, c.relname)"
   return [
     '-- Safety check: abort if the role has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or',
-    '-- BYPASSRLS, can read any relation outside the AI schema (e.g. via PUBLIC grants or',
+    '-- BYPASSRLS, can read any relation outside the views schema (e.g. via PUBLIC grants or',
     '-- membership in another role), execute a SECURITY DEFINER function, read a sequence,',
     '-- or create objects in any schema.',
     'DO $$',
@@ -152,13 +152,13 @@ export function renderApplySql({ config, views }: RenderInput): string {
     '',
     `DROP SCHEMA IF EXISTS ${S} CASCADE;`,
     `CREATE SCHEMA ${S};`,
-    `COMMENT ON SCHEMA ${S} IS ${ql(`${SCHEMA_MARKER}. Read-only, PII-filtered views for AI/LLM access. Recreated on every deploy.`)};`,
+    `COMMENT ON SCHEMA ${S} IS ${ql(`${SCHEMA_MARKER}. Read-only views with sensitive columns removed. Recreated on every deploy.`)};`,
     '',
   )
 
   for (const view of views) {
     const cols = view.columns.map((c) => `  ${qi(c.column)}`).join(',\n')
-    // Views run with the owner's privileges (no security_invoker), so the AI
+    // Views run with the owner's privileges (no security_invoker), so the reader
     // role needs no rights on the underlying tables at all.
     out.push(
       `CREATE VIEW ${S}.${qi(view.name)} AS SELECT\n${cols}\nFROM ${qi(view.sourceSchema)}.${qi(view.source)};`,

@@ -1,5 +1,5 @@
-// Integration helpers: a fresh database and a unique AI role per test, psql inside the
-// database container (D43), and connections as the AI role.
+// Integration helpers: a fresh database and a unique reader role per test, psql inside the
+// database container (D43), and connections as the reader role.
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import pg from 'pg'
@@ -18,7 +18,7 @@ export interface PsqlResult {
 export interface TestDb {
   /** Database name; unique per test. */
   readonly name: string
-  /** AI role name; unique per test because roles are cluster-wide. */
+  /** reader role name; unique per test because roles are cluster-wide. */
   readonly role: string
   readonly password: string
   readonly files: OutputFiles
@@ -115,7 +115,7 @@ export async function adminQuery(
   }
 }
 
-/** Builds the example schema (or a variant of it) for the given AI role. */
+/** Builds the example schema (or a variant of it) for the given reader role. */
 export function buildFiles(role: string, schemaSource?: string): OutputFiles {
   const { datamodel, config } = parseSchema(
     schemaSource ?? readRepoFile('example', 'schema.prisma'),
@@ -154,7 +154,7 @@ export async function createTestDatabase(options: CreateOptions = {}): Promise<T
   }
 }
 
-/** Drops the database and the AI role (roles are cluster-wide and would leak across tests). */
+/** Drops the database and the reader role (roles are cluster-wide and would leak across tests). */
 export async function dropTestDatabase(db: TestDb): Promise<void> {
   await dropDatabaseAndRole(db.name, db.role)
 }
@@ -164,11 +164,11 @@ async function dropDatabaseAndRole(name: string, role: string): Promise<void> {
   await adminQuery('postgres', `DROP ROLE IF EXISTS "${role}"`)
 }
 
-export function apply(db: TestDb, sql: string = db.files['ai-views.sql']): PsqlResult {
+export function apply(db: TestDb, sql: string = db.files['redacted-views.sql']): PsqlResult {
   return psql(db.name, sql)
 }
 
-/** Gives the AI role a password (the documented one-time step) and connects as it. */
+/** Gives the reader role a password (the documented one-time step) and connects as it. */
 export async function connectAsReader(db: TestDb, database: string = db.name): Promise<pg.Client> {
   await adminQuery('postgres', `ALTER ROLE "${db.role}" LOGIN PASSWORD '${db.password}'`)
   const client = new pg.Client({ connectionString: urlFor(database, db.role, db.password) })

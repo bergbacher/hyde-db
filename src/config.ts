@@ -13,8 +13,8 @@ export const CONFIG_KEYS: readonly string[] = [
 ]
 
 export const DEFAULT_CONFIG: ResolvedConfig = {
-  schema: 'ai',
-  role: 'ai_reader',
+  schema: 'redacted',
+  role: 'redacted_reader',
   sourceSchema: 'public',
   default: 'hidden',
   strict: true,

@@ -1,16 +1,17 @@
 {
   "name": "hyde-db",
   "version": "0.0.0",
-  "description": "Prisma generator that turns /// @ai annotations into read-only, column-filtered PostgreSQL views and a locked-down role for AI tools",
+  "description": "Prisma generator that turns /// @hyde annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role",
   "keywords": [
     "prisma",
     "prisma-generator",
     "postgresql",
-    "ai",
-    "llm",
-    "mcp",
+    "privacy",
     "pii",
-    "views"
+    "redaction",
+    "views",
+    "read-only",
+    "llm"
   ],
   "license": "MIT",
   "type": "module",

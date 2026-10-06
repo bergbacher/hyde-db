@@ -5,10 +5,10 @@ const codes = (raw: Record<string, unknown>): string[] =>
   validateConfig(raw).diagnostics.map((d) => d.code)
 
 describe('config validation', () => {
-  it('D54: defaults are schema ai, role ai_reader, source public, hidden, strict, 15s', () => {
+  it('D54: defaults are schema redacted, role redacted_reader, source public, hidden, strict, 15s', () => {
     expect(DEFAULT_CONFIG).toEqual({
-      schema: 'ai',
-      role: 'ai_reader',
+      schema: 'redacted',
+      role: 'redacted_reader',
       sourceSchema: 'public',
       default: 'hidden',
       strict: true,
@@ -19,8 +19,8 @@ describe('config validation', () => {
 
   it('accepts every valid key as Prisma passes it (strings)', () => {
     const { config, diagnostics } = validateConfig({
-      schema: 'llm',
-      role: 'llm_reader',
+      schema: 'safe',
+      role: 'safe_reader',
       sourceSchema: 'app',
       default: 'visible',
       strict: 'false',
@@ -28,8 +28,8 @@ describe('config validation', () => {
     })
     expect(diagnostics).toEqual([])
     expect(config).toEqual({
-      schema: 'llm',
-      role: 'llm_reader',
+      schema: 'safe',
+      role: 'safe_reader',
       sourceSchema: 'app',
       default: 'visible',
       strict: false,
@@ -69,8 +69,8 @@ describe('config validation', () => {
     expect(validateConfig({ default: 'hiden' }).diagnostics[0]?.message).toBe(
       'config "default" must be "hidden" or "visible", got "hiden" (did you mean "hidden"?)',
     )
-    expect(codes({ schema: 'AI' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
-    expect(codes({ role: 'ai-reader' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
+    expect(codes({ schema: 'REDACTED' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
+    expect(codes({ role: 'redacted-reader' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
     expect(codes({ sourceSchema: '' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
     expect(codes({ statementTimeout: '15 hours' })).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
     expect(codes({ statementTimeout: '1min' })).toEqual([])
@@ -82,10 +82,10 @@ describe('config validation', () => {
   })
 
   it('A22: a list value or an env("X") literal is an invalid value', () => {
-    expect(validateConfig({ schema: ['ai'] }).diagnostics[0]?.message).toBe(
-      'config "schema" must be a lowercase SQL identifier of at most 63 characters, got ["ai"]',
+    expect(validateConfig({ schema: ['redacted'] }).diagnostics[0]?.message).toBe(
+      'config "schema" must be a lowercase SQL identifier of at most 63 characters, got ["redacted"]',
     )
-    expect(validateConfig({ schema: 'AI_SCHEMA' }).diagnostics[0]?.hint).toContain(
+    expect(validateConfig({ schema: 'VIEWS_SCHEMA' }).diagnostics[0]?.hint).toContain(
       'env() is not supported',
     )
   })
@@ -94,7 +94,7 @@ describe('config validation', () => {
     const { config, diagnostics } = validateConfig({
       strickt: 'true',
       default: 'hiden',
-      schema: 'AI',
+      schema: 'REDACTED',
       statementTimeout: 'soon',
     })
     expect(diagnostics.map((d) => d.location)).toEqual([
@@ -107,8 +107,8 @@ describe('config validation', () => {
   })
 
   it('A19: reports in a canonical order whatever order Prisma delivers the keys in', () => {
-    const forward = validateConfig({ zeta: '1', schema: 'AI', alpha: '2', role: 'R' })
-    const backward = validateConfig({ role: 'R', alpha: '2', schema: 'AI', zeta: '1' })
+    const forward = validateConfig({ zeta: '1', schema: 'REDACTED', alpha: '2', role: 'R' })
+    const backward = validateConfig({ role: 'R', alpha: '2', schema: 'REDACTED', zeta: '1' })
     expect(forward).toEqual(backward)
     expect(forward.diagnostics.map((d) => d.location)).toEqual([
       'config.schema',

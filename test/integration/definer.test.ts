@@ -1,4 +1,4 @@
-// A3 / D13: SECURITY DEFINER functions and sequences the AI role could reach.
+// A3 / D13: SECURITY DEFINER functions and sequences the reader role could reach.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -23,7 +23,7 @@ const PEEK = `CREATE FUNCTION public.peek(n integer) RETURNS text LANGUAGE sql S
   AS 'SELECT email FROM public.users ORDER BY id LIMIT n'`
 
 describe('SECURITY DEFINER functions', () => {
-  it('A3: ai_reader can execute a SECURITY DEFINER function in public through PUBLIC defaults', async () => {
+  it('A3: redacted_reader can execute a SECURITY DEFINER function in public through PUBLIC defaults', async () => {
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, PEEK)
     const reader = await connectAsReader(db)
