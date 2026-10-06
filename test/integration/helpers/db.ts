@@ -202,10 +202,68 @@ export function suggestedFix(result: PsqlResult): string {
   return match[1]
 }
 
-/** Pastes the fix an aborted apply printed, verbatim, then re-applies; both must succeed. */
-export function pasteFixAndReapply(db: TestDb, failed: PsqlResult): void {
+/**
+ * Every privilege in the ACLs the final check reads in a database, one per entry and privilege, as
+ * `<object>: <grantee>=<privilege>[*]/<grantor>` (empty grantee for PUBLIC, `*` for the grant
+ * option): relations, their columns, routines, schemas, the database, foreign servers and large
+ * objects, catalog objects included. A NULL ACL counts as the default ACL it stands for.
+ */
+export async function aclEntries(database: string): Promise<Set<string>> {
+  const acls = `SELECT format('relation %s', c.oid::regclass) AS object, coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner)) AS acl FROM pg_class c
+     UNION ALL SELECT format('column %s.%I', c.oid::regclass, att.attname), att.attacl
+       FROM pg_class c JOIN pg_attribute att ON att.attrelid = c.oid WHERE att.attnum > 0 AND NOT att.attisdropped
+     UNION ALL SELECT format('routine %s', p.oid::regprocedure), coalesce(p.proacl, acldefault('f', p.proowner)) FROM pg_proc p
+     UNION ALL SELECT format('schema %I', n.nspname), coalesce(n.nspacl, acldefault('n', n.nspowner)) FROM pg_namespace n
+     UNION ALL SELECT format('database %I', d.datname), coalesce(d.datacl, acldefault('d', d.datdba))
+       FROM pg_database d WHERE d.datname = current_database()
+     UNION ALL SELECT format('server %I', s.srvname), coalesce(s.srvacl, acldefault('S', s.srvowner)) FROM pg_foreign_server s
+     UNION ALL SELECT format('large object %s', l.oid), coalesce(l.lomacl, acldefault('L', l.lomowner)) FROM pg_largeobject_metadata l`
+  const rows = await adminQuery(
+    database,
+    `SELECT format('%s: %s=%s%s/%s', o.object, CASE WHEN a.grantee = 0 THEN '' ELSE a.grantee::regrole::text END,
+              a.privilege_type, CASE WHEN a.is_grantable THEN '*' ELSE '' END, a.grantor::regrole) AS entry
+       FROM (${acls}) o CROSS JOIN LATERAL aclexplode(o.acl) a`,
+  )
+  return new Set(rows.map((row) => String(row.entry)))
+}
+
+/** Whether an ACL entry (`grantee=privilege/grantor`) is granted to or by `role`, or to PUBLIC. */
+function refused(entry: string, role: string): boolean {
+  const item = entry.slice(entry.indexOf(': ') + 2)
+  return item.startsWith('=') || item.startsWith(`${role}=`) || item.endsWith(`/${role}`)
+}
+
+export interface PasteOptions {
+  /** Entries the fix may also remove: orphaned pass-ons (D125), as `aclEntries` writes them. */
+  readonly orphans?: readonly string[]
+  /** Skip the ACL comparison, for fixes that change ownership rather than revoke (REASSIGN OWNED). */
+  readonly ownership?: boolean
+}
+
+/**
+ * Pastes the fix an aborted apply printed, verbatim, then re-applies; both must succeed. The fix
+ * may remove only the ACL entries that let the reader or PUBLIC in, the grants the reader made
+ * itself, and the given orphans; every other entry stays exactly as it was (D128).
+ */
+export async function pasteFixAndReapply(
+  db: TestDb,
+  failed: PsqlResult,
+  options: PasteOptions = {},
+): Promise<void> {
+  const before = await aclEntries(db.name)
   const pasted = psql(db.name, suggestedFix(failed))
   expect(pasted.status, pasted.stderr).toBe(0)
+  if (!options.ownership) {
+    const after = await aclEntries(db.name)
+    const removed = [...before].filter((entry) => !after.has(entry))
+    const added = [...after].filter((entry) => !before.has(entry))
+    expect(added, 'the fix added ACL entries').toEqual([])
+    const orphans = new Set(options.orphans)
+    expect(
+      removed.filter((entry) => !refused(entry, db.role) && !orphans.has(entry)),
+      'the fix removed ACL entries other than the refused ones',
+    ).toEqual([])
+  }
   const reapplied = apply(db)
   expect(reapplied.status, reapplied.stderr).toBe(0)
 }

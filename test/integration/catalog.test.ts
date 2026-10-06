@@ -70,7 +70,7 @@ describe('catalog privileges', () => {
         `^REVOKE EXECUTE ON ROUTINE pg_catalog\\.pg_read_binary_file\\([a-z ]*text\\) FROM ${db.role} CASCADE;$`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D81: SELECT on pg_statistic for the reader and PUBLIC aborts apply, and the printed REVOKEs fix it', async () => {
@@ -85,7 +85,7 @@ describe('catalog privileges', () => {
         `REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM PUBLIC CASCADE; REVOKE SELECT ON TABLE pg_catalog.pg_statistic FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D81: column privileges on pg_authid and SELECT on an internal information_schema view abort apply', async () => {
@@ -106,7 +106,7 @@ describe('catalog privileges', () => {
         `REVOKE SELECT ON TABLE information_schema._pg_user_mappings FROM PUBLIC CASCADE; REVOKE SELECT (rolname), SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A63, D81: USAGE on pg_toast and SELECT on a toast table abort apply, and the printed REVOKEs fix it', async () => {
@@ -128,7 +128,7 @@ describe('catalog privileges', () => {
         `REVOKE USAGE ON SCHEMA pg_toast FROM ${db.role} CASCADE; REVOKE SELECT ON TABLE ${toast?.name} FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A69, D108: a column privilege the reader passed on from its pg_authid grant is revoked as the reader before its own grant', async () => {
@@ -141,7 +141,7 @@ describe('catalog privileges', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsPasswords(db)).toBe(false)
   })
 
@@ -158,7 +158,7 @@ describe('catalog privileges', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`GRANT SELECT (rolpassword) ON TABLE pg_catalog.pg_authid TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsPasswords(db)).toBe(false)
   })
 })

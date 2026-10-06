@@ -129,6 +129,6 @@ describe('CREATE on the database', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} can create schemas in database ${db.name}. Fix: REVOKE CREATE ON DATABASE ${db.name} FROM PUBLIC, ${db.role} CASCADE;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 })

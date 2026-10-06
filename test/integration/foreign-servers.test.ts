@@ -46,7 +46,7 @@ describe('foreign servers', () => {
       expect(failed.stderr).toContain(
         `role ${db.role} can use foreign servers: loop. Fix: REVOKE USAGE ON FOREIGN SERVER loop FROM PUBLIC CASCADE;`,
       )
-      pasteFixAndReapply(db, failed)
+      await pasteFixAndReapply(db, failed)
       await expect(reader.query(FOREIGN_TABLE)).rejects.toMatchObject({ code: '42501' })
     } finally {
       await reader.end()

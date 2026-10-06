@@ -44,7 +44,7 @@ describe('relation fix', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} can read relations outside schema redacted: public.users. Fix: REVOKE ALL ON public.users FROM PUBLIC CASCADE;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D108: relations the role holds a grant on are listed in schema and relation order, each with its REVOKE', async () => {
@@ -66,7 +66,7 @@ describe('relation fix', () => {
         `REVOKE ALL ON billing.cards FROM ${db.role} CASCADE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE; REVOKE ALL ON public.orders FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D108: column grants are revoked with the whole relation, from PUBLIC and the role', async () => {
@@ -87,7 +87,7 @@ describe('relation fix', () => {
     expect(suggestedFix(failed)).toBe(
       `REVOKE ALL ON billing.cards FROM PUBLIC, ${db.role} CASCADE;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D108: a table grant and column grants on one relation are revoked by one statement', async () => {
@@ -100,7 +100,7 @@ describe('relation fix', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toBe(`REVOKE ALL ON public.users FROM PUBLIC, ${db.role} CASCADE;`)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     const reader = await connectAsReader(db)
     try {
       await expect(reader.query('SELECT email FROM public.users')).rejects.toMatchObject({
@@ -122,7 +122,7 @@ describe('relation fix', () => {
         `REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE; REVOKE ALL ON public.orders FROM ${db.role} CASCADE; REVOKE ALL ON public.users FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     const reader = await connectAsReader(db)
     try {
       // Out of the read-only default, so the privilege check is what refuses the statements.
@@ -151,7 +151,7 @@ describe('relation fix', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} can read relations outside schema redacted: public.users. Fix: REVOKE ALL ON public.users FROM ${db.role} CASCADE;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A54, D108: a privilege the reader passed on WITH GRANT OPTION needs CASCADE, which the fix includes', async () => {
@@ -170,7 +170,7 @@ describe('relation fix', () => {
     const withoutCascade = psql(db.name, fix.replace(' CASCADE;', ';'))
     expect(withoutCascade.status).toBe(3)
     expect(withoutCascade.stderr).toContain('dependent privileges exist')
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A56, D108: a grant from a third-party grantor is revoked as that grantor', async () => {
@@ -190,7 +190,7 @@ describe('relation fix', () => {
     // A superuser's own REVOKE acts as the owner and leaves the grantor's grant in place (A56).
     expect(psql(db.name, `REVOKE ALL ON public.api_keys FROM "${db.role}" CASCADE`).status).toBe(0)
     expect(apply(db).status).toBe(3)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   /** Whether PUBLIC can read public.api_keys.secret. */
@@ -215,7 +215,7 @@ describe('relation fix', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
   })
 
@@ -235,7 +235,7 @@ describe('relation fix', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
   })
 
@@ -255,7 +255,7 @@ describe('relation fix', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`GRANT SELECT (secret) ON public.api_keys TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
   })
 
@@ -279,7 +279,7 @@ describe('relation fix', () => {
     )
     expect(asGrantorWithAll.status).toBe(3)
     expect(asGrantorWithAll.stderr).toContain('permission denied for column')
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   /** The table-level and column ACLs of public.api_keys, to show a failed paste changed nothing. */
@@ -319,7 +319,7 @@ describe('relation fix', () => {
     expect(broken.status).toBe(3)
     expect(broken.stderr).toContain('division by zero')
     expect(await apiKeysAcls(db)).toEqual(before)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
     const [row] = await adminQuery(
       db.name,
@@ -343,7 +343,7 @@ describe('relation fix', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
   /** A third party that belongs to a group holding ALL on public.api_keys WITH GRANT OPTION. */
   async function grantorInGroup(db: TestDb): Promise<{ grantor: string; group: string }> {
@@ -362,7 +362,7 @@ describe('relation fix', () => {
     )
   }
 
-  it('A87, D122: a column grant passed on by a grantor whose own option is gone, while its group holds one, is revoked after giving the grantor back its own option', async () => {
+  it('A87, D127: a column grant passed on by a grantor whose own option is gone, while its group holds one on the table, is revoked with the option lent by the owner', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const { grantor, group } = await grantorInGroup(db)
@@ -382,15 +382,17 @@ describe('relation fix', () => {
     const groupBefore = await tableEntries(db, group)
     const failed = apply(db)
     expect(failed.status).toBe(3)
+    // The group holds its option on the table, not on the column, and PostgreSQL checks a column
+    // grant option against the column's own ACL; so the owner lends it.
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`GRANT SELECT (secret) ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (secret) ON public.api_keys FROM ${grantor} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
     expect(await tableEntries(db, group)).toEqual(groupBefore)
   })
 
-  it('A87, D122: a grantor that holds its own option revokes exactly what it passed on, so a group with more options cannot act for it', async () => {
+  it('A87, D127: a grantor that holds its own option revokes exactly what it passed on, so a group with more options cannot act for it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const { grantor } = await grantorInGroup(db)
@@ -411,11 +413,11 @@ describe('relation fix', () => {
     )
     expect(asGroup.status, asGroup.stderr).toBe(0)
     expect(await publicReadsSecret(db)).toBe(true)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await publicReadsSecret(db)).toBe(false)
   })
 
-  it('A87, D122: a table grant passed on by a grantor whose own option is gone, while its group holds one, is revoked after giving the grantor back its own option', async () => {
+  it('A87, A90, D127: a table grant passed on by a grantor whose own option is gone, while its group holds one, is revoked with an option borrowed from the group', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const { grantor, group } = await grantorInGroup(db)
@@ -433,9 +435,9 @@ describe('relation fix', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toBe(
-      `${inOneTransaction(`GRANT SELECT ON public.api_keys TO ${grantor} WITH GRANT OPTION; SET ROLE ${grantor}; REVOKE SELECT ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE; REVOKE SELECT ON public.api_keys FROM ${grantor} CASCADE;`)}${AS_SUPERUSER}`,
+      `${inOneTransaction(`SET ROLE ${group}; GRANT SELECT ON public.api_keys TO ${grantor} WITH GRANT OPTION; RESET ROLE; SET ROLE ${grantor}; REVOKE SELECT ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE; SET ROLE ${group}; REVOKE SELECT ON public.api_keys FROM ${grantor} CASCADE; RESET ROLE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await tableEntries(db, db.role)).toEqual([])
     expect(await tableEntries(db, group)).toEqual(groupBefore)
   })
@@ -455,7 +457,7 @@ describe('sequence fix', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} can read sequences: public.orders_id_seq. Fix: REVOKE ALL ON SEQUENCE public.orders_id_seq FROM ${db.role} CASCADE;\n`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D13, D108: USAGE on a sequence from a third-party grantor is revoked as that grantor, exactly: REVOKE ALL as it fails', async () => {
@@ -478,7 +480,7 @@ describe('sequence fix', () => {
     )
     expect(asGrantorWithAll.status).toBe(3)
     expect(asGrantorWithAll.stderr).toContain('permission denied for column')
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A83, D111: a column grant on a sequence aborts apply, and the printed REVOKE fixes it', async () => {
@@ -490,7 +492,7 @@ describe('sequence fix', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} can read sequences: public.orders_id_seq. Fix: REVOKE ALL ON SEQUENCE public.orders_id_seq FROM ${db.role} CASCADE;\n`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     const [row] = await adminQuery(
       db.name,
       `SELECT has_any_column_privilege('${db.role}', 'public.orders_id_seq', 'SELECT') AS can`,
@@ -511,7 +513,7 @@ describe('sequence fix', () => {
     expect(suggestedFix(failed)).toBe(
       `${inOneTransaction(`SET ROLE ${db.role}; REVOKE SELECT (last_value) ON public.orders_id_seq FROM PUBLIC CASCADE; RESET ROLE; REVOKE ALL ON SEQUENCE public.orders_id_seq FROM ${db.role} CASCADE;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
   it('A88, D124: a temporary sequence that the reader holds open does not block the deploy', async () => {
     const db = await freshDb()
@@ -551,7 +553,7 @@ describe('membership fix', () => {
         `REVOKE "${upper}" FROM ${db.role}${grantedBy} CASCADE; REVOKE ${lower} FROM ${db.role}${grantedBy} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A54, D108: a membership granted by a non-superuser role with ADMIN is ended by the printed fix', async () => {
@@ -569,7 +571,7 @@ describe('membership fix', () => {
     // PostgreSQL 14 keeps one membership row whatever the grantor, and a plain REVOKE ends it.
     const grantedBy = (await serverVersion(db.name)) >= 160000 ? ` GRANTED BY ${admin}` : ''
     expect(suggestedFix(failed)).toBe(`REVOKE ${group} FROM ${db.role}${grantedBy} CASCADE;`)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A56, D108: a membership the reader passed on WITH ADMIN OPTION is ended by the printed fix', async () => {
@@ -585,6 +587,6 @@ describe('membership fix', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(suggestedFix(failed)).toMatch(/ CASCADE;$/)
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 })

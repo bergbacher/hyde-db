@@ -44,7 +44,7 @@ describe('ownership', () => {
       const failed = apply(db)
       expect(failed.status).toBe(3)
       expect(failed.stderr).toContain(ownsObjects(db, 'table public.api_keys'))
-      pasteFixAndReapply(db, failed)
+      await pasteFixAndReapply(db, failed, { ownership: true })
       await expect(
         reader.query(`GRANT SELECT ON public.api_keys TO "${db.role}"`),
       ).rejects.toMatchObject({ code: '42501' })
@@ -75,7 +75,7 @@ describe('ownership', () => {
       const failed = apply(db)
       expect(failed.status).toBe(3)
       expect(failed.stderr).toContain(ownsObjects(db, 'type public.secret_t'))
-      pasteFixAndReapply(db, failed)
+      await pasteFixAndReapply(db, failed, { ownership: true })
       await expect(
         reader.query('ALTER DOMAIN public.secret_t ADD CONSTRAINT peek CHECK (VALUE::integer > 0)'),
       ).rejects.toMatchObject({ code: '42501' })
@@ -108,7 +108,7 @@ describe('ownership', () => {
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(ownsObjects(db, `database ${db.name}`))
     expect(failed.stderr).not.toContain('FROM ;')
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed, { ownership: true })
     expect(
       await adminQuery(
         'postgres',
@@ -138,7 +138,7 @@ describe('ownership', () => {
         'function public.answer(), schema scratch, sequence public.orders_id_seq, sequence public.tickets_seq, table public.orders, type public."Plan"',
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed, { ownership: true })
   })
 
   it("D82: the reader's own temporary tables are not refused", async () => {

@@ -53,7 +53,7 @@ describe('large objects', () => {
         `REVOKE ALL ON LARGE OBJECT ${first?.oid} FROM PUBLIC CASCADE; REVOKE ALL ON LARGE OBJECT ${second?.oid} FROM ${db.role} CASCADE;`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D109: lo_compat_privileges set for the database aborts apply, and the printed fix resets it', async () => {
@@ -64,7 +64,7 @@ describe('large objects', () => {
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${db.role}: database ${db.name}. Fix: ALTER DATABASE ${db.name} RESET lo_compat_privileges;${SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it("A61, D109: lo_compat_privileges set for the reader's role, also in this database, aborts apply though the applying session does not see it", async () => {
@@ -80,7 +80,7 @@ describe('large objects', () => {
     expect(failed.stderr).toContain(
       `${COMPAT} for role ${db.role}: role ${db.role}, role ${db.role} in database ${db.name}. Fix: ${inOneTransaction(`ALTER ROLE ${db.role} RESET lo_compat_privileges; ALTER ROLE ${db.role} IN DATABASE ${db.name} RESET lo_compat_privileges;`)}${AS_SUPERUSER}`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 })
 
@@ -235,6 +235,18 @@ describe('lo_compat_privileges on the server command line', () => {
     expect(setup.status, setup.stderr).toBe(0)
   }
 
+  /** The server's `server_version_num`. */
+  function version(): number {
+    const shown = run("SELECT 'version=' || current_setting('server_version_num');")
+    return Number(/version=(\d+)/.exec(shown.stdout)?.[1])
+  }
+  /** The ADMIN grant the first-deploy fix gives a deployer that is not a superuser (D123). */
+  function adminGrant(reader: string): string {
+    // On PostgreSQL 16+ the deployer gets no INHERIT or SET on the reader, as with CREATEROLE's own grant.
+    const options = version() >= 160000 ? ', INHERIT FALSE, SET FALSE' : ''
+    return `GRANT ${reader} TO ${deployer} WITH ADMIN OPTION${options}; `
+  }
+
   it("A89, D123: on a first deploy by a non-superuser deployer, the fix also grants it ADMIN on the reader it creates again, so the deployer's re-apply can set the reader's settings", () => {
     managedDeployer()
     const reader = 'hyde_cmdline_owned_reader'
@@ -242,7 +254,7 @@ describe('lo_compat_privileges on the server command line', () => {
     const failed = run(ownScript, deployer)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(
-      `${COMPAT} for role ${reader}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${reader} NOLOGIN; GRANT ${reader} TO ${deployer} WITH ADMIN OPTION; ALTER ROLE ${reader} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
+      `${COMPAT} for role ${reader}: the server command line. Fix: ${inOneTransaction(`CREATE ROLE ${reader} NOLOGIN; ${adminGrant(reader)}ALTER ROLE ${reader} SET lo_compat_privileges = off;`)}${AS_SUPERUSER}`,
     )
     // A superuser pastes it verbatim; then the deployer's own re-apply passes.
     expect(run(suggestedFix(failed)).status).toBe(0)
@@ -256,17 +268,12 @@ describe('lo_compat_privileges on the server command line', () => {
     const ownScript = buildFiles(reader)['redacted-views.sql']
     const failed = run(ownScript, deployer)
     expect(failed.status).toBe(3)
-    const grant = `GRANT ${reader} TO ${deployer} WITH ADMIN OPTION; `
+    const grant = adminGrant(reader)
     const fix = suggestedFix(failed)
     expect(fix).toContain(grant)
     expect(run(fix.replace(grant, '')).status).toBe(0)
     const reapplied = run(ownScript, deployer)
-    const version = Number(
-      /version=(\d+)/.exec(
-        run("SELECT 'version=' || current_setting('server_version_num');").stdout,
-      )?.[1],
-    )
-    if (version >= 160000) {
+    if (version() >= 160000) {
       expect(reapplied.status).toBe(3)
       expect(reapplied.stderr).toContain('permission denied to alter role')
     } else {

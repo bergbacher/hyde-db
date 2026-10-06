@@ -54,6 +54,11 @@ describe('apply SQL', () => {
     expect(sql).toContain("\nBEGIN;\nSET LOCAL lock_timeout = '60s';\n")
   })
 
+  it('turns JIT off for its own transaction, which would compile the final check on every deploy', () => {
+    expect(sql).toContain("\nBEGIN;\nSET LOCAL lock_timeout = '60s';\nSET LOCAL jit = off;\n")
+    expect(sql.match(/jit/g)).toHaveLength(1)
+  })
+
   it('D69: does not revoke anything in the source schema itself', () => {
     expect(sql).not.toContain('REVOKE ALL ON SCHEMA')
     expect(sql).not.toContain('REVOKE ALL ON ALL TABLES IN SCHEMA')
@@ -101,19 +106,32 @@ describe('apply SQL', () => {
       `RAISE EXCEPTION '${BRAND}: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, ${PRINTED};`,
     )
     expect(relationCheck).toContain("format('ALL ON %s', format('%I.%I', n.nspname, c.relname))")
+    // A NULL ACL stands for the default one, so the merged ACL is never an empty array (A88).
     expect(relationCheck).toContain(
-      'aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped))',
+      "aclexplode(coalesce(c.relacl, acldefault('r', c.relowner)) || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped))",
     )
     expect(relationCheck).toMatch(/\), ' ' ORDER BY n\.nspname, c\.relname\)\n/)
     expect(relationCheck).not.toContain('REVOKE SELECT')
     expect(sql).not.toContain('ORDER BY 1)')
   })
 
-  it('D108: a fix of objects without columns revokes as each grantor other than the owner and the reader, with CASCADE', () => {
-    for (const owner of ['p.proowner', 'n.nspowner', 'd.datdba', 'l.lomowner', 'fs.srvowner']) {
+  const ROUTINE =
+    "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
+  /** Objects without columns: owner, ACL, and how fixes name them. */
+  const OBJECTS: readonly (readonly [owner: string, acl: string, object: string])[] = [
+    ['d.datdba', 'd.datacl', "format('DATABASE %I', d.datname)"],
+    ['fs.srvowner', 'fs.srvacl', "format('FOREIGN SERVER %I', fs.srvname)"],
+    ['p.proowner', 'p.proacl', `format('ROUTINE %s', ${ROUTINE})`],
+    ['n.nspowner', 'n.nspacl', "format('SCHEMA %I', n.nspname)"],
+    ['l.lomowner', 'l.lomacl', "format('LARGE OBJECT %s', l.oid)"],
+  ]
+
+  it('A91, D127: a fix of objects without columns revokes, as each grantor other than the owner and the reader, exactly the privileges it granted, with CASCADE', () => {
+    for (const [owner, acl, object] of OBJECTS) {
       expect(sql).toContain(
         `AND a.grantee IN (0, r.oid) AND a.grantor <> ${owner} AND a.grantor <> r.oid) g`,
       )
+      expect(sql).toContain(exactly(object, '', acl).split(' AND x.privilege_type IN (')[0])
     }
     for (const owner of [
       'c.relowner',
@@ -126,9 +144,7 @@ describe('apply SQL', () => {
       expect(sql).toContain(`AND a.grantee = 0 AND a.grantor = ${owner})`)
       expect(sql).toContain(`r.oid = ${owner} OR EXISTS (`)
     }
-    expect(sql).toContain(
-      "format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('CREATE ON DATABASE %I', d.datname), t.grantees)",
-    )
+    expect(sql).not.toContain("format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;'")
     expect(sql).toContain("|| ' CASCADE;')")
     // Every REVOKE on an object ends in CASCADE; ALTER DEFAULT PRIVILEGES revokes no grants.
     expect(sql).not.toMatch(/'REVOKE [^']*FROM %s;'/)
@@ -149,21 +165,24 @@ describe('apply SQL', () => {
   })
 
   /** The REVOKE of exactly the table privileges a grantor other than the reader granted on `object`. */
-  const exactly = (object: string, privileges: string): string =>
-    `CASE WHEN t.grantor <> r.oid THEN (SELECT format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(DISTINCT x.privilege_type, ', ' ORDER BY x.privilege_type), ${object}, t.grantees) ` +
-    `FROM aclexplode(c.relacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privileges}) HAVING count(*) > 0) END`
+  function exactly(object: string, privileges: string, acl = 'c.relacl'): string {
+    return (
+      `CASE WHEN t.grantor <> r.oid THEN (SELECT format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(DISTINCT x.privilege_type, ', ' ORDER BY x.privilege_type), ${object}, t.grantees) ` +
+      `FROM aclexplode(${acl}) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privileges}) HAVING count(*) > 0) END`
+    )
+  }
   /** The REVOKE, as a grantor, of exactly the column privileges it granted (A87). */
   const onColumns =
     `(SELECT format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(o.item, ', ' ORDER BY o.attnum, o.privilege_type), ${RELATION}, t.grantees) ` +
     "FROM (SELECT DISTINCT att.attnum, x.privilege_type, format('%s (%I)', x.privilege_type, att.attname) AS item FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) x " +
     'WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND x.grantor = t.grantor AND x.grantee IN (0, r.oid)) o HAVING count(*) > 0)'
 
-  it('A87, D122: a grantor revokes exactly the table privileges it granted, then exactly the column privileges it granted', () => {
+  it('A87, D127: a grantor revokes exactly the table privileges it granted, then exactly the column privileges it granted', () => {
     expect(relationCheck).toContain(`concat_ws(' ', ${exactly(RELATION, TABLE)}, ${onColumns})`)
     expect(sql).not.toContain('REVOKE ALL (')
   })
 
-  it('A83, A87, D111, D122: a grantor revokes exactly the sequence privileges it granted, then exactly the column privileges', () => {
+  it('A83, A87, D111, D127: a grantor revokes exactly the sequence privileges it granted, then exactly the column privileges', () => {
     expect(sql).toContain(
       `concat_ws(' ', ${exactly(`format('SEQUENCE %s', ${RELATION})`, SEQUENCE)}, ${onColumns})`,
     )
@@ -172,35 +191,85 @@ describe('apply SQL', () => {
   /** Whether grantor `who` itself holds `privilege` with the grant option in `acl` (A87). */
   const ownOption = (acl: string, who: string, privilege: string): string =>
     `EXISTS (SELECT 1 FROM aclexplode(${acl}) h WHERE h.grantee = ${who} AND h.privilege_type = ${privilege} AND h.is_grantable)`
-  /** Whether grantor `who` holds `privilege` in `acl` from the owner. */
-  const fromOwner = (acl: string, who: string, privilege: string): string =>
-    `EXISTS (SELECT 1 FROM aclexplode(${acl}) h WHERE h.grantee = ${who} AND h.grantor = c.relowner AND h.privilege_type = ${privilege})`
-  /** Grants by grantor `t.grantor` whose grant option it no longer holds itself (A69, A87). */
-  const lost = (privileges: string): string =>
-    `SELECT 0 AS attnum, x.privilege_type, x.privilege_type AS item, ${fromOwner('c.relacl', 't.grantor', 'x.privilege_type')} AS held ` +
-    `FROM aclexplode(c.relacl) x WHERE t.grantor <> r.oid AND x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privileges}) ` +
-    `AND NOT ${ownOption('c.relacl', 't.grantor', 'x.privilege_type')} ` +
-    `UNION SELECT att.attnum, x.privilege_type, format('%s (%I)', x.privilege_type, att.attname), ${fromOwner('att.attacl', 't.grantor', 'x.privilege_type')} ` +
-    'FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) x WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND x.grantor = t.grantor AND x.grantee IN (0, r.oid) ' +
-    `AND NOT ${ownOption('c.relacl || att.attacl', 't.grantor', 'x.privilege_type')}`
+  /** A role other than `who`, the owner and the reader that `who` has the privileges of, holding `privilege` with the grant option in `acl` (A90). */
+  const masking = (acl: string, who: string, privilege: string, owner: string): string =>
+    `(SELECT min(h.grantee) FROM aclexplode(${acl}) h WHERE h.privilege_type = ${privilege} AND h.is_grantable AND h.grantee NOT IN (0, ${who}, ${owner}, r.oid) AND pg_has_role(${who}, h.grantee, 'USAGE'))`
+  /** Pass-ons by `t.grantor` whose grant option it no longer holds itself, each with the role that lends it (A87, A90). */
+  function lost(acl: string, owner: string, privileges: string, columns: boolean): string {
+    const objectLevel =
+      `SELECT 0 AS attnum, x.privilege_type, x.privilege_type AS item, b.lender, EXISTS (SELECT 1 FROM aclexplode(${acl}) h WHERE h.grantee = t.grantor AND h.grantor = b.lender AND h.privilege_type = x.privilege_type) AS held ` +
+      `FROM aclexplode(${acl}) x CROSS JOIN LATERAL (SELECT coalesce(${masking(acl, 't.grantor', 'x.privilege_type', owner)}, ${owner}) AS lender) b ` +
+      `WHERE t.grantor <> r.oid AND x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privileges}) AND NOT ${ownOption(acl, 't.grantor', 'x.privilege_type')}`
+    if (!columns) return objectLevel
+    return (
+      `${objectLevel} UNION SELECT att.attnum, x.privilege_type, format('%s (%I)', x.privilege_type, att.attname), b.lender, ` +
+      'EXISTS (SELECT 1 FROM aclexplode(att.attacl) h WHERE h.grantee = t.grantor AND h.grantor = b.lender AND h.privilege_type = x.privilege_type) ' +
+      `FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) x CROSS JOIN LATERAL (SELECT coalesce(${masking('att.attacl', 't.grantor', 'x.privilege_type', owner)}, ${owner}) AS lender) b ` +
+      `WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND NOT ${ownOption('c.relacl || att.attacl', 't.grantor', 'x.privilege_type')}`
+    )
+  }
+  /** `sql` run as the lender `k.lender`; the pasting superuser already acts as the owner. */
+  const asLender = (owner: string, sql: string): string =>
+    `concat(CASE WHEN k.lender <> ${owner} THEN format('SET ROLE %s; ', k.lender::regrole) END, ${sql}, CASE WHEN k.lender <> ${owner} THEN ' RESET ROLE;' END)`
+  const items = (filter?: string): string =>
+    `string_agg(o.item, ', ' ORDER BY o.attnum, o.privilege_type)${filter ? ` FILTER (WHERE ${filter})` : ''}`
+  /** The loans before grantor `grantor` revokes: the exact options it lost, from their lenders. */
+  const borrow = (lostSql: string, grantor: string, owner: string, target: string): string =>
+    `(SELECT string_agg(${asLender(owner, `format('GRANT %s ON %s TO %s WITH GRANT OPTION;', k.items, ${target}, ${grantor}::regrole)`)}, ' ' ORDER BY k.lender) FROM (SELECT o.lender, ${items()} AS items FROM (${lostSql}) o GROUP BY o.lender) k)`
+  /** The column grants from the lender that a table-level REVOKE strips (A90), given back. */
+  const restore = (grantor: string, target: string, relation: string): string => {
+    const columns = (filter: string): string =>
+      `string_agg(format('%s (%I)', h.privilege_type, att.attname), ', ' ORDER BY att.attnum, h.privilege_type) FILTER (WHERE ${filter})`
+    return (
+      `nullif((SELECT concat_ws(' ', CASE WHEN bool_or(h.is_grantable) THEN format('GRANT %s ON %s TO %s WITH GRANT OPTION;', ${columns('h.is_grantable')}, ${target}, ${grantor}::regrole) END, ` +
+      `CASE WHEN bool_or(NOT h.is_grantable) THEN format('GRANT %s ON %s TO %s;', ${columns('NOT h.is_grantable')}, ${target}, ${grantor}::regrole) END) ` +
+      `FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) h WHERE att.attrelid = ${relation} AND att.attnum > 0 AND NOT att.attisdropped AND h.grantee = ${grantor} AND h.grantor = k.lender AND h.privilege_type = ANY (k.types)), '')`
+    )
+  }
+  /** The loans taken back after grantor `grantor` revoked, keeping what it held from the lender before. */
+  const giveBack = (
+    lostSql: string,
+    grantor: string,
+    owner: string,
+    target: string,
+    relation?: string,
+  ): string =>
+    `(SELECT string_agg(${asLender(owner, `concat_ws(' ', CASE WHEN k.held IS NOT NULL THEN format('REVOKE GRANT OPTION FOR %s ON %s FROM %s CASCADE;', k.held, ${target}, ${grantor}::regrole) END, CASE WHEN k.unheld IS NOT NULL THEN format('REVOKE %s ON %s FROM %s CASCADE;', k.unheld, ${target}, ${grantor}::regrole) END${relation ? `, ${restore(grantor, target, relation)}` : ''})`)}, ' ' ORDER BY k.lender) ` +
+    `FROM (SELECT o.lender, ${items('o.held')} AS held, ${items('NOT o.held')} AS unheld${relation ? ', array_agg(o.privilege_type) FILTER (WHERE o.attnum = 0) AS types' : ''} FROM (${lostSql}) o GROUP BY o.lender) k)`
 
-  it('A69, A82, A87, D108, D122: a grantor that no longer holds the grant option behind a pass-on itself gets back exactly that option, and loses it right after its own statements', () => {
+  it('A87, A90, D127: a relation grantor that lost the option behind a pass-on borrows exactly that option from the role that masks it, else from the owner, and gives it back right after', () => {
+    const lostSql = lost('c.relacl', 'c.relowner', TABLE, true)
     expect(relationCheck).toContain(
-      `format('%sSET ROLE %s; %s RESET ROLE;%s', (SELECT format('GRANT %s ON %s TO %s WITH GRANT OPTION; ', string_agg(o.item, ', ' ORDER BY o.attnum, o.privilege_type), ${RELATION}, t.grantor::regrole) FROM (${lost(TABLE)}) o HAVING count(*) > 0), t.grantor::regrole, `,
+      `format('%sSET ROLE %s; %s RESET ROLE;%s', ${borrow(lostSql, 't.grantor', 'c.relowner', RELATION)} || ' ', t.grantor::regrole, `,
     )
-    expect(sql).toContain(`FROM (${lost(SEQUENCE)}) o HAVING count(*) > 0)`)
-    // It keeps a privilege it held from the owner, without the option.
     expect(relationCheck).toContain(
-      `(SELECT concat(CASE WHEN bool_or(o.held) THEN format(' REVOKE GRANT OPTION FOR %s ON %s FROM %s CASCADE;', string_agg(o.item, ', ' ORDER BY o.attnum, o.privilege_type) FILTER (WHERE o.held), ${RELATION}, t.grantor::regrole) END, ` +
-        `CASE WHEN bool_or(NOT o.held) THEN format(' REVOKE %s ON %s FROM %s CASCADE;', string_agg(o.item, ', ' ORDER BY o.attnum, o.privilege_type) FILTER (WHERE NOT o.held), ${RELATION}, t.grantor::regrole) END) FROM (${lost(TABLE)}) o))`,
+      `' ' || ${giveBack(lostSql, 't.grantor', 'c.relowner', RELATION, 'c.oid')})`,
     )
+    expect(sql).toContain(lost('c.relacl', 'c.relowner', SEQUENCE, true))
     // Options inherited through a role the grantor belongs to do not count (A87).
     expect(sql).not.toContain('has_column_privilege')
   })
 
-  it('A82, D108: no fix grants ALL', () => {
+  it('A91, D127: a grantor of an object without columns borrows the option it lost in the same way', () => {
+    for (const [owner, acl, object] of OBJECTS) {
+      const privileges =
+        acl === 'l.lomacl'
+          ? "'SELECT', 'UPDATE'"
+          : acl === 'p.proacl'
+            ? "'EXECUTE'"
+            : acl === 'fs.srvacl'
+              ? "'USAGE'"
+              : "'CREATE'"
+      const lostSql = lost(acl, owner, privileges, false)
+      expect(sql).toContain(`${borrow(lostSql, 't.grantor', owner, object)} || ' '`)
+      expect(sql).toContain(`' ' || ${giveBack(lostSql, 't.grantor', owner, object)}`)
+    }
+  })
+
+  it('A82, D108, D127: no fix grants or revokes ALL as a grantor', () => {
     expect(sql).not.toContain('GRANT ALL')
     expect(sql).not.toContain("'GRANT ' || ")
+    expect(sql).not.toContain('REVOKE ALL (')
   })
 
   it('D13, D24, D76, D80, D109: definer functions, sequences, schemas, the database, large objects and foreign servers use the same fix', () => {
@@ -265,7 +334,7 @@ describe('apply SQL', () => {
     )
   })
 
-  const catalogCheck = check("SELECT string_agg(o.object, ', '", 'beyond their initial privileges')
+  const catalogCheck = check('  WITH e AS (', 'beyond their initial privileges')
 
   it('D81: refuses privileges of the role or PUBLIC beyond the initial ones in pg_catalog, information_schema and pg_toast, columns included', () => {
     expect(catalogCheck).toContain(
@@ -284,7 +353,7 @@ describe('apply SQL', () => {
 
   it('A63, D81: refuses privileges beyond the initial ones on the pg_catalog, information_schema and pg_toast schemas themselves', () => {
     expect(catalogCheck).toContain(
-      "UNION ALL SELECT format('%I', n.nspname), format('SCHEMA %I', n.nspname), a.privilege_type, a.grantee, a.grantor, n.nspowner",
+      "UNION ALL SELECT format('%I', n.nspname), format('SCHEMA %I', n.nspname), NULL::oid, 0, a.privilege_type, a.privilege_type, a.grantee, a.grantor, n.nspowner, false,",
     )
     expect(catalogCheck).toContain(
       "CASE WHEN n.nspname = 'information_schema' THEN acldefault('n', n.nspowner) || makeaclitem(0, n.nspowner, 'USAGE', false) ELSE acldefault('n', n.nspowner) END",
@@ -299,43 +368,45 @@ describe('apply SQL', () => {
 
   it('A69, D81, D108: the catalog fix revokes exactly the extra privileges, as each grantor that is not the owner, the reader first and only for column privileges', () => {
     expect(catalogCheck).toContain(
-      'string_agg(e.privilege, \', \' ORDER BY e.privilege COLLATE "C") FILTER (WHERE (e.grantor <> r.oid OR e.on_column)) AS privileges,',
+      '  WITH e AS (SELECT ce.object, ce.target, ce.relid, ce.attnum, ce.privilege_type, ce.privilege, ce.grantee, ce.grantor, ce.owner, ce.on_column,',
     )
     expect(catalogCheck).toContain(
-      "format('REVOKE %s ON %s FROM %s CASCADE;', p.privileges, p.target, CASE WHEN p.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(p.rolname) END)",
+      'SELECT (SELECT string_agg(DISTINCT e.object COLLATE "C", \', \' ORDER BY e.object COLLATE "C") FROM e),',
     )
     expect(catalogCheck).toContain(
-      "CASE WHEN p.grantor <> p.owner THEN format('SET ROLE %s; ', p.grantor::regrole) END",
+      "(SELECT string_agg(format('REVOKE %s ON %s FROM %s CASCADE;', q.privileges, g.target, CASE WHEN q.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(g.rolname) END), ' ' ORDER BY q.grantee)",
     )
-    expect(catalogCheck).toContain('CASE WHEN p.privileges IS NOT NULL THEN concat(')
     expect(catalogCheck).toContain(
-      "' ' ORDER BY f.grantor <> f.reader, f.grantee, f.grantor) AS fix",
+      'FROM e WHERE e.object = g.object AND e.grantor = g.grantor AND (e.grantor <> e.reader OR e.on_column) GROUP BY e.grantee) q)',
+    )
+    expect(catalogCheck).toContain(
+      "CASE WHEN g.grantor <> g.owner THEN format('SET ROLE %s; ', g.grantor::regrole) END",
+    )
+    expect(catalogCheck).toContain(
+      '\' \' ORDER BY f.object COLLATE "C", f.grantor <> f.reader, f.grantor) FROM (',
     )
     expect(sql).toContain(
       `RAISE EXCEPTION '${BRAND}: role redacted_reader has privileges on system catalog objects beyond their initial privileges: %. Fix: %', leaks, ${PRINTED};`,
     )
   })
 
-  it('A69, A82, A87, D108, D122: a catalog grantor that no longer holds the grant option behind a pass-on itself gets back exactly that option, and loses it right after its own statements', () => {
-    expect(catalogCheck).toContain('x.col IS NOT NULL AS on_column, x.lost, x.held')
+  it('A69, A87, A90, A91, D127: a catalog grantor that lost the option behind a pass-on borrows exactly that option and gives it back right after its own statements', () => {
     expect(catalogCheck).toContain(
-      `a.grantor <> c.relowner AND NOT ${ownOption('c.relacl', 'a.grantor', 'a.privilege_type')} AS lost, ${fromOwner('c.relacl', 'a.grantor', 'a.privilege_type')} AS held FROM aclexplode(c.relacl) a`,
+      `ce.grantor <> ce.owner AND NOT ${ownOption('ce.own_acl', 'ce.grantor', 'ce.privilege_type')} AS lost, b.lender,`,
     )
     expect(catalogCheck).toContain(
-      `a.grantor <> c.relowner AND NOT ${ownOption('c.relacl || att.attacl', 'a.grantor', 'a.privilege_type')}, ${fromOwner('att.attacl', 'a.grantor', 'a.privilege_type')}`,
+      `) ce CROSS JOIN LATERAL (SELECT coalesce(${masking('ce.lender_acl', 'ce.grantor', 'ce.privilege_type', 'ce.owner')}, ce.owner) AS lender) b`,
     )
-    // The reader revokes only column privileges, so only those are given back to it.
+    // A grantor's own option may be on the table or the column; a lender must hold it on the column.
+    expect(catalogCheck).toContain('c.relacl || att.attacl, att.attacl FROM pg_attribute att')
     expect(catalogCheck).toContain(
-      'string_agg(e.privilege, \', \' ORDER BY e.privilege COLLATE "C") FILTER (WHERE e.lost AND (e.grantor <> r.oid OR e.on_column)) AS lost,',
+      '        c.relacl AS own_acl, c.relacl AS lender_acl FROM aclexplode(c.relacl) a',
     )
+    const lostSql =
+      'SELECT e.attnum, e.privilege_type, e.privilege AS item, e.lender, e.held FROM e WHERE e.object = g.object AND e.grantor = g.grantor AND e.lost AND (e.grantor <> e.reader OR e.on_column)'
+    expect(catalogCheck).toContain(`${borrow(lostSql, 'g.grantor', 'g.owner', 'g.target')} || ' '`)
     expect(catalogCheck).toContain(
-      "CASE WHEN p.lost IS NOT NULL THEN format('GRANT %s ON %s TO %s WITH GRANT OPTION; ', p.lost, p.target, p.grantor::regrole) END",
-    )
-    expect(catalogCheck).toContain(
-      "CASE WHEN p.held IS NOT NULL THEN format(' REVOKE GRANT OPTION FOR %s ON %s FROM %s CASCADE;', p.held, p.target, p.grantor::regrole) END",
-    )
-    expect(catalogCheck).toContain(
-      "CASE WHEN p.unheld IS NOT NULL THEN format(' REVOKE %s ON %s FROM %s CASCADE;', p.unheld, p.target, p.grantor::regrole) END",
+      `' ' || ${giveBack(lostSql, 'g.grantor', 'g.owner', 'g.target', 'g.relid')}`,
     )
   })
 
@@ -373,7 +444,8 @@ describe('apply SQL', () => {
     )
     expect(sql).toContain(
       "CASE s.source WHEN 'command line' THEN format('%sALTER ROLE %I SET lo_compat_privileges = off;', CASE WHEN current_setting('hyde_db.created_reader', true) = 'on' THEN format('CREATE ROLE %I NOLOGIN; %s', r.rolname, " +
-        "CASE WHEN NOT (SELECT u.rolsuper FROM pg_roles u WHERE u.rolname = current_user) THEN format('GRANT %I TO %I WITH ADMIN OPTION; ', r.rolname, current_user) END) END, r.rolname) " +
+        "CASE WHEN NOT (SELECT u.rolsuper FROM pg_roles u WHERE u.rolname = current_user) THEN format('GRANT %I TO %I WITH ADMIN OPTION%s; ', r.rolname, current_user, " +
+        "CASE WHEN current_setting('server_version_num')::int >= 160000 THEN ', INHERIT FALSE, SET FALSE' END) END) END, r.rolname) " +
         "ELSE 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' END",
     )
     expect(sql).toContain(
@@ -508,7 +580,7 @@ describe('apply SQL', () => {
         "         OR has_any_column_privilege(r.oid, c.oid, 'SELECT'));",
     )
     expect(sql).toContain(
-      "'REVOKE ' || format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE')",
+      "'REVOKE ' || format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(coalesce(c.relacl, acldefault('s', c.relowner)) || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE')",
     )
   })
 

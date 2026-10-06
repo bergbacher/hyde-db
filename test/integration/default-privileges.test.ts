@@ -50,7 +50,7 @@ describe('default privileges', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} gets privileges on objects created later (default privileges): tables created by ${admin} in schema public. Fix: ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} IN SCHEMA public REVOKE ALL ON TABLES FROM ${db.role};`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
@@ -65,7 +65,7 @@ describe('default privileges', () => {
     expect(suggestedFix(failed)).toBe(
       `ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} IN SCHEMA public REVOKE ALL ON TABLES FROM PUBLIC;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
@@ -87,7 +87,7 @@ describe('default privileges', () => {
         `ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON SEQUENCES FROM PUBLIC; ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON FUNCTIONS FROM ${db.role};`,
       ),
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D91: default privileges granting PUBLIC CREATE on future schemas abort apply, and the printed fix works', async () => {
@@ -98,7 +98,7 @@ describe('default privileges', () => {
     expect(failed.stderr).toContain(
       `(default privileges): schemas created by ${admin}. Fix: ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON SCHEMAS FROM PUBLIC;`,
     )
-    pasteFixAndReapply(db, failed)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('A65, D91: PUBLIC default privileges on large objects abort apply on PostgreSQL 18; earlier servers have none and pass', async () => {
@@ -110,7 +110,7 @@ describe('default privileges', () => {
       expect(failed.stderr).toContain(
         `(default privileges): large objects created by ${admin}. Fix: ALTER DEFAULT PRIVILEGES FOR ROLE ${admin} REVOKE ALL ON LARGE OBJECTS FROM PUBLIC;`,
       )
-      pasteFixAndReapply(db, failed)
+      await pasteFixAndReapply(db, failed)
     } else {
       const result = apply(db)
       expect(result.status, result.stderr).toBe(0)
