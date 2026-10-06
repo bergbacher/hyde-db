@@ -9,7 +9,7 @@ Single source of truth for the product in this repository. Every non-fact is mar
 | ID | Statement | State | Basis | By |
 |---|---|---|---|---|
 | A1 | Base apply SQL runs `DROP SCHEMA IF EXISTS <schema> CASCADE` without checking that the generator created the schema. | verified | source: base `src/core.js:223` | Claude |
-| A2 | `ai_reader` can override its role-level `default_transaction_read_only` and `statement_timeout` with `SET`. | open | source: PostgreSQL docs; unverified here | Claude |
+| A2 | `ai_reader` can override its role-level `default_transaction_read_only` and `statement_timeout` with `SET`. | verified | source: PostgreSQL docs; attack suite `test/integration/attack.test.ts` (A2 tests) on PostgreSQL 14 and 18, 2026-10-06 (9ee3bb7) | Claude |
 | A3 | `ai_reader` can execute functions in `public`, including `SECURITY DEFINER` ones, through PUBLIC's default `USAGE` and `EXECUTE` grants. | open | source: PostgreSQL defaults; unverified here | Claude |
 | A4 | Base leak check covers tables, partitioned tables, views, materialized views and foreign tables; not sequences or functions. | verified | source: base `src/core.js:261` | Claude |
 | A5 | Base sensitive-name pattern matches inside unrelated names: `isPrivate` (vat), `footprint` (otp), `passenger` (pass), `discarded` (card), `flat` (lat). | verified | source: base `src/core.js:24`, run 2026-10-05 | Claude |
@@ -21,8 +21,8 @@ Single source of truth for the product in this repository. Every non-fact is mar
 | A11 | PostgreSQL 14–18 are the maintained majors. | verified | source: Docker Hub `postgres` tags, 2026-10-05 | Claude |
 | A12 | CommonJS code on Node ≥20.19 can `require()` an ESM-only package. | open | source: Node.js release notes; unverified here | Claude |
 | A13 | Base checks the AI schema name only against `sourceSchema`, not against models' `@@schema` values; a multi-schema model living in `ai` would be dropped by apply. | verified | source: base `src/core.js:82,113,223` | Claude |
-| A14 | `ai_reader` can connect to other databases in the same cluster through PUBLIC's default `CONNECT` privilege, where the leak check does not run. | open | source: PostgreSQL defaults; unverified here | Claude |
-| A15 | On PostgreSQL ≤14, and on clusters upgraded from it, PUBLIC holds `CREATE` on schema `public`. | open | source: PostgreSQL 15 release notes; unverified here | Claude |
+| A14 | `ai_reader` can connect to other databases in the same cluster through PUBLIC's default `CONNECT` privilege, where the leak check does not run. | verified | source: PostgreSQL defaults; attack suite A14 test on PostgreSQL 14 and 18 (`REVOKE CONNECT … FROM PUBLIC` blocks it), 2026-10-06 (9ee3bb7) | Claude |
+| A15 | On PostgreSQL ≤14, and on clusters upgraded from it, PUBLIC holds `CREATE` on schema `public`. | verified | source: PostgreSQL 15 release notes; attack suite A15 test (true on 14, false on 18), 2026-10-06 (9ee3bb7) | Claude |
 | A16 | Base treats any `strict` value other than `true`/`"true"` as `false`, keeps unknown config keys without complaint, and throws on the first invalid config value. | verified | source: base `src/core.js:35-55` | Claude |
 | A17 | Base silently ignores `@ai.visible` on `Unsupported` fields. | verified | source: base `src/core.js:131` | Claude |
 | A18 | Prisma 8.0.0-rc.20 is a new CLI with no `generate` command and no generator protocol; Prisma's docs: "In Prisma 8, there is no code generation step". | verified | source: npm `prisma@8.0.0-rc.20` metadata; prisma/orm `docs/reference/community-generator-migration-analysis.md`; run 2026-10-05 | Claude |
@@ -38,8 +38,8 @@ Single source of truth for the product in this repository. Every non-fact is mar
 | A28 | Without Docker, Testcontainers throws "Could not find a working container runtime strategy" within milliseconds and Vitest exits 1. | verified | source: experiment 2026-10-05 | Claude |
 | A29 | node-postgres runs multi-statement scripts (DO blocks, BEGIN/COMMIT) through the simple protocol and exposes SQLSTATE as `err.code`; postgres.js needs `max: 1` for a raw `BEGIN`. | verified | source: experiment on PostgreSQL 14 and 18, 2026-10-05 | Claude |
 | A30 | `prisma db execute --file` runs the generated apply script unchanged under Prisma 6 and 7. | open | source: none; the end-to-end layer tests it | Claude |
-| A31 | A non-superuser owner with `CREATEROLE` cannot run `ALTER ROLE … NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`; without that statement the base apply script succeeds for such an owner. | verified | source: plan prototype on PostgreSQL 14 and 18, 2026-10-05 | Claude |
-| A32 | After `SET default_transaction_read_only = off`, `ai_reader` can create temporary tables through PUBLIC's default `TEMPORARY` privilege on the database. | verified | source: plan prototype on PostgreSQL 14 and 18, 2026-10-05 | Claude |
+| A31 | A non-superuser owner with `CREATEROLE` cannot run `ALTER ROLE … NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`; without that statement the base apply script succeeds for such an owner. | verified | source: plan prototype on PostgreSQL 14 and 18, 2026-10-05; attack suite A31 test, 2026-10-06 (9ee3bb7) | Claude |
+| A32 | After `SET default_transaction_read_only = off`, `ai_reader` can create temporary tables through PUBLIC's default `TEMPORARY` privilege on the database. | verified | source: plan prototype on PostgreSQL 14 and 18, 2026-10-05; attack suite A32 test, 2026-10-06 (9ee3bb7) | Claude |
 | A34 | The Prisma CLI spawns a generator with `PRISMA_GENERATOR_INVOCATION=true` in its environment. | verified | source: prisma/orm 6.19.3 and 7.10.0 `GeneratorProcess.ts` (Prisma research, 2026-10-05) | Claude |
 | A33 | Managed PostgreSQL services (Amazon RDS, Google Cloud SQL, Supabase) give the deploying user `CREATEROLE` but not `SUPERUSER`. | open | source: provider documentation; unverified here | Claude |
 | D1 | Security claims are proven by integration tests that apply the generated SQL to a real PostgreSQL and query as `ai_reader`. | active | reason: A2, A3, A9; chosen over PGlite and unit-only tests; answers part of Q1 | Rubens |
@@ -124,3 +124,4 @@ Single source of truth for the product in this repository. Every non-fact is mar
 - 2026-10-06 — Plan prototype findings (by: Claude): added A31–A33, D49, D50, D52; D33 superseded by D51. Affected by D33: D28, D29 → hold.
 - 2026-10-06 — Rubens: names must describe privacy, not AI; agents are the primary operators. Intent revised; added D53, D55 (by: Rubens); D54 chosen by Rubens from Claude's options; D17 superseded by D54; added A34, D56 (by: Claude). Affected by D17: D16 (strict default still removes its trade-off) → holds; D11 marker `Generated by hyde-db` → holds.
 - 2026-10-06 — Task 12 review (by: Claude): added A35, D57.
+- 2026-10-06 — Attack suite (9ee3bb7) on PostgreSQL 14 and 18 (by: Claude): A2, A14, A15 open → verified; A31, A32 confirmed by committed tests. Affected: D14, D15, D21, D24, D49, D50 → hold (their reasons are now verified).
