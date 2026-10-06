@@ -144,7 +144,7 @@ describe('final check', () => {
     ).toEqual([])
   })
 
-  it('D69, D78: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D69, D85: a direct column grant on a source table aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -193,7 +193,7 @@ describe('final check', () => {
     expect(result.stderr).toContain(`role ${db.role} must not be a member of other roles`)
   })
 
-  it('D1, D78: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D1, D85: membership in pg_read_all_data aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery('postgres', `GRANT pg_read_all_data TO "${db.role}"`)

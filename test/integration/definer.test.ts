@@ -65,7 +65,7 @@ describe('SECURITY DEFINER functions', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D73, D13: a function the role owns is refused as owned first, then as executable', async () => {
+  it('D82, D13: a function the role owns is refused as owned first, then as executable', async () => {
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `${PEEK}; ALTER FUNCTION public.peek(integer) OWNER TO "${db.role}"`)
     const owned = apply(db)
@@ -123,7 +123,7 @@ describe('sequences', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D73: a sequence the role owns is refused as owned before it is checked as readable', async () => {
+  it('D82: a sequence the role owns is refused as owned before it is checked as readable', async () => {
     expect(apply(db).status).toBe(0)
     // A serial's sequence is linked to its table and cannot change owner, so use a standalone one.
     await adminQuery(

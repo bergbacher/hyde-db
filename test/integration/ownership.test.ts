@@ -1,4 +1,5 @@
-// D73: the final check refuses a reader role that owns any object, because an owner can grant
+// D82: the final check refuses a reader role that owns any object (its own temporary objects and
+// large objects excepted), because an owner can grant
 // itself access again after any REVOKE (A52) or read values through its type (A55); the fix
 // reassigns them.
 import { afterEach, describe, expect, it } from 'vitest'
@@ -21,13 +22,13 @@ async function freshDb(): Promise<TestDb> {
   created.push(db)
   return db
 }
-/** The abort and fix for a reader that owns the given objects (D73). */
+/** The abort and fix for a reader that owns the given objects (D82). */
 function ownsObjects(db: TestDb, objects: string): string {
   return `role ${db.role} owns objects it must not own: ${objects}. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`
 }
 
 describe('ownership', () => {
-  it('A52, D73: a source table the reader owns aborts apply; after the fix the reader cannot grant itself access', async () => {
+  it('A52, D82: a source table the reader owns aborts apply; after the fix the reader cannot grant itself access', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `ALTER TABLE public.api_keys OWNER TO "${db.role}"`)
@@ -55,7 +56,7 @@ describe('ownership', () => {
     }
   })
 
-  it('A55, D73: a domain the reader owns, used by a source column, aborts apply; after the fix the reader cannot constrain it', async () => {
+  it('A55, D82: a domain the reader owns, used by a source column, aborts apply; after the fix the reader cannot constrain it', async () => {
     const db = await freshDb()
     await adminQuery(
       db.name,
@@ -83,24 +84,21 @@ describe('ownership', () => {
     }
   })
 
-  it('A48, D73: a large object the reader created aborts apply, and the fix reassigns it', async () => {
+  it('A64, D82: a large object the reader creates does not block the deploy', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)
-    let oid: unknown
     try {
       await reader.query('SET default_transaction_read_only = off')
-      oid = (await reader.query("SELECT lo_from_bytea(0, 'note') AS oid")).rows[0]?.oid
+      await reader.query('SELECT lo_creat(-1)')
     } finally {
       await reader.end()
     }
-    const failed = apply(db)
-    expect(failed.status).toBe(3)
-    expect(failed.stderr).toContain(ownsObjects(db, `large object ${oid}`))
-    pasteFixAndReapply(db, failed)
+    const result = apply(db)
+    expect(result.status, result.stderr).toBe(0)
   })
 
-  it('A52, D73: a reader that owns the database is refused with the same fix, never an empty REVOKE', async () => {
+  it('A52, D82: a reader that owns the database is refused with the same fix, never an empty REVOKE', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     // As database owner the role also gets the privileges of pg_database_owner, which owns
@@ -119,7 +117,7 @@ describe('ownership', () => {
     ).not.toEqual([{ owner: db.role }])
   })
 
-  it('D73: every owned object is listed by type and qualified name, in a fixed order', async () => {
+  it('D82: every owned object is listed by type and qualified name, in a fixed order', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     // Changing the owner of public.orders moves its serial's sequence public.orders_id_seq too.
@@ -143,7 +141,7 @@ describe('ownership', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it("D73: the reader's own temporary tables are not refused", async () => {
+  it("D82: the reader's own temporary tables are not refused", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const reader = await connectAsReader(db)

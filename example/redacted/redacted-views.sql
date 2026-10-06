@@ -56,12 +56,13 @@ ALTER ROLE "redacted_reader" SET search_path = "redacted";
 -- Safety check, in this order: abort if the role
 --   has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or BYPASSRLS (first: a superuser passes
 --     every privilege test below);
---   owns any object in this database or any database (an owner can grant itself access again,
---     so no REVOKE can fix it);
+--   owns any object in this database other than its own temporary objects and large objects, or
+--     any database (an owner can grant itself access again, so no REVOKE can fix it);
 --   is a member of another role (inherited privileges have no grant of their own to revoke);
 --   can create schemas in this database;
---   holds privileges on pg_catalog or information_schema objects beyond their initial ones;
---   holds any privilege on a relation outside the views schema;
+--   holds privileges on pg_catalog, information_schema or pg_toast objects beyond their initial
+--     ones;
+--   holds any privilege on a relation outside the views schema, or can use a foreign server;
 --   can execute a SECURITY DEFINER function or use a sequence;
 --   gains privileges on objects created later through default privileges (before the schema
 --     check: this script creates the views schema under them);
@@ -88,8 +89,7 @@ BEGIN
       AND s.dbid IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))
     CROSS JOIN LATERAL pg_identify_object(s.classid, s.objid, s.objsubid) i
   WHERE r.rolname = 'redacted_reader'
-    -- REASSIGN OWNED leaves these to DROP OWNED; default privileges are checked below.
-    AND s.classid NOT IN ('pg_default_acl'::regclass, 'pg_user_mapping'::regclass)
+    AND s.classid NOT IN ('pg_largeobject'::regclass, 'pg_default_acl'::regclass, 'pg_user_mapping'::regclass)
     AND coalesce(i.schema, '') !~ '^pg_(toast_)?temp_';
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader owns objects it must not own: %. Fix: REASSIGN OWNED BY % TO CURRENT_USER; -- run as an administrator', leaks, quote_ident('redacted_reader');
@@ -103,7 +103,7 @@ BEGIN
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader must not be a member of other roles: %. Fix: %', leaks, fixes;
   END IF;
-  SELECT format('%I', d.datname), concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('CREATE ON DATABASE %I', d.datname), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee IN (0, r.oid) AND a.grantor <> d.datdba) g GROUP BY g.grantor) t), 'REVOKE ' || format('CREATE ON DATABASE %I', d.datname) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = 0 AND a.grantor = d.datdba) THEN 'PUBLIC' END, CASE WHEN r.oid = d.datdba OR EXISTS (SELECT 1 FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = r.oid AND a.grantor = d.datdba) THEN quote_ident(r.rolname) END), '') || ' CASCADE;')
+  SELECT format('%I', d.datname), concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('CREATE ON DATABASE %I', d.datname), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee IN (0, r.oid) AND a.grantor <> d.datdba AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('CREATE ON DATABASE %I', d.datname) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = 0 AND a.grantor = d.datdba) THEN 'PUBLIC' END, CASE WHEN r.oid = d.datdba OR EXISTS (SELECT 1 FROM aclexplode(d.datacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = r.oid AND a.grantor = d.datdba) THEN quote_ident(r.rolname) END), '') || ' CASCADE;')
     INTO leaks, fixes
   FROM pg_database d CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader' AND d.datname = current_database()
@@ -114,7 +114,7 @@ BEGIN
   SELECT string_agg(o.object, ', ' ORDER BY o.object COLLATE "C"), string_agg(o.fix, ' ' ORDER BY o.object COLLATE "C")
     INTO leaks, fixes
   FROM (
-    SELECT f.object, string_agg(f.fix, ' ' ORDER BY f.grantor <> f.reader, f.grantee, f.grantor) AS fix
+    SELECT f.object, string_agg(f.fix, ' ' ORDER BY f.grantee, f.grantor) FILTER (WHERE f.grantor <> f.reader) AS fix
     FROM (
       SELECT e.object, e.grantee, e.grantor, r.oid AS reader,
              concat(CASE WHEN e.grantor <> e.owner THEN format('SET ROLE %s; ', e.grantor::regrole) END,
@@ -129,14 +129,20 @@ BEGIN
           UNION ALL SELECT att.attname, a.grantee, a.grantor, a.privilege_type, coalesce((SELECT ip.initprivs FROM pg_init_privs ip WHERE ip.classoid = 'pg_class'::regclass AND ip.objoid = c.oid AND ip.objsubid = att.attnum), '{}')
           FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped
         ) x
-        WHERE n.nspname IN ('pg_catalog', 'information_schema') AND x.grantee IN (0, r.oid)
+        WHERE n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast') AND x.grantee IN (0, r.oid)
           AND NOT EXISTS (SELECT 1 FROM aclexplode(x.initial || coalesce((SELECT ip.initprivs FROM pg_init_privs ip WHERE ip.classoid = 'pg_class'::regclass AND ip.objoid = c.oid AND ip.objsubid = 0),
                 CASE WHEN n.nspname = 'information_schema' AND c.relname NOT LIKE '\_pg\_%' THEN acldefault('r', c.relowner) || makeaclitem(0, c.relowner, 'SELECT', false) ELSE acldefault('r', c.relowner) END)) b
             WHERE b.grantee IN (x.grantee, 0) AND b.privilege_type = x.privilege_type)
         UNION ALL SELECT format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), format('ROUTINE %s', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))), a.privilege_type, a.grantee, a.grantor, p.proowner
         FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN LATERAL aclexplode(p.proacl) a
-        WHERE n.nspname IN ('pg_catalog', 'information_schema') AND a.grantee IN (0, r.oid)
+        WHERE n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast') AND a.grantee IN (0, r.oid)
           AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce((SELECT ip.initprivs FROM pg_init_privs ip WHERE ip.classoid = 'pg_proc'::regclass AND ip.objoid = p.oid AND ip.objsubid = 0), acldefault('f', p.proowner))) b
+            WHERE b.grantee IN (a.grantee, 0) AND b.privilege_type = a.privilege_type)
+        UNION ALL SELECT format('%I', n.nspname), format('SCHEMA %I', n.nspname), a.privilege_type, a.grantee, a.grantor, n.nspowner
+        FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a
+        WHERE n.nspname IN ('pg_catalog', 'information_schema', 'pg_toast') AND a.grantee IN (0, r.oid)
+          AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce((SELECT ip.initprivs FROM pg_init_privs ip WHERE ip.classoid = 'pg_namespace'::regclass AND ip.objoid = n.oid AND ip.objsubid = 0),
+                CASE WHEN n.nspname = 'information_schema' THEN acldefault('n', n.nspowner) || makeaclitem(0, n.nspowner, 'USAGE', false) ELSE acldefault('n', n.nspowner) END)) b
             WHERE b.grantee IN (a.grantee, 0) AND b.privilege_type = a.privilege_type)
       ) e
       WHERE r.rolname = 'redacted_reader'
@@ -147,7 +153,7 @@ BEGIN
     RAISE EXCEPTION 'hyde-db: role redacted_reader has privileges on system catalog objects beyond their initial privileges: %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),
-         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('ALL ON %s', format('%I.%I', n.nspname, c.relname)), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee IN (0, r.oid) AND a.grantor <> c.relowner) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee = 0 AND a.grantor = c.relowner) THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee = r.oid AND a.grantor = c.relowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, c.relname)
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid)) THEN format('ALL ON %s', format('%I.%I', n.nspname, c.relname)) ELSE format('ALL (%s) ON %s', (SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid))), format('%I.%I', n.nspname, c.relname)) END, t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee IN (0, r.oid) AND a.grantor <> c.relowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee = 0 AND a.grantor = c.relowner) THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee = r.oid AND a.grantor = c.relowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, c.relname)
     INTO leaks, fixes
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'
@@ -159,8 +165,17 @@ BEGIN
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, fixes;
   END IF;
+  SELECT string_agg(format('%I', fs.srvname), ', ' ORDER BY fs.srvname),
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('USAGE ON FOREIGN SERVER %I', fs.srvname), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(fs.srvacl) a WHERE a.privilege_type IN ('USAGE') AND a.grantee IN (0, r.oid) AND a.grantor <> fs.srvowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('USAGE ON FOREIGN SERVER %I', fs.srvname) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(fs.srvacl) a WHERE a.privilege_type IN ('USAGE') AND a.grantee = 0 AND a.grantor = fs.srvowner) THEN 'PUBLIC' END, CASE WHEN r.oid = fs.srvowner OR EXISTS (SELECT 1 FROM aclexplode(fs.srvacl) a WHERE a.privilege_type IN ('USAGE') AND a.grantee = r.oid AND a.grantor = fs.srvowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY fs.srvname)
+    INTO leaks, fixes
+  FROM pg_foreign_server fs CROSS JOIN pg_roles r
+  WHERE r.rolname = 'redacted_reader'
+    AND has_server_privilege(r.oid, fs.oid, 'USAGE');
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: role redacted_reader can use foreign servers: %. Fix: %', leaks, fixes;
+  END IF;
   SELECT string_agg(format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), ', ' ORDER BY n.nspname, p.proname),
-         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('EXECUTE ON ROUTINE %s', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee IN (0, r.oid) AND a.grantor <> p.proowner) g GROUP BY g.grantor) t), 'REVOKE ' || format('EXECUTE ON ROUTINE %s', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee = 0 AND a.grantor = p.proowner) THEN 'PUBLIC' END, CASE WHEN r.oid = p.proowner OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee = r.oid AND a.grantor = p.proowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, p.proname)
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('EXECUTE ON ROUTINE %s', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee IN (0, r.oid) AND a.grantor <> p.proowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('EXECUTE ON ROUTINE %s', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN p.proacl IS NULL OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee = 0 AND a.grantor = p.proowner) THEN 'PUBLIC' END, CASE WHEN r.oid = p.proowner OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.privilege_type IN ('EXECUTE') AND a.grantee = r.oid AND a.grantor = p.proowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, p.proname)
     INTO leaks, fixes
   FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'
@@ -173,7 +188,7 @@ BEGIN
     RAISE EXCEPTION 'hyde-db: role redacted_reader can execute SECURITY DEFINER functions: %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),
-         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee IN (0, r.oid) AND a.grantor <> c.relowner) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee = 0 AND a.grantor = c.relowner) THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee = r.oid AND a.grantor = c.relowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, c.relname)
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee IN (0, r.oid) AND a.grantor <> c.relowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON SEQUENCE %s', format('%I.%I', n.nspname, c.relname)) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee = 0 AND a.grantor = c.relowner) THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE') AND a.grantee = r.oid AND a.grantor = c.relowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname, c.relname)
     INTO leaks, fixes
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'
@@ -183,18 +198,18 @@ BEGIN
     RAISE EXCEPTION 'hyde-db: role redacted_reader can read sequences: %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(format('%s created by %I%s', lower(CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' WHEN 'L' THEN 'LARGE OBJECTS' END), o.rolname, CASE WHEN d.defaclnamespace <> 0 THEN format(' in schema %I', dn.nspname) END), ', ' ORDER BY o.rolname, dn.nspname NULLS FIRST, d.defaclobjtype),
-         string_agg(format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, CASE WHEN d.defaclnamespace <> 0 THEN format(' IN SCHEMA %I', dn.nspname) END, CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' WHEN 'L' THEN 'LARGE OBJECTS' END, concat_ws(', ', CASE WHEN d.defaclobjtype IN ('r', 'S', 'n') AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = 0) THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = r.oid) THEN quote_ident(r.rolname) END)), ' ' ORDER BY o.rolname, dn.nspname NULLS FIRST, d.defaclobjtype)
+         string_agg(format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, CASE WHEN d.defaclnamespace <> 0 THEN format(' IN SCHEMA %I', dn.nspname) END, CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' WHEN 'L' THEN 'LARGE OBJECTS' END, concat_ws(', ', CASE WHEN d.defaclobjtype IN ('r', 'S', 'n', 'L') AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = 0) THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = r.oid) THEN quote_ident(r.rolname) END)), ' ' ORDER BY o.rolname, dn.nspname NULLS FIRST, d.defaclobjtype)
     INTO leaks, fixes
   FROM pg_default_acl d JOIN pg_roles o ON o.oid = d.defaclrole
     LEFT JOIN pg_namespace dn ON dn.oid = d.defaclnamespace CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'
     AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a
-                WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ('r', 'S', 'n')));
+                WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ('r', 'S', 'n', 'L')));
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader gets privileges on objects created later (default privileges): %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(format('%I', n.nspname), ', ' ORDER BY n.nspname),
-         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('CREATE ON SCHEMA %I', n.nspname), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee IN (0, r.oid) AND a.grantor <> n.nspowner) g GROUP BY g.grantor) t), 'REVOKE ' || format('CREATE ON SCHEMA %I', n.nspname) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = 0 AND a.grantor = n.nspowner) THEN 'PUBLIC' END, CASE WHEN r.oid = n.nspowner OR EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = r.oid AND a.grantor = n.nspowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname)
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('CREATE ON SCHEMA %I', n.nspname), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee IN (0, r.oid) AND a.grantor <> n.nspowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('CREATE ON SCHEMA %I', n.nspname) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = 0 AND a.grantor = n.nspowner) THEN 'PUBLIC' END, CASE WHEN r.oid = n.nspowner OR EXISTS (SELECT 1 FROM aclexplode(n.nspacl) a WHERE a.privilege_type IN ('CREATE') AND a.grantee = r.oid AND a.grantor = n.nspowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY n.nspname)
     INTO leaks, fixes
   FROM pg_namespace n CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'
@@ -203,15 +218,24 @@ BEGIN
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader can create objects in schemas: %. Fix: %', leaks, fixes;
   END IF;
-  SELECT CASE s.source WHEN 'database' THEN format('ALTER DATABASE %I RESET lo_compat_privileges;', current_database())
-         ELSE 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' END || ' -- run as a superuser'
-    INTO fixes
-  FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on';
-  IF fixes IS NOT NULL THEN
-    RAISE EXCEPTION 'hyde-db: lo_compat_privileges is on, which turns off privilege checks on large objects for role redacted_reader. Fix: %', fixes;
+  SELECT string_agg(c.source, ', ' ORDER BY c.n), string_agg(c.fix, ' ' ORDER BY c.n) || ' -- run as a superuser'
+    INTO leaks, fixes
+  FROM pg_roles r CROSS JOIN LATERAL (
+    SELECT 0 AS n, 'the server configuration' AS source, 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' AS fix
+    FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on' AND s.source = 'configuration file'
+    UNION ALL SELECT row_number() OVER (ORDER BY s.setdatabase, s.setrole),
+           CASE WHEN s.setdatabase = 0 AND s.setrole = 0 THEN 'all roles' WHEN s.setdatabase = 0 THEN format('role %I', r.rolname) WHEN s.setrole = 0 THEN format('database %I', current_database()) ELSE format('role %I in database %I', r.rolname, current_database()) END,
+           format('ALTER %s RESET lo_compat_privileges;', CASE WHEN s.setdatabase = 0 AND s.setrole = 0 THEN 'ROLE ALL' WHEN s.setdatabase = 0 THEN format('ROLE %I', r.rolname) WHEN s.setrole = 0 THEN format('DATABASE %I', current_database()) ELSE format('ROLE %I IN DATABASE %I', r.rolname, current_database()) END)
+    FROM pg_db_role_setting s
+    WHERE s.setrole IN (0, r.oid) AND s.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))
+      AND EXISTS (SELECT 1 FROM unnest(s.setconfig) cfg WHERE cfg ~* '^lo_compat_privileges=(on|t|tr|tru|true|y|ye|yes|1)$')
+  ) c
+  WHERE r.rolname = 'redacted_reader';
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: lo_compat_privileges is on, which turns off privilege checks on large objects for role redacted_reader: %. Fix: %', leaks, fixes;
   END IF;
   SELECT string_agg(l.oid::text, ', ' ORDER BY l.oid),
-         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('ALL ON LARGE OBJECT %s', l.oid), t.grantees), ' ' ORDER BY t.grantor <> r.oid, t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee IN (0, r.oid) AND a.grantor <> l.lomowner) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON LARGE OBJECT %s', l.oid) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee = 0 AND a.grantor = l.lomowner) THEN 'PUBLIC' END, CASE WHEN r.oid = l.lomowner OR EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee = r.oid AND a.grantor = l.lomowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY l.oid)
+         string_agg(concat_ws(' ', (SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, format('ALL ON LARGE OBJECT %s', l.oid), t.grantees), ' ' ORDER BY t.grantor) FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees FROM (SELECT DISTINCT a.grantor, a.grantee FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee IN (0, r.oid) AND a.grantor <> l.lomowner AND a.grantor <> r.oid) g GROUP BY g.grantor) t), 'REVOKE ' || format('ALL ON LARGE OBJECT %s', l.oid) || ' FROM ' || nullif(concat_ws(', ', CASE WHEN EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee = 0 AND a.grantor = l.lomowner) THEN 'PUBLIC' END, CASE WHEN r.oid = l.lomowner OR EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.privilege_type IN ('SELECT', 'UPDATE') AND a.grantee = r.oid AND a.grantor = l.lomowner) THEN quote_ident(r.rolname) END), '') || ' CASCADE;'), ' ' ORDER BY l.oid)
     INTO leaks, fixes
   FROM pg_largeobject_metadata l CROSS JOIN pg_roles r
   WHERE r.rolname = 'redacted_reader'

@@ -55,7 +55,7 @@ describe('CREATE privilege', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D73: a schema the role owns is refused as owned before CREATE is checked', async () => {
+  it('D82: a schema the role owns is refused as owned before CREATE is checked', async () => {
     const db = await freshDb(true)
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `CREATE SCHEMA scratch; ALTER SCHEMA scratch OWNER TO "${db.role}"`)

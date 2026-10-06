@@ -1,5 +1,6 @@
-// D74: privileges on pg_catalog and information_schema objects beyond their initial ones let the
-// reader read table data, password hashes or large objects (A57); the final check refuses them.
+// D81: privileges on pg_catalog, information_schema and pg_toast objects beyond their initial ones
+// let the reader read table data, password hashes or large objects (A57, A63); the final check
+// refuses them.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -23,7 +24,7 @@ async function freshDb(): Promise<TestDb> {
 const ABORT = 'has privileges on system catalog objects beyond their initial privileges'
 
 describe('catalog privileges', () => {
-  it('D74: a stock database has no catalog privileges beyond the initial ones', async () => {
+  it('D81: a stock database has no catalog privileges beyond the initial ones', async () => {
     const db = await freshDb()
     const result = apply(db)
     expect(result.status, result.stderr).toBe(0)
@@ -37,7 +38,7 @@ describe('catalog privileges', () => {
     expect(again.status, again.stderr).toBe(0)
   })
 
-  it('D74: EXECUTE on pg_read_binary_file aborts apply, and the printed REVOKE fixes it', async () => {
+  it('D81: EXECUTE on pg_read_binary_file aborts apply, and the printed REVOKE fixes it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `GRANT EXECUTE ON FUNCTION pg_read_binary_file(text) TO "${db.role}"`)
@@ -52,7 +53,7 @@ describe('catalog privileges', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it('D74: SELECT on pg_statistic for the reader and PUBLIC aborts apply, and the printed REVOKEs fix it', async () => {
+  it('D81: SELECT on pg_statistic for the reader and PUBLIC aborts apply, and the printed REVOKEs fix it', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `GRANT SELECT ON pg_catalog.pg_statistic TO PUBLIC, "${db.role}"`)
@@ -65,7 +66,7 @@ describe('catalog privileges', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it('D74: column privileges on pg_authid and SELECT on an internal information_schema view abort apply', async () => {
+  it('D81: column privileges on pg_authid and SELECT on an internal information_schema view abort apply', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -80,6 +81,26 @@ describe('catalog privileges', () => {
     )
     expect(suggestedFix(failed)).toBe(
       `REVOKE SELECT ON TABLE information_schema._pg_user_mappings FROM PUBLIC CASCADE; REVOKE SELECT (rolname), SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+    )
+    pasteFixAndReapply(db, failed)
+  })
+
+  it('A63, D81: USAGE on pg_toast and SELECT on a toast table abort apply, and the printed REVOKEs fix it', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const [toast] = await adminQuery(
+      db.name,
+      "SELECT format('%I.%I', n.nspname, t.relname) AS name FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE c.oid = 'public.users'::regclass",
+    )
+    await adminQuery(
+      db.name,
+      `GRANT USAGE ON SCHEMA pg_toast TO "${db.role}"; GRANT SELECT ON ${toast?.name} TO "${db.role}"`,
+    )
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(`role ${db.role} ${ABORT}: pg_toast, ${toast?.name}. Fix: `)
+    expect(suggestedFix(failed)).toBe(
+      `REVOKE USAGE ON SCHEMA pg_toast FROM ${db.role} CASCADE; REVOKE SELECT ON TABLE ${toast?.name} FROM ${db.role} CASCADE;`,
     )
     pasteFixAndReapply(db, failed)
   })
