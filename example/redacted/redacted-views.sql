@@ -43,9 +43,8 @@ CREATE VIEW "redacted"."orders" AS SELECT
 FROM "public"."orders";
 COMMENT ON COLUMN "redacted"."orders"."total_cents" IS 'Total in cents';
 
--- Privileges: nothing but SELECT on the views in redacted.
-REVOKE ALL ON SCHEMA "public" FROM "redacted_reader";
-REVOKE ALL ON ALL TABLES IN SCHEMA "public" FROM "redacted_reader";
+-- Privileges: nothing but SELECT on the views in redacted. Privileges elsewhere are
+-- not revoked here: the final check refuses them and prints the REVOKE that removes them.
 GRANT USAGE ON SCHEMA "redacted" TO "redacted_reader";
 GRANT SELECT ON ALL TABLES IN SCHEMA "redacted" TO "redacted_reader";
 
@@ -55,9 +54,9 @@ ALTER ROLE "redacted_reader" SET statement_timeout = '15s';
 ALTER ROLE "redacted_reader" SET search_path = "redacted";
 
 -- Safety check: abort if the role has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or
--- BYPASSRLS, can read any relation outside the views schema (e.g. via PUBLIC grants or
--- membership in another role), execute a SECURITY DEFINER function, read a sequence,
--- or create objects in any schema.
+-- BYPASSRLS, is a member of another role, can read any relation outside the views schema
+-- (e.g. via PUBLIC, direct or column grants), execute a SECURITY DEFINER function, read a
+-- sequence, or create objects in any schema. Each abort prints the statements that fix it.
 DO $$
 DECLARE
   leaks text;
@@ -72,21 +71,30 @@ BEGIN
   IF leaks <> '' THEN
     RAISE EXCEPTION 'hyde-db: role redacted_reader has attributes it must not have: %. Fix: %', leaks, fixes;
   END IF;
-  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY 1) INTO leaks
-  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
-  WHERE c.relkind IN ('r', 'p', 'v', 'm', 'f')
+  -- The joins on pg_roles below always find the role: this transaction created it above if missing.
+  -- Membership next: what the role reads through another role has no grant of its own to revoke.
+  SELECT string_agg(format('%I', g.rolname), ', ' ORDER BY g.rolname),
+         string_agg(format('REVOKE %I FROM %I;', g.rolname, r.rolname), ' ' ORDER BY g.rolname)
+    INTO leaks, fixes
+  FROM pg_roles g CROSS JOIN pg_roles r
+  WHERE r.rolname = 'redacted_reader'
+    AND EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = g.oid AND m.member = r.oid);
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: role redacted_reader must not be a member of other roles: %. Fix: %', leaks, fixes;
+  END IF;
+  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),
+         string_agg(format('REVOKE SELECT %sON %s FROM %s;', CASE WHEN has_table_privilege(r.oid, c.oid, 'SELECT') THEN '' ELSE format('(%s) ', (SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantee IN (0, r.oid) AND x.privilege_type = 'SELECT'))) END, format('%I.%I', n.nspname, c.relname), concat_ws(', ', CASE WHEN has_any_column_privilege('public', c.oid, 'SELECT') THEN 'PUBLIC' END, CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, c.relname)
+    INTO leaks, fixes
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
+  WHERE r.rolname = 'redacted_reader'
+    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
     AND n.nspname NOT IN ('redacted', 'pg_catalog', 'information_schema')
     AND n.nspname NOT LIKE 'pg\_%'
-    AND (has_table_privilege('redacted_reader', c.oid, 'SELECT')
-         OR has_any_column_privilege('redacted_reader', c.oid, 'SELECT'));
+    AND (has_table_privilege(r.oid, c.oid, 'SELECT')
+         OR has_any_column_privilege(r.oid, c.oid, 'SELECT'));
   IF leaks IS NOT NULL THEN
-    RAISE EXCEPTION 'hyde-db: role redacted_reader can read relations outside schema redacted: %', leaks;
+    RAISE EXCEPTION 'hyde-db: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, fixes;
   END IF;
-  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
-             WHERE r.rolname = 'redacted_reader') THEN
-    RAISE EXCEPTION 'hyde-db: role redacted_reader must not be a member of other roles';
-  END IF;
-  -- The joins on pg_roles below always find the role: this transaction created it above if missing.
   SELECT string_agg(format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), ', ' ORDER BY n.nspname, p.proname),
          string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), concat_ws(', ', CASE WHEN has_function_privilege('public', p.oid, 'EXECUTE') THEN 'PUBLIC' END, CASE WHEN r.oid = p.proowner OR EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('EXECUTE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, p.proname)
     INTO leaks, fixes
