@@ -15,6 +15,13 @@ export interface PsqlResult {
   readonly stderr: string
 }
 
+/** A PostgreSQL server in a container: psql runs inside it as `user`; `uri` connects as that user. */
+export interface Server {
+  readonly containerId: string
+  readonly user: string
+  readonly uri: string
+}
+
 export interface TestDb {
   /** Database name; unique per test. */
   readonly name: string
@@ -22,6 +29,8 @@ export interface TestDb {
   readonly role: string
   readonly password: string
   readonly files: OutputFiles
+  /** The server the database is on; default the suite's shared one. */
+  readonly server?: Server
 }
 
 /** docker exec's own failure statuses: daemon error (125), command not invokable (126), command not found (127). */
@@ -102,8 +111,13 @@ export function psql(database: string, script: string, options: PsqlOptions = {}
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
-export function urlFor(database: string, user?: string, password?: string): string {
-  const url = new URL(inject('pg').uri)
+export function urlFor(
+  database: string,
+  user?: string,
+  password?: string,
+  server: Pick<Server, 'uri'> = inject('pg'),
+): string {
+  const url = new URL(server.uri)
   url.pathname = `/${database}`
   if (user !== undefined) {
     url.username = user
@@ -116,8 +130,9 @@ export function urlFor(database: string, user?: string, password?: string): stri
 export async function adminQuery(
   database: string,
   sql: string,
+  server?: Server,
 ): Promise<Record<string, unknown>[]> {
-  const client = new pg.Client({ connectionString: urlFor(database) })
+  const client = new pg.Client({ connectionString: urlFor(database, undefined, undefined, server) })
   await client.connect()
   try {
     return (await client.query(sql)).rows as Record<string, unknown>[]
@@ -139,50 +154,56 @@ export function buildFiles(role: string, schemaSource?: string): OutputFiles {
 export interface CreateOptions {
   /** Run the one-time `REVOKE CREATE ON SCHEMA public FROM PUBLIC` the docs give (needed on PostgreSQL ≤14). Default true. */
   readonly hardenPublicSchema?: boolean
+  /** The server to create the database on; default the suite's shared one. */
+  readonly server?: Server
 }
 
 export async function createTestDatabase(options: CreateOptions = {}): Promise<TestDb> {
   const id = randomBytes(4).toString('hex')
   const name = `hyde_${id}`
   const role = `hyde_${id}_reader`
-  await adminQuery('postgres', `CREATE DATABASE ${name}`)
+  const { server } = options
+  await adminQuery('postgres', `CREATE DATABASE ${name}`, server)
   try {
     const harden = options.hardenPublicSchema ?? true
     const setup = psql(
       name,
       `${readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')}\n${harden ? 'REVOKE CREATE ON SCHEMA public FROM PUBLIC;\n' : ''}`,
+      { server },
     )
     if (setup.status !== 0) {
       throw new Error(
         `test database setup failed (psql exit status ${setup.status}): ${setup.stderr}`,
       )
     }
-    return { name, role, password: `pw_${id}`, files: buildFiles(role) }
+    return { name, role, password: `pw_${id}`, files: buildFiles(role), server }
   } catch (error) {
     // Do not leave a half-built database behind when setup fails.
-    await dropDatabaseAndRole(name, role)
+    await dropDatabaseAndRole(name, role, server)
     throw error
   }
 }
 
 /** Drops the database and the reader role (roles are cluster-wide and would leak across tests). */
 export async function dropTestDatabase(db: TestDb): Promise<void> {
-  await dropDatabaseAndRole(db.name, db.role)
+  await dropDatabaseAndRole(db.name, db.role, db.server)
 }
 
-async function dropDatabaseAndRole(name: string, role: string): Promise<void> {
-  await adminQuery('postgres', `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
-  await adminQuery('postgres', `DROP ROLE IF EXISTS "${role}"`)
+async function dropDatabaseAndRole(name: string, role: string, server?: Server): Promise<void> {
+  await adminQuery('postgres', `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`, server)
+  await adminQuery('postgres', `DROP ROLE IF EXISTS "${role}"`, server)
 }
 
 export function apply(db: TestDb, sql: string = db.files['redacted-views.sql']): PsqlResult {
-  return psql(db.name, sql)
+  return psql(db.name, sql, { server: db.server })
 }
 
 /** Gives the reader role a password (the documented one-time step) and connects as it. */
 export async function connectAsReader(db: TestDb, database: string = db.name): Promise<pg.Client> {
-  await adminQuery('postgres', `ALTER ROLE "${db.role}" LOGIN PASSWORD '${db.password}'`)
-  const client = new pg.Client({ connectionString: urlFor(database, db.role, db.password) })
+  await adminQuery('postgres', `ALTER ROLE "${db.role}" LOGIN PASSWORD '${db.password}'`, db.server)
+  const client = new pg.Client({
+    connectionString: urlFor(database, db.role, db.password, db.server),
+  })
   await client.connect()
   return client
 }
@@ -205,10 +226,18 @@ export function suggestedFix(result: PsqlResult): string {
 /**
  * Every privilege in the ACLs the final check reads in a database, one per entry and privilege, as
  * `<object>: <grantee>=<privilege>[*]/<grantor>` (empty grantee for PUBLIC, `*` for the grant
- * option): relations, their columns, routines, schemas, the database, foreign servers and large
- * objects, catalog objects included. A NULL ACL counts as the default ACL it stands for.
+ * option): relations, their columns, routines, schemas, the database, foreign servers, large
+ * objects and, from PostgreSQL 15 on, configuration parameters, catalog objects included. A NULL
+ * ACL counts as the default ACL it stands for. A parameter has a row only while it has grants
+ * beyond its default ACL, which gives its owner, the bootstrap superuser (OID 10), its own
+ * privileges; those default entries are left out, as a missing row stands for them.
  */
-export async function aclEntries(database: string): Promise<Set<string>> {
+export async function aclEntries(database: string, server?: Server): Promise<Set<string>> {
+  // pg_parameter_acl exists from PostgreSQL 15 on.
+  const parameters =
+    (await serverVersion(database, server)) >= 150000
+      ? "UNION ALL SELECT format('parameter %s', p.parname), p.paracl FROM pg_parameter_acl p"
+      : ''
   const acls = `SELECT format('relation %s', c.oid::regclass) AS object, coalesce(c.relacl, acldefault(CASE WHEN c.relkind = 'S' THEN 's' ELSE 'r' END::"char", c.relowner)) AS acl FROM pg_class c
      UNION ALL SELECT format('column %s.%I', c.oid::regclass, att.attname), att.attacl
        FROM pg_class c JOIN pg_attribute att ON att.attrelid = c.oid WHERE att.attnum > 0 AND NOT att.attisdropped
@@ -217,12 +246,15 @@ export async function aclEntries(database: string): Promise<Set<string>> {
      UNION ALL SELECT format('database %I', d.datname), coalesce(d.datacl, acldefault('d', d.datdba))
        FROM pg_database d WHERE d.datname = current_database()
      UNION ALL SELECT format('server %I', s.srvname), coalesce(s.srvacl, acldefault('S', s.srvowner)) FROM pg_foreign_server s
-     UNION ALL SELECT format('large object %s', l.oid), coalesce(l.lomacl, acldefault('L', l.lomowner)) FROM pg_largeobject_metadata l`
+     UNION ALL SELECT format('large object %s', l.oid), coalesce(l.lomacl, acldefault('L', l.lomowner)) FROM pg_largeobject_metadata l
+     ${parameters}`
   const rows = await adminQuery(
     database,
     `SELECT format('%s: %s=%s%s/%s', o.object, CASE WHEN a.grantee = 0 THEN '' ELSE a.grantee::regrole::text END,
               a.privilege_type, CASE WHEN a.is_grantable THEN '*' ELSE '' END, a.grantor::regrole) AS entry
-       FROM (${acls}) o CROSS JOIN LATERAL aclexplode(o.acl) a`,
+       FROM (${acls}) o CROSS JOIN LATERAL aclexplode(o.acl) a
+       WHERE NOT (o.object LIKE 'parameter %' AND a.grantee = 10 AND a.grantor = 10)`,
+    server,
   )
   return new Set(rows.map((row) => String(row.entry)))
 }
@@ -254,6 +286,8 @@ function refusedTypes(object: string): readonly string[] | 'all' {
       return ['EXECUTE']
     case 'large object':
       return ['SELECT', 'UPDATE']
+    case 'parameter':
+      return ['SET', 'ALTER SYSTEM']
     default:
       throw new Error(`no refused privilege types for ${object}`)
   }
@@ -293,12 +327,14 @@ export async function pasteFix(
   failed: PsqlResult,
   options: PasteOptions = {},
 ): Promise<PsqlResult> {
-  const before = await aclEntries(db.name)
+  const before = await aclEntries(db.name, db.server)
   const fix = suggestedFix(failed)
-  const pasted = psql(db.name, options.role ? `SET ROLE "${options.role}";\n${fix}` : fix)
+  const pasted = psql(db.name, options.role ? `SET ROLE "${options.role}";\n${fix}` : fix, {
+    server: db.server,
+  })
   expect(pasted.status, pasted.stderr).toBe(0)
   if (!options.ownership) {
-    const after = await aclEntries(db.name)
+    const after = await aclEntries(db.name, db.server)
     const removed = [...before].filter((entry) => !after.has(entry))
     const added = [...after].filter((entry) => !before.has(entry))
     expect(added, 'the fix added ACL entries').toEqual([])
@@ -328,7 +364,11 @@ export async function pasteFixAndReapply(
 }
 
 /** The server's `server_version_num`, e.g. 140024 or 180006. */
-export async function serverVersion(database: string): Promise<number> {
-  const [row] = await adminQuery(database, "SELECT current_setting('server_version_num') AS v")
+export async function serverVersion(database: string, server?: Server): Promise<number> {
+  const [row] = await adminQuery(
+    database,
+    "SELECT current_setting('server_version_num') AS v",
+    server,
+  )
   return Number(row?.v)
 }

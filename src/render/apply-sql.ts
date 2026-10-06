@@ -1,7 +1,7 @@
 // Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
 // views, grants the reader role SELECT on exactly those views, and aborts with a pasteable fix if
 // the role could reach anything else (D11, D13, D24, D49, D76, D80–D82, D91, D108, D109, D111,
-// D123, D124, D127, D130, D131, D134, D135); it revokes nothing itself (D69).
+// D123, D124, D127, D130, D131, D134, D135, D138); it revokes nothing itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -259,6 +259,16 @@ const SEQUENCE_PRIVILEGES: readonly string[] = ['SELECT', 'USAGE', 'UPDATE']
 /** The privileges a column grant can carry. */
 const COLUMN_PRIVILEGES = 'SELECT, INSERT, UPDATE, REFERENCES'
 
+/** Configuration parameter privileges (PostgreSQL 15+): SET of a superuser-only one, and ALTER SYSTEM. */
+const PARAMETER_PRIVILEGES: readonly string[] = ['SET', 'ALTER SYSTEM']
+
+/**
+ * The owner of every configuration parameter's ACL: parameters have no owner column, and
+ * PostgreSQL treats the bootstrap superuser (OID 10) as their owner, so a superuser's grants on
+ * them are recorded as its grants.
+ */
+const PARAMETER_OWNER = '10::oid'
+
 /** The ALTER DEFAULT PRIVILEGES keyword of a pg_default_acl object type; LARGE OBJECTS exist from PostgreSQL 18. */
 const DEFAULT_ACL_KIND =
   "CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' " +
@@ -369,7 +379,8 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '--     the schema check: this script creates the views schema under them);',
     '--   can create objects in any schema;',
     '--   has lo_compat_privileges on, which turns off privilege checks on large objects;',
-    '--   can read large objects of other roles.',
+    '--   can read large objects of other roles;',
+    '--   holds SET or ALTER SYSTEM on a configuration parameter (PostgreSQL 15 and later).',
     '-- Each abort prints the statements that fix it, to be run by an administrator, as one',
     '-- transaction when there are several, and says who must run them when the deploying role',
     '-- cannot.',
@@ -579,6 +590,25 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '    AND EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.grantee IN (0, r.oid));',
     '  IF leaks IS NOT NULL THEN',
     ownersAbort(`role ${config.role} can read large objects it does not own: %. Fix: %`),
+    '  END IF;',
+    // SET on lo_compat_privileges turns the large-object checks off for the reader's own sessions,
+    // and ALTER SYSTEM rewrites the server configuration (A96). Parameter privileges exist from
+    // PostgreSQL 15 on: the query runs through EXECUTE, so earlier servers, which have no
+    // pg_parameter_acl, never parse it. Only a superuser can run the fix.
+    "  IF current_setting('server_version_num')::int >= 150000 THEN",
+    "    EXECUTE $p$SELECT string_agg(format('%I', pa.parname), ', ' ORDER BY pa.parname),",
+    `             string_agg(${revokeFix(`format('%s ON PARAMETER %I', (SELECT string_agg(DISTINCT a.privilege_type, ', ' ORDER BY a.privilege_type) FROM aclexplode(pa.paracl) a WHERE a.grantee IN (0, r.oid) AND a.grantor = ${PARAMETER_OWNER}), pa.parname)`, PARAMETER_OWNER, PARAMETER_PRIVILEGES, { object: "format('PARAMETER %I', pa.parname)", acl: 'pa.paracl' })}, ' ' ORDER BY pa.parname)`,
+    '      FROM pg_parameter_acl pa CROSS JOIN pg_roles r',
+    `      WHERE r.rolname = ${role}`,
+    '        AND EXISTS (SELECT 1 FROM aclexplode(pa.paracl) a WHERE a.grantee IN (0, r.oid))$p$',
+    '      INTO leaks, fixes;',
+    '    IF leaks IS NOT NULL THEN',
+    `  ${abort(
+      `role ${config.role} has privileges on configuration parameters: %. Fix: %`,
+      'leaks',
+      printedFix('fixes', true),
+    )}`,
+    '    END IF;',
     '  END IF;',
     'END $$;',
   ]

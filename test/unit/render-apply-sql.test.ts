@@ -526,6 +526,42 @@ describe('apply SQL', () => {
     )
   })
 
+  /** The parameter check, from its version guard to the end of its IF block. */
+  const parameterCheck = sql.slice(
+    sql.indexOf("  IF current_setting('server_version_num')::int >= 150000 THEN"),
+    sql.indexOf('END $$;', sql.indexOf('-- Safety check')),
+  )
+
+  it('A96, D138: refuses SET and ALTER SYSTEM on configuration parameters for the role or PUBLIC, on PostgreSQL 15+ only, through EXECUTE', () => {
+    expect(parameterCheck).toMatch(
+      /^ {2}IF current_setting\('server_version_num'\)::int >= 150000 THEN\n {4}EXECUTE \$p\$SELECT /,
+    )
+    expect(parameterCheck).toContain('      FROM pg_parameter_acl pa CROSS JOIN pg_roles r\n')
+    expect(parameterCheck).toContain(
+      '        AND EXISTS (SELECT 1 FROM aclexplode(pa.paracl) a WHERE a.grantee IN (0, r.oid))$p$\n      INTO leaks, fixes;\n',
+    )
+    expect(parameterCheck).toContain(
+      `      RAISE EXCEPTION '${BRAND}: role redacted_reader has privileges on configuration parameters: %. Fix: %', leaks, ${printed("' -- run as a superuser'")};`,
+    )
+    expect(parameterCheck).toMatch(/ {4}END IF;\n {2}END IF;\n$/)
+    // Nothing else in the script names the catalog PostgreSQL 14 lacks.
+    expect(sql.split('pg_parameter_acl')).toHaveLength(2)
+  })
+
+  it('A56, D127, D138: the parameter fix revokes exactly the privileges each grantor granted, the bootstrap superuser acting as the owner', () => {
+    const owner = '10::oid'
+    expect(parameterCheck).toContain(
+      `format('%s ON PARAMETER %I', (SELECT string_agg(DISTINCT a.privilege_type, ', ' ORDER BY a.privilege_type) FROM aclexplode(pa.paracl) a WHERE a.grantee IN (0, r.oid) AND a.grantor = ${owner}), pa.parname)`,
+    )
+    expect(parameterCheck).toContain(
+      exactly("format('PARAMETER %I', pa.parname)", "'SET', 'ALTER SYSTEM'", 'pa.paracl'),
+    )
+    const lostSql = lost('pa.paracl', owner, "'SET', 'ALTER SYSTEM'", false)
+    expect(parameterCheck).toContain(
+      `${borrow(lostSql, 't.grantor', owner, "format('PARAMETER %I', pa.parname)")} || ' '`,
+    )
+  })
+
   it("D109: refuses ACL entries for the role or PUBLIC on other roles' large objects", () => {
     expect(sql).toContain('FROM pg_largeobject_metadata l CROSS JOIN pg_roles r')
     expect(sql).toContain('AND l.lomowner <> r.oid')
@@ -586,9 +622,10 @@ describe('apply SQL', () => {
     ['can create objects in schemas', 'can create objects in any schema'],
     ['lo_compat_privileges is on', 'has lo_compat_privileges on'],
     ['can read large objects it does not own', 'can read large objects of other roles'],
+    ['has privileges on configuration parameters', 'holds SET or ALTER SYSTEM on a configuration'],
   ]
 
-  it('D49, D82, D108, D76, D81, D80, D13, D91, D24, D109: the final check runs in a fixed order', () => {
+  it('D49, D82, D108, D76, D81, D80, D13, D91, D24, D109, D138: the final check runs in a fixed order', () => {
     const order = CHECK_ORDER.map(([abort]) => sql.indexOf(abort))
     expect(order.every((position) => position > 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
@@ -606,12 +643,12 @@ describe('apply SQL', () => {
 
   it('D108: every abort of the final check prints a fix, as one transaction when it has several statements', () => {
     const aborts = finalCheckBlock.split('\n').filter((line) => line.includes('RAISE EXCEPTION'))
-    expect(aborts).toHaveLength(13)
+    expect(aborts).toHaveLength(14)
     for (const abort of aborts) expect(abort).toMatch(/\. Fix: \S/)
     // All but the ownership abort, whose fix is a single statement written into its message.
     expect(
       aborts.filter((abort) => abort.includes("'BEGIN; ' || fixes || ' COMMIT;'")),
-    ).toHaveLength(12)
+    ).toHaveLength(13)
   })
 
   it('D54: is branded hyde-db', () => {

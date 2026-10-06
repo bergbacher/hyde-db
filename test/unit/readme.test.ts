@@ -224,6 +224,18 @@ const ROW_PINS: Readonly<
     golden: ["format('ALL ON LARGE OBJECT %s'", 'l.lomowner <> r.oid'],
     condition: ['a large object it does not own'],
   },
+  14: {
+    fix: new RegExp(
+      `^REVOKE (ALTER SYSTEM|SET|ALTER SYSTEM, SET) ON PARAMETER \\S+ FROM ${GRANTEES} CASCADE; -- run as a superuser$`,
+    ),
+    golden: [
+      "format('%s ON PARAMETER %I'",
+      "x.privilege_type IN ('SET', 'ALTER SYSTEM')",
+      'FROM pg_parameter_acl pa',
+      "IF current_setting('server_version_num')::int >= 150000 THEN",
+    ],
+    condition: ['`SET`', '`ALTER SYSTEM`', 'configuration parameter', 'PostgreSQL 15 and later'],
+  },
 }
 
 describe('README (a view of LEDGER.md)', () => {
@@ -514,9 +526,9 @@ describe('README (a view of LEDGER.md)', () => {
     expect(errors).toEqual(abortPrefixes)
   })
 
-  it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {
+  it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111, D138: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {
     const pinned = Object.keys(ROW_PINS).map(Number)
-    expect(pinned).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13])
+    expect(pinned).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14])
     for (const index of pinned) {
       const pin = ROW_PINS[index]
       const row = refusalRows[index] ?? []
