@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-// Generator entry: the only module with I/O (D5). Speaks Prisma's line-delimited JSON-RPC
-// protocol itself (D32): requests arrive on stdin, responses go to stderr, one JSON object
-// per line (A19). Warnings and the success line go to stdout, which Prisma shows (D51, D28, A20).
-import { mkdirSync, writeFileSync } from 'node:fs'
+// Generator entry: the only module with I/O (D5). Under Prisma (PRISMA_GENERATOR_INVOCATION=true,
+// no arguments, A34) it speaks the line-delimited JSON-RPC protocol itself (D32): requests arrive
+// on stdin, responses go to stderr, one JSON object per line (A19). Warnings and the success line
+// go to stdout, which Prisma shows (D51, D28, A20). Anywhere else it prints help or the version
+// and exits without touching stdin (D56).
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
 import { BRAND } from './brand.ts'
 import { build } from './build.ts'
+import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from './cli-help.ts'
+import { DEFAULT_CONFIG } from './config.ts'
 import {
   formatDiagnostic,
   formatReport,
@@ -26,10 +30,15 @@ interface GenerateParams {
 }
 
 interface Request {
-  readonly id: number
+  /** Absent in a JSON-RPC notification, which gets no response. */
+  readonly id?: unknown
   readonly method: string
   readonly params?: unknown
 }
+
+type Reply =
+  | { readonly result: unknown }
+  | { readonly error: { readonly code: number; readonly message: string; readonly data?: unknown } }
 
 function send(message: Record<string, unknown>): void {
   process.stderr.write(`${JSON.stringify({ jsonrpc: '2.0', ...message })}\n`)
@@ -64,44 +73,61 @@ function generate(params: GenerateParams): void {
   )
 }
 
-function handle(request: Request): void {
+function dispatch(request: Request): Reply {
   try {
     if (request.method === 'getManifest') {
-      send({
-        id: request.id,
+      return {
         result: {
           manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
         },
-      })
-    } else if (request.method === 'generate') {
-      generate(request.params as GenerateParams)
-      send({ id: request.id, result: null })
-    } else {
-      send({
-        id: request.id,
-        error: { code: -32601, message: `${BRAND}: unknown method ${request.method}` },
-      })
+      }
     }
+    if (request.method === 'generate') {
+      generate(request.params as GenerateParams)
+      return { result: null }
+    }
+    return { error: { code: -32601, message: `${BRAND}: unknown method ${request.method}` } }
   } catch (error) {
     const err = error instanceof Error ? error : new Error(String(error))
-    send({
-      id: request.id,
-      error: { code: -32000, message: err.message, data: { stack: err.stack ?? '' } },
-    })
+    return { error: { code: -32000, message: err.message, data: { stack: err.stack ?? '' } } }
   }
 }
 
-createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY }).on(
-  'line',
-  (line) => {
-    let request: unknown
-    try {
-      request = JSON.parse(line)
-    } catch {
-      return
-    }
-    if (typeof request === 'object' && request !== null && 'method' in request) {
-      handle(request as Request)
-    }
-  },
+function serve(): void {
+  createInterface({ input: process.stdin, crlfDelay: Number.POSITIVE_INFINITY }).on(
+    'line',
+    (line) => {
+      let request: unknown
+      try {
+        request = JSON.parse(line)
+      } catch {
+        return
+      }
+      if (typeof request !== 'object' || request === null || !('method' in request)) return
+      const { id } = request as Request
+      const reply = dispatch(request as Request)
+      if (typeof id === 'number' || typeof id === 'string') send({ id, ...reply })
+    },
+  )
+}
+
+/** package.json sits one level above both src/ and dist/, so the same URL works from either. */
+function readPackage(): { readonly version?: unknown; readonly repository?: unknown } {
+  return JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8'))
+}
+
+const command = selectCommand(
+  process.argv.slice(2),
+  process.env.PRISMA_GENERATOR_INVOCATION === 'true',
 )
+if (command.kind === 'protocol') {
+  serve()
+} else if (command.kind === 'help') {
+  const text = usage(DEFAULT_CONFIG, repositoryUrl(readPackage().repository))
+  process.stdout.write(`${text}\n`)
+} else if (command.kind === 'version') {
+  process.stdout.write(`${String(readPackage().version)}\n`)
+} else {
+  process.stderr.write(`${unknownArgumentMessage(command.argument)}\n`)
+  process.exitCode = 2
+}

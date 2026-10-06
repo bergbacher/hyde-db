@@ -1,5 +1,5 @@
-// Drives src/generator.ts the way the Prisma CLI does: JSON-RPC requests on stdin,
-// responses on stderr, one JSON object per line (A19).
+// Drives src/generator.ts the way the Prisma CLI does: PRISMA_GENERATOR_INVOCATION=true (A34),
+// JSON-RPC requests on stdin, responses on stderr, one JSON object per line (A19).
 import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -17,7 +17,23 @@ interface RpcResponse {
 
 interface Session {
   readonly responses: RpcResponse[]
+  readonly stderr: string
   readonly stdout: string
+}
+
+/**
+ * Every non-empty stderr line must be a JSON-RPC response with a numeric id (A19, A20). Nothing
+ * is filtered: a stray line (a Node warning, a debug print) fails the test that provoked it.
+ */
+function parseResponses(stderr: string): RpcResponse[] {
+  return stderr
+    .split('\n')
+    .filter((line) => line !== '')
+    .map((line) => {
+      const message: unknown = JSON.parse(line)
+      expect(message, line).toMatchObject({ jsonrpc: '2.0', id: expect.any(Number) })
+      return message as RpcResponse
+    })
 }
 
 /** Objects are sent as JSON lines; strings are sent verbatim. */
@@ -25,6 +41,7 @@ function runGenerator(requests: readonly (object | string)[]): Promise<Session> 
   return new Promise((resolvePromise, reject) => {
     const child = spawn(process.execPath, [join(repoRoot, 'src', 'generator.ts')], {
       cwd: repoRoot,
+      env: { ...process.env, PRISMA_GENERATOR_INVOCATION: 'true' },
     })
     let stdout = ''
     let stderr = ''
@@ -36,11 +53,11 @@ function runGenerator(requests: readonly (object | string)[]): Promise<Session> 
     })
     child.on('error', reject)
     child.on('close', () => {
-      const responses = stderr
-        .split('\n')
-        .filter((line) => line.startsWith('{'))
-        .map((line) => JSON.parse(line) as RpcResponse)
-      resolvePromise({ responses, stdout })
+      try {
+        resolvePromise({ responses: parseResponses(stderr), stderr, stdout })
+      } catch (error) {
+        reject(error)
+      }
     })
     for (const request of requests) {
       child.stdin.write(`${typeof request === 'string' ? request : JSON.stringify(request)}\n`)
@@ -49,9 +66,12 @@ function runGenerator(requests: readonly (object | string)[]): Promise<Session> 
   })
 }
 
-function generateRequest(schema: string, overrides: { config?: object; provider?: string } = {}) {
+function generateRequest(
+  schema: string,
+  overrides: { config?: object; provider?: string; output?: string } = {},
+) {
   const { datamodel, config } = parseSchema(schema)
-  const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
+  const output = overrides.output ?? mkdtempSync(join(tmpdir(), 'hyde-gen-'))
   const provider = overrides.provider ?? 'postgresql'
   return {
     output,
@@ -142,5 +162,73 @@ describe('generator protocol', () => {
     const child = await runGenerator(['not json', '"a string"', '', request])
     expect(child.responses).toHaveLength(1)
     expect(child.stdout).not.toContain('jsonrpc')
+  })
+
+  it('A19: a request without an id is a notification and gets no response', async () => {
+    const { responses, stderr } = await runGenerator([
+      { jsonrpc: '2.0', method: 'getManifest', params: {} },
+      { jsonrpc: '2.0', id: 7, method: 'getManifest', params: {} },
+    ])
+    expect(responses.map((response) => response.id)).toEqual([7])
+    expect(stderr.split('\n').filter((line) => line !== '')).toHaveLength(1)
+  })
+
+  it('A20: stderr carries only JSON-RPC lines, one per request that has an id', async () => {
+    const { request } = generateRequest(example)
+    const failing = generateRequest(example, { provider: 'mysql' }).request
+    const { responses, stderr, stdout } = await runGenerator([
+      { jsonrpc: '2.0', id: 1, method: 'getManifest', params: {} },
+      'not json',
+      request,
+      { jsonrpc: '2.0', id: 3, method: 'nope' },
+      { ...failing, id: 4 },
+    ])
+    const lines = stderr.split('\n').filter((line) => line !== '')
+    expect(lines).toHaveLength(4)
+    for (const line of lines) {
+      expect(JSON.parse(line)).toMatchObject({ jsonrpc: '2.0', id: expect.any(Number) })
+    }
+    expect(responses.map((response) => response.id)).toEqual([1, 2, 3, 4])
+    expect(stdout).not.toContain('jsonrpc')
+  })
+
+  it('D28: writes the three files into a nested output directory that does not exist yet', async () => {
+    const output = join(mkdtempSync(join(tmpdir(), 'hyde-gen-')), 'nested', 'redacted')
+    expect(existsSync(output)).toBe(false)
+    const { request } = generateRequest(example, { output })
+    const { responses } = await runGenerator([request])
+    expect(responses).toEqual([{ jsonrpc: '2.0', id: 2, result: null }])
+    for (const file of OUTPUT_FILES) expect(existsSync(join(output, file)), file).toBe(true)
+  })
+
+  it('A19: answers getManifest then generate in one session, in order', async () => {
+    const { output, request } = generateRequest(example)
+    const { responses, stdout } = await runGenerator([
+      { jsonrpc: '2.0', id: 1, method: 'getManifest', params: {} },
+      request,
+    ])
+    expect(responses).toEqual([
+      {
+        jsonrpc: '2.0',
+        id: 1,
+        result: {
+          manifest: { prettyName: 'Redacted read-only views', defaultOutput: './redacted' },
+        },
+      },
+      { jsonrpc: '2.0', id: 2, result: null },
+    ])
+    for (const file of OUTPUT_FILES) expect(existsSync(join(output, file)), file).toBe(true)
+    expect(stdout).toContain('hyde-db: 2 views')
+  })
+
+  it('A19: an unknown method gets JSON-RPC error -32601', async () => {
+    const { responses } = await runGenerator([{ jsonrpc: '2.0', id: 9, method: 'frobnicate' }])
+    expect(responses).toEqual([
+      {
+        jsonrpc: '2.0',
+        id: 9,
+        error: { code: -32601, message: 'hyde-db: unknown method frobnicate' },
+      },
+    ])
   })
 })
