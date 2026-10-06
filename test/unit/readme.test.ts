@@ -3,7 +3,8 @@
 // (parsed by Prisma's own schema engine), the quick start's summary line, the deploy commands the
 // attack suite and the end-to-end layer run (D43) with the CLI usage's guards, the refusal table
 // against the golden apply script, the supported versions against package.json and the CI matrix,
-// and the view conventions (IDs in comments, footer, only live records cited).
+// and the view conventions (IDs in comments, footer, only live records cited). Statements about
+// behaviour the final fix wave changes are pinned both ways, so that change forces an update here.
 import { spawnSync } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
@@ -26,12 +27,20 @@ import {
 } from '../../src/diagnostics.ts'
 import { isSensitiveName } from '../../src/sensitive.ts'
 import type { ResolvedConfig } from '../../src/types.ts'
+import {
+  citedRecords,
+  headingAnchors,
+  ledgerStatement,
+  ledgerStates,
+  section as sectionOf,
+  withoutComments,
+} from '../helpers/docs.ts'
 import { readRepoFile, repoRoot } from '../helpers/files.ts'
 import { type PrismaMajor, parseSchema } from '../helpers/prisma.ts'
 
 const readme = readRepoFile('README.md')
 /** The README without HTML comments, which is where record IDs live. */
-const prose = readme.replace(/<!--[\s\S]*?-->/g, '')
+const prose = withoutComments(readme)
 const applySql = readRepoFile('example', 'redacted', 'redacted-views.sql')
 const help = usage(DEFAULT_CONFIG)
 const helpLines = help.split('\n')
@@ -42,12 +51,9 @@ function codeBlocks(text: string, language: string): string[] {
   return Array.from(text.matchAll(fence), (match) => match[1] ?? '')
 }
 
-/** A `## heading` section, up to the next `## ` heading. */
-function section(heading: string): string {
-  const start = readme.indexOf(`\n## ${heading}\n`)
-  if (start === -1) throw new Error(`README has no "## ${heading}" section`)
-  const end = readme.indexOf('\n## ', start + 1)
-  return readme.slice(start, end === -1 ? undefined : end)
+/** A section of the README, from its heading up to the next `## ` heading. */
+function section(heading: string, level = '##'): string {
+  return sectionOf(readme, heading, level)
 }
 
 /** The cells of a Markdown table row; escaped pipes stay inside a cell. */
@@ -63,23 +69,17 @@ const MAJORS: readonly PrismaMajor[] = [6, 7]
 const generatorBlocks = codeBlocks(readme, 'prisma').filter((block) =>
   block.startsWith('generator redacted {'),
 )
-const shellLines = codeBlocks(readme, 'sh').flatMap((block) => block.trimEnd().split('\n'))
+/** Every line of every `sh` block, without the ` &&` that chains it to the next one (D136). */
+const shellLines = codeBlocks(readme, 'sh').flatMap((block) =>
+  block
+    .trimEnd()
+    .split('\n')
+    .map((line) => line.replace(/ &&$/, '')),
+)
+/** The `sh` blocks that deploy: drop, migrate, apply. */
+const deployBlocks = codeBlocks(readme, 'sh').filter((block) => block.includes('migrate deploy'))
 /** The shell expansion that stops a command while DATABASE_URL is unset or empty (D68). */
 const DB_URL = `"\${DATABASE_URL:?export DATABASE_URL first}"`
-
-/**
- * Record ID → state, from the records table of LEDGER.md. The state is the third cell from the
- * end, since a statement may hold an unescaped pipe, as in `string | null`.
- */
-function ledgerStates(): Map<string, string> {
-  const states = new Map<string, string>()
-  for (const line of readRepoFile('LEDGER.md').split('\n')) {
-    const row = line.split(/(?<!\\)\|/).map((cell) => cell.trim())
-    const id = row[1]
-    if (id !== undefined && /^[ADCQ]\d+$/.test(id)) states.set(id, row.at(-4) ?? '')
-  }
-  return states
-}
 
 /**
  * The message of every RAISE EXCEPTION in the golden apply script, after `hyde-db: ` and up to its
@@ -88,6 +88,119 @@ function ledgerStates(): Map<string, string> {
 const abortPrefixes = Array.from(applySql.matchAll(/RAISE EXCEPTION 'hyde-db: ([^%;]*)/g), (m) =>
   (m[1] ?? '').trim(),
 )
+
+/** The rows of the refusal table, as cells. */
+const refusalRows = section('What the apply script refuses')
+  .split('\n')
+  .filter((line) => /^\| \d+ \|/.test(line))
+  .map(cells)
+
+/** The grantees a printed REVOKE names: PUBLIC, the reader, or both (D108). */
+const GRANTEES = '(PUBLIC|redacted_reader)(, redacted_reader)?'
+
+/** A word list in the golden script, such as `'SELECT, USAGE, UPDATE'` after the given SQL. */
+function goldenList(pattern: RegExp): string[] {
+  const list = pattern.exec(applySql)?.[1]
+  if (list === undefined) throw new Error(`the golden apply script has no match for ${pattern}`)
+  return list.split(', ')
+}
+
+/** The role attributes the attribute check refuses, from the `NO…` fixes it prints. */
+const ATTRIBUTES = Array.from(
+  new Set(Array.from(applySql.matchAll(/THEN 'NO([A-Z]+)' END/g), (match) => match[1] ?? '')),
+)
+
+/** The kinds `ALTER DEFAULT PRIVILEGES … REVOKE ALL ON <kind>` takes, from the script's CASE. */
+const DEFAULT_KINDS = Array.from(
+  applySql.matchAll(/WHEN '[a-zA-Z]' THEN '([A-Z ]+)'/g),
+  (match) => match[1] ?? '',
+)
+
+/**
+ * Per refusal row: the shape of its example fix, the golden SQL that prints that shape, and words
+ * its condition must name, each taken from the golden script where it lists them.
+ */
+const ROW_PINS: Readonly<
+  Record<number, { fix: RegExp; golden: readonly string[]; condition: readonly string[] }>
+> = {
+  1: {
+    fix: new RegExp(`^ALTER ROLE redacted_reader( NO(${ATTRIBUTES.join('|')}))+;$`),
+    golden: ["format('ALTER ROLE %I %s;'"],
+    condition: ATTRIBUTES.map((attribute) => `\`${attribute}\``),
+  },
+  2: {
+    fix: /^REASSIGN OWNED BY redacted_reader TO CURRENT_USER; -- run as an administrator$/,
+    golden: ['Fix: REASSIGN OWNED BY % TO CURRENT_USER; -- run as an administrator'],
+    condition: ['temporary objects and large objects', 'owns any database'],
+  },
+  3: {
+    fix: /^REVOKE \S+ FROM redacted_reader( GRANTED BY \S+)? CASCADE;$/,
+    golden: ["format('REVOKE %I FROM %I%s CASCADE;'", "format(' GRANTED BY %s'"],
+    condition: ['member of another role'],
+  },
+  4: {
+    fix: new RegExp(`^REVOKE CREATE ON DATABASE \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('CREATE ON DATABASE %I'", "has_database_privilege(r.oid, d.oid, 'CREATE')"],
+    condition: ['create schemas in this database'],
+  },
+  5: {
+    fix: new RegExp(`^REVOKE [A-Z]+( \\(\\w+\\))? ON TABLE \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('TABLE %s'", "format('REVOKE %s ON %s FROM %s CASCADE;', q.privileges"],
+    condition: goldenList(/WHERE n\.nspname IN \(([^)]*)\) AND x\.grantee/).map(
+      (schema) => `\`${schema.replaceAll("'", '')}\``,
+    ),
+  },
+  6: {
+    fix: new RegExp(`^REVOKE ALL ON \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: [
+      "format('ALL ON %s', format('%I.%I', n.nspname, c.relname))",
+      "c.relkind IN ('r', 'p', 'v', 'm', 'f')",
+    ],
+    condition: [
+      'table, partitioned table, view, materialized view or foreign table',
+      ...goldenList(/has_table_privilege\(r\.oid, c\.oid, '([^']*)'\)/).map((p) => `\`${p}\``),
+      'any column privilege',
+    ],
+  },
+  7: {
+    fix: new RegExp(`^REVOKE USAGE ON FOREIGN SERVER \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('USAGE ON FOREIGN SERVER %I'", "has_server_privilege(r.oid, fs.oid, 'USAGE')"],
+    condition: ['foreign server'],
+  },
+  8: {
+    fix: new RegExp(`^REVOKE EXECUTE ON ROUTINE \\S+\\(.*\\) FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('EXECUTE ON ROUTINE %s'", 'p.prosecdef'],
+    condition: ['`SECURITY DEFINER`'],
+  },
+  9: {
+    fix: new RegExp(`^REVOKE ALL ON SEQUENCE \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('ALL ON SEQUENCE %s'"],
+    condition: [
+      ...goldenList(/has_sequence_privilege\(r\.oid, c\.oid, '([^']*)'\)/).map((p) => `\`${p}\``),
+      'column grant',
+    ],
+  },
+  10: {
+    fix: new RegExp(
+      `^ALTER DEFAULT PRIVILEGES FOR ROLE \\S+( IN SCHEMA \\S+)? REVOKE ALL ON (${DEFAULT_KINDS.join('|')}) FROM ${GRANTEES};$`,
+    ),
+    golden: [
+      "format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;'",
+      "d.defaclobjtype IN ('r', 'S', 'n', 'L')",
+    ],
+    condition: ['tables, sequences, schemas or (PostgreSQL 18) large objects'],
+  },
+  11: {
+    fix: new RegExp(`^REVOKE CREATE ON SCHEMA \\S+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('CREATE ON SCHEMA %I'", 'n.oid <> pg_my_temp_schema()'],
+    condition: ["another session's `pg_temp_N`", "the applying session's own temporary schema"],
+  },
+  13: {
+    fix: new RegExp(`^REVOKE ALL ON LARGE OBJECT \\d+ FROM ${GRANTEES} CASCADE;$`),
+    golden: ["format('ALL ON LARGE OBJECT %s'", 'l.lomowner <> r.oid'],
+    condition: ['a large object it does not own'],
+  },
+}
 
 describe('README (a view of LEDGER.md)', () => {
   it('D51: the diagnostics reference lists every code with its severity, and no other code', () => {
@@ -160,6 +273,15 @@ describe('README (a view of LEDGER.md)', () => {
     expect(prose).toContain('`env("…")` is not supported in the generator block')
   })
 
+  it('D93: the opening table claims only what the final check refuses', () => {
+    const intro = prose.slice(0, prose.indexOf('\n## '))
+    expect(intro).toContain(
+      'aborts the script if the role holds any access the final check refuses',
+    )
+    expect(intro).toContain('[what it guarantees](#what-it-guarantees-and-what-it-does-not)')
+    expect(prose).not.toMatch(/could reach anything/)
+  })
+
   it('D14, D50: read-only and timeout are session defaults, privileges are the guarantee', () => {
     expect(prose).toContain('are session defaults, not guarantees')
     expect(prose).toContain('The guarantee is the privilege setup')
@@ -189,10 +311,22 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
+  it('D132: states the time scope of the guarantee', () => {
+    expect(section('What it guarantees and what it does not')).toContain(
+      'It holds as of each successful apply: a grant made later is not prevented, and the next apply refuses it.',
+    )
+  })
+
   it('D34: rows and the content of visible columns are not covered', () => {
     const guarantees = section('What it guarantees and what it does not')
     expect(guarantees).toContain('Every row of a visible model is visible.')
     expect(guarantees).toContain('hyde-db judges names, not contents.')
+  })
+
+  it('D93: puts what it guarantees before the reference of what the apply script refuses', () => {
+    expect(readme.indexOf('\n## What it guarantees and what it does not\n')).toBeLessThan(
+      readme.indexOf('\n## What the apply script refuses\n'),
+    )
   })
 
   it('D43: gives the psql and prisma db execute commands the tests run, as drop, migrate, apply', () => {
@@ -202,16 +336,48 @@ describe('README (a view of LEDGER.md)', () => {
       (file: string) =>
         `npx prisma db execute --file prisma/redacted/${file} --schema prisma/schema.prisma`,
     ]
-    const deployBlocks = codeBlocks(readme, 'sh').filter((block) =>
-      block.includes('migrate deploy'),
-    )
-    expect(deployBlocks.map((block) => block.trimEnd().split('\n'))).toEqual(
+    expect(
+      deployBlocks.map((block) =>
+        block
+          .trimEnd()
+          .split('\n')
+          .map((line) => line.replace(/ &&$/, '')),
+      ),
+    ).toEqual(
       variants.map((command) => [
         command('redacted-views-drop.sql'),
         'npx prisma migrate deploy',
         command('redacted-views.sql'),
       ]),
     )
+  })
+
+  it('D136: chains each deploy block with &&, so a refused step stops the rest', () => {
+    expect(deployBlocks).toHaveLength(3)
+    for (const block of deployBlocks) {
+      const lines = block.trimEnd().split('\n')
+      expect(
+        lines.slice(0, -1).every((line) => line.endsWith(' &&')),
+        block,
+      ).toBe(true)
+      expect(lines.at(-1)?.endsWith('&&'), block).toBe(false)
+      // A first step that fails, as a refused drop script does, must stop the block.
+      const stubs = 'psql() { echo psql; return 3; }; npx() { echo npx; return 1; }'
+      const { stdout } = spawnSync('sh', ['-c', `${stubs}\n${block}`], {
+        env: { PATH: process.env.PATH ?? '', DATABASE_URL: 'postgresql://db' },
+        encoding: 'utf8',
+      })
+      expect(stdout.trim().split('\n'), block).toHaveLength(1)
+    }
+  })
+
+  it('D136: sends a Prisma URL with parameters to the prisma db execute path', () => {
+    const deploy = section('Every deploy', '###')
+    expect(deploy).toContain('a plain libpq URL')
+    expect(deploy).toContain(
+      'If the database URL Prisma uses carries parameters such as `?schema=`, deploy with `prisma db execute` instead',
+    )
+    expect(deploy).toContain('`prisma migrate deploy` would then run against the stripped URL')
   })
 
   it('D68: the psql commands are the CLI usage commands for output ./redacted, with the same guards', () => {
@@ -243,14 +409,27 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D68: carries the CLI usage notes on psql and the inline password verbatim', () => {
-    const notes = helpLines.filter(
-      (line) => line.startsWith('Note: psql does not read .env') || line.includes('single quote'),
-    )
-    expect(notes).toHaveLength(2)
-    for (const note of notes) expect(prose).toContain(note)
-    expect(prose).toContain('`\\password redacted_reader`')
-    expect(prose).toContain('`ALTER ROLE redacted_reader LOGIN;`')
+  it('D68: carries the CLI usage note on psql verbatim', () => {
+    const note = helpLines.filter((line) => line.startsWith('Note: psql does not read .env'))
+    expect(note).toHaveLength(1)
+    expect(prose).toContain(note[0])
+  })
+
+  it('A41, D66: the login step sets the password with \\password before LOGIN, and states the cost of the one-liner', () => {
+    const after = section('After the first deploy', '###')
+    const password = after.indexOf('\\password redacted_reader')
+    const login = after.indexOf('ALTER ROLE redacted_reader LOGIN;')
+    expect(password).toBeGreaterThan(-1)
+    expect(login).toBeGreaterThan(password)
+    for (const phrase of [
+      'single quote',
+      '`ps` output',
+      'logs DDL statements',
+      'shell history',
+      'Later deploys keep the login and the password.',
+    ]) {
+      expect(after, phrase).toContain(phrase)
+    }
   })
 
   it('D55: shell blocks paste into any shell: no "#", backtick or command substitution', () => {
@@ -263,15 +442,64 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
+  it('A15, A95, D24: the PostgreSQL 14 step runs in the application database, as the owner of public or a superuser, before the first apply', () => {
+    const before = section('Before the first deploy', '###')
+    expect(before).toContain('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')
+    expect(before).toContain("in the application's database")
+    expect(before).toContain('the owner of schema `public` or a superuser')
+    expect(prose.indexOf('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')).toBeLessThan(
+      prose.indexOf('-f prisma/redacted/redacted-views.sql'),
+    )
+  })
+
+  it('A95: says a REVOKE by a role that neither owns the object nor holds the grant option does nothing, with the warning PostgreSQL prints', () => {
+    const warning = /`WARNING: ([^`]*)`/.exec(ledgerStatement('A95'))?.[1]
+    expect(warning).toBe('no privileges could be revoked')
+    // psql prints two spaces after the severity.
+    expect(prose).toContain(`\`WARNING:  ${warning} for "public"\``)
+    const withoutSuperuser = section('Running fixes without a superuser', '###')
+    for (const phrase of [
+      'exits 0 and changes nothing',
+      'schema `public` belongs to the bootstrap superuser',
+      'catalog objects and `pg_temp_N` schemas',
+      'run it as the owner or a superuser',
+    ]) {
+      expect(withoutSuperuser, phrase).toContain(phrase)
+    }
+  })
+
+  it('D134: says, both ways, whether a fix that needs the owner is marked', () => {
+    const marked = /run as [^']*or a superuser/.test(applySql)
+    const unmarked = "Today a fix that needs the object's owner carries no mark"
+    expect(prose.includes(unmarked)).toBe(!marked)
+  })
+
+  it('D131: says, both ways, whether client_min_messages outlives the scripts', () => {
+    const sessionLevel = /^SET client_min_messages/m.test(applySql)
+    const outlives =
+      '`SET client_min_messages = warning` runs before `BEGIN` and stays with the connection'
+    expect(prose.includes(outlives)).toBe(sessionLevel)
+  })
+
   it('D11, D13, D24, D49, D108: the refusal table lists every abort the apply script raises, in order', () => {
-    const rows = section('What the apply script refuses')
-      .split('\n')
-      .filter((line) => /^\| \d+ \|/.test(line))
-      .map(cells)
-    expect(rows.map((row) => row[0])).toEqual(rows.map((_, index) => String(index)))
-    const errors = rows.map((row) => /`([^`]*)`/.exec(row[2] ?? '')?.[1])
+    expect(refusalRows.map((row) => row[0])).toEqual(refusalRows.map((_, index) => String(index)))
+    const errors = refusalRows.map((row) => /`([^`]*)`/.exec(row[2] ?? '')?.[1])
     expect(abortPrefixes.length).toBeGreaterThanOrEqual(14)
     expect(errors).toEqual(abortPrefixes)
+  })
+
+  it('D13, D24, D49, D76, D80, D81, D82, D91, D108, D109, D111: each row gives a fix of the shape the apply script prints, and names what the script checks', () => {
+    const pinned = Object.keys(ROW_PINS).map(Number)
+    expect(pinned).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13])
+    for (const index of pinned) {
+      const pin = ROW_PINS[index]
+      const row = refusalRows[index] ?? []
+      const fix = /`([^`]*)`/.exec(row[3] ?? '')?.[1] ?? ''
+      expect(fix, `row ${index}`).toMatch(pin?.fix ?? /$^/)
+      for (const sql of pin?.golden ?? []) expect(applySql, `row ${index}`).toContain(sql)
+      expect(pin?.condition.length, `row ${index}`).toBeGreaterThan(0)
+      for (const word of pin?.condition ?? []) expect(row[1], `row ${index}`).toContain(word)
+    }
   })
 
   it('D108, D109, D123, D127: the fix shapes it quotes are the ones the apply script prints', () => {
@@ -311,11 +539,12 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D125, D127, D128, D130: says what a pasted fix changes besides the refused grants', () => {
+  it('D125, D127, D130, D135: says what a pasted fix changes besides the refused grants', () => {
     const refusals = section('What the apply script refuses')
     for (const phrase of [
       'exactly the privileges it granted, never `ALL`',
       'leaves every other grant exactly as it was',
+      'Grants that `redacted_reader` itself passed on to other roles go with it',
       'also removes the same orphaned grants that grantor made to other roles',
       'never backed by a grant option',
       'can cascade away with the fix',
@@ -324,8 +553,25 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D125: says who can run each kind of fix where the deploy user is not a superuser, as probed', () => {
-    const managed = section('What the apply script refuses')
+  it('D135: states only what the tests show about pasted fixes', () => {
+    const evidence =
+      'The integration tests paste each printed fix and re-apply; the fix tests also compare ACL entries before and after the paste.'
+    expect(section('What a pasted fix changes', '###')).toContain(evidence)
+    expect(prose).not.toMatch(/compares? the ACL entries before and after each pasted fix/)
+  })
+
+  it('A92, D130: lists the superuser-lender limit exactly while the lender choice still admits superusers', () => {
+    const lenderChoices = Array.from(
+      applySql.matchAll(/SELECT coalesce\(\(SELECT min\(h\.grantee\)[\s\S]*?AS lender/g),
+      (match) => match[0],
+    )
+    expect(lenderChoices.length).toBeGreaterThan(0)
+    const superusersExcluded = lenderChoices.every((choice) => choice.includes('rolsuper'))
+    expect(prose.includes('**A superuser as lender.**')).toBe(!superusersExcluded)
+  })
+
+  it('D125, A94: says who can run each kind of fix where the deploy user is not a superuser, as probed', () => {
+    const managed = section('Running fixes without a superuser', '###')
     for (const phrase of [
       'GRANT redacted_reader TO CURRENT_USER;',
       'REVOKE redacted_reader FROM CURRENT_USER;',
@@ -334,6 +580,7 @@ describe('README (a view of LEDGER.md)', () => {
       'Only roles with the ADMIN option on role',
       'permission denied to set parameter "lo_compat_privileges"',
       'PostgreSQL 14.24, 16.14 and 18.6',
+      "the provider's mechanism for server parameters",
     ]) {
       expect(managed, phrase).toContain(phrase)
     }
@@ -390,9 +637,9 @@ describe('README (a view of LEDGER.md)', () => {
 
   it('D53: describes the reader as an AI tool or a person, and names old objects only when migrating', () => {
     expect(prose).toContain('an AI tool or a person')
-    const outsideMigration = readme
-      .replace(section('Migrating from prisma-ai-views'), '')
-      .replace(/<!--[\s\S]*?-->/g, '')
+    const outsideMigration = withoutComments(
+      readme.replace(section('Migrating from prisma-ai-views'), ''),
+    )
     expect(outsideMigration).not.toMatch(/\bai_reader\b|@ai\.(visible|hidden)/)
   })
 
@@ -438,24 +685,27 @@ describe('README (a view of LEDGER.md)', () => {
     expect(development).toContain('only a commit on which CI passed')
   })
 
-  it('every relative link points at a file in the repository', () => {
-    const targets = Array.from(prose.matchAll(/\]\(([^)#]+)(?:#[^)]*)?\)/g), (m) => m[1] ?? '')
-    const relative = targets.filter((target) => !/^[a-z]+:/.test(target))
-    expect(relative).toContain('RELEASING.md')
-    expect(relative).toContain('SECURITY.md')
-    for (const target of relative) {
-      expect(existsSync(join(repoRoot, target)), target).toBe(true)
+  it('every link into the repository points at a file and, with an anchor, at a heading of it', () => {
+    const links = Array.from(prose.matchAll(/\]\(([^)]+)\)/g), (m) => m[1] ?? '').filter(
+      (target) => !/^[a-z]+:/.test(target),
+    )
+    expect(links).toContain('RELEASING.md')
+    expect(links).toContain('SECURITY.md')
+    expect(links.filter((link) => link.startsWith('#')).length).toBeGreaterThan(5)
+    for (const link of links) {
+      // A bare `#anchor` points into the README itself.
+      const [path = '', fragment] = link.split('#')
+      const file = path === '' ? 'README.md' : path
+      expect(existsSync(join(repoRoot, file)), link).toBe(true)
+      if (fragment !== undefined)
+        expect(headingAnchors(readRepoFile(file)), link).toContain(fragment)
     }
   })
 
   it('keeps record IDs in HTML comments, cites only live records, and ends with the view footer', () => {
     expect(prose).not.toMatch(/\b[ADCQ]\d+\b/)
     const states = ledgerStates()
-    const cited = new Set(
-      Array.from(readme.matchAll(/<!--[\s\S]*?-->/g), (match) =>
-        Array.from(match[0].matchAll(/\b[ADCQ]\d+\b/g), (id) => id[0]),
-      ).flat(),
-    )
+    const cited = citedRecords(readme)
     expect(cited.size).toBeGreaterThan(0)
     for (const id of cited) {
       expect(['active', 'verified', 'open', 'answered'], id).toContain(states.get(id))

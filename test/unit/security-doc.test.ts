@@ -1,24 +1,24 @@
 // SECURITY.md is a view of LEDGER.md. It states the same guarantee and non-guarantees as the
-// README (D93), word for word where the README states them, plus the private reporting path (D41)
-// and a hardening checklist; these tests keep the two documents from drifting apart.
+// README (D93), word for word where the README states them, plus the private reporting path (D41),
+// the supported release (D133) and a hardening checklist; these tests keep the two documents from
+// drifting apart.
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
+import {
+  citedRecords,
+  headingAnchors,
+  ledgerStatement,
+  ledgerStates,
+  section,
+  withoutComments,
+} from '../helpers/docs.ts'
 import { readRepoFile, repoRoot } from '../helpers/files.ts'
 
 const security = readRepoFile('SECURITY.md')
-const prose = security.replace(/<!--[\s\S]*?-->/g, '')
-const readme = readRepoFile('README.md')
-const readmeProse = readme.replace(/<!--[\s\S]*?-->/g, '')
+const prose = withoutComments(security)
+const readmeProse = withoutComments(readRepoFile('README.md'))
 const applySql = readRepoFile('example', 'redacted', 'redacted-views.sql')
-
-/** A section of a document, from its heading (`##` unless given) up to the next `## ` heading. */
-function section(text: string, heading: string, level = '##'): string {
-  const start = text.indexOf(`\n${level} ${heading}\n`)
-  if (start === -1) throw new Error(`no "${level} ${heading}" section`)
-  const end = text.indexOf('\n## ', start + 1)
-  return text.slice(start, end === -1 ? undefined : end)
-}
 
 /** The paragraphs of a section: blocks of text separated by blank lines, trimmed. */
 function paragraphs(text: string): string[] {
@@ -40,26 +40,8 @@ function firstColumn(text: string): string[] {
     .map((row) => row.split(/(?<!\\)\|/)[1]?.trim() ?? '')
 }
 
-/** GitHub's anchor for a heading: lower case, punctuation other than `-` dropped, spaces as `-`. */
-function anchor(heading: string): string {
-  return heading
-    .toLowerCase()
-    .replace(/[^\w\- ]/g, '')
-    .replaceAll(' ', '-')
-}
-
 const README_GUARANTEES = section(readmeProse, 'What it guarantees and what it does not')
-
-/** Record ID → state, read from the end of each row: a statement may hold an unescaped pipe. */
-function ledgerStates(): Map<string, string> {
-  const states = new Map<string, string>()
-  for (const line of readRepoFile('LEDGER.md').split('\n')) {
-    const row = line.split(/(?<!\\)\|/).map((cell) => cell.trim())
-    const id = row[1]
-    if (id !== undefined && /^[ADCQ]\d+$/.test(id)) states.set(id, row.at(-4) ?? '')
-  }
-  return states
-}
+const CHECKLIST = section(prose, 'Hardening checklist')
 
 describe('SECURITY.md (a view of LEDGER.md)', () => {
   it('D41: routes reports through GitHub private vulnerability reporting', () => {
@@ -68,10 +50,18 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     expect(prose).toContain('Do not open a public issue')
   })
 
-  it('D93, D14: states the README guarantee word for word', () => {
+  it('D133: only the latest release is supported, in the ledger’s words', () => {
+    expect(section(prose, 'Supported versions')).toContain(ledgerStatement('D133'))
+    expect(citedRecords(security).has('D133')).toBe(true)
+  })
+
+  it('D93, D14, D132: states the README guarantee and its time scope word for word', () => {
     const [guarantee, sessionDefaults] = paragraphs(README_GUARANTEES).slice(1, 3)
     expect(guarantee).toMatch(/^The guarantee is the privilege setup/)
     expect(guarantee).toContain('can read no table data outside the generated views')
+    expect(guarantee).toContain(
+      'It holds as of each successful apply: a grant made later is not prevented, and the next apply refuses it.',
+    )
     expect(sessionDefaults).toContain('are session defaults, not guarantees')
     expect(prose).toContain(guarantee)
     expect(prose).toContain(sessionDefaults)
@@ -87,7 +77,7 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     const statement =
       'REVOKE EXECUTE ON FUNCTION lo_create(oid), lo_creat(integer), lo_from_bytea(oid, bytea) FROM PUBLIC;'
     expect(readmeProse).toContain(statement)
-    expect(prose).toContain(statement)
+    expect(CHECKLIST).toContain(statement)
   })
 
   it('D11, D13, D24, D49, D58: says the final check refuses every kind of access the apply script checks, and that a refusal changes nothing', () => {
@@ -102,26 +92,33 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     expect(enforced).toContain('README.md#what-the-apply-script-refuses')
   })
 
-  it('D15: gives the REVOKE CONNECT step', () => {
-    expect(section(prose, 'Hardening checklist')).toContain(
-      'REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;',
-    )
+  it('D135: states only what the tests show about pasted fixes, as the README does', () => {
+    const evidence =
+      'The integration tests paste each printed fix and re-apply; the fix tests also compare ACL entries before and after the paste.'
+    expect(readmeProse).toContain(evidence)
+    expect(section(prose, 'How the guarantee is enforced', '###')).toContain(evidence)
+    expect(prose).not.toContain('proves each refusal and each printed fix')
   })
 
-  it('D24, A15: gives the REVOKE CREATE step for PostgreSQL 14 and older', () => {
-    const checklist = section(prose, 'Hardening checklist')
-    expect(checklist).toContain('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')
-    expect(checklist).toContain('PostgreSQL 14 and older')
+  it('D15: gives the REVOKE CONNECT step', () => {
+    expect(CHECKLIST).toContain('REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;')
+  })
+
+  it("A15, A95, D24: gives the REVOKE CREATE step for PostgreSQL 14 and older, run in the application's database by the owner of public or a superuser", () => {
+    expect(CHECKLIST).toContain('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')
+    expect(CHECKLIST).toContain('PostgreSQL 14 and older')
+    expect(CHECKLIST).toContain("in the application's database")
+    expect(CHECKLIST).toContain('the owner of schema `public` or a superuser')
+    expect(CHECKLIST).toContain('no privileges could be revoked')
   })
 
   it('D50: gives the optional REVOKE TEMPORARY step and says it affects every role', () => {
-    const checklist = section(prose, 'Hardening checklist')
-    expect(checklist).toContain('REVOKE TEMPORARY ON DATABASE app_database FROM PUBLIC;')
-    expect(checklist).toContain('affects every role')
-    expect(checklist).toContain('read replica')
+    expect(CHECKLIST).toContain('REVOKE TEMPORARY ON DATABASE app_database FROM PUBLIC;')
+    expect(CHECKLIST).toContain('affects every role')
+    expect(CHECKLIST).toContain('read replica')
   })
 
-  it('every link into the repository points at a file and, with an anchor, at a heading', () => {
+  it('every link into the repository points at a file and, with an anchor, at a heading of it', () => {
     const links = Array.from(prose.matchAll(/\]\(([^)]+)\)/g), (m) => m[1] ?? '').filter(
       (target) => !/^[a-z]+:/.test(target),
     )
@@ -131,13 +128,8 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
       const [path = '', fragment] = link.split('#')
       const file = path === '' ? 'SECURITY.md' : path
       expect(existsSync(join(repoRoot, file)), link).toBe(true)
-      if (fragment !== undefined) {
-        const headings = readRepoFile(file)
-          .split('\n')
-          .filter((line) => /^#{1,6} /.test(line))
-          .map((line) => anchor(line.replace(/^#+ /, '')))
-        expect(headings, link).toContain(fragment)
-      }
+      if (fragment !== undefined)
+        expect(headingAnchors(readRepoFile(file)), link).toContain(fragment)
     }
   })
 
@@ -148,11 +140,7 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
   it('keeps record IDs in HTML comments, cites only live records, and ends with the view footer', () => {
     expect(prose).not.toMatch(/\b[ADCQ]\d+\b/)
     const states = ledgerStates()
-    const cited = new Set(
-      Array.from(security.matchAll(/<!--[\s\S]*?-->/g), (match) =>
-        Array.from(match[0].matchAll(/\b[ADCQ]\d+\b/g), (id) => id[0]),
-      ).flat(),
-    )
+    const cited = citedRecords(security)
     expect(cited.size).toBeGreaterThan(0)
     for (const id of cited) {
       expect(['active', 'verified', 'open', 'answered'], id).toContain(states.get(id))
