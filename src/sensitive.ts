@@ -21,13 +21,26 @@ const LONG_STEMS: readonly string[] = [
   'comment',
   'latitude',
   'longitude',
+  'zipcode',
+  'postcode',
+  'passcode',
+  'passkey',
+  'geolocation',
+  'geoip',
+  'ipaddr',
+  'cardnumber',
 ]
 
-/** Match whole words (plural `s`/`es` allowed on the last word); multi-word terms match consecutive words. */
+/**
+ * Match whole words; multi-word terms match consecutive words. A plural `s`/`es` is allowed on
+ * the last word of the term, wherever the term sits in the name.
+ */
 const SHORT_TERMS: readonly (readonly string[])[] = [
   ['pass'],
   ['hash'],
+  ['hashed'],
   ['salt'],
+  ['salted'],
   ['otp'],
   ['mfa'],
   ['totp'],
@@ -54,7 +67,7 @@ const SHORT_TERMS: readonly (readonly string[])[] = [
 export function splitWords(name: string): string[] {
   return name
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+    .replace(/([A-Z])([A-Z][a-z]{2,})/g, '$1 $2')
     .replace(/([A-Za-z])([0-9])/g, '$1 $2')
     .replace(/([0-9])([A-Za-z])/g, '$1 $2')
     .split(/[^A-Za-z0-9]+/)
@@ -62,17 +75,19 @@ export function splitWords(name: string): string[] {
     .map((word) => word.toLowerCase())
 }
 
-function isWordOrPlural(word: string, term: string): boolean {
+function isWordOrPlural(word: string | undefined, term: string): boolean {
   return word === term || word === `${term}s` || word === `${term}es`
 }
 
 function containsTerm(words: readonly string[], term: readonly string[]): boolean {
+  const last = term.length - 1
   for (let start = 0; start + term.length <= words.length; start++) {
-    const matches = term.every((part, i) => {
-      const word = words[start + i] ?? ''
-      return i === term.length - 1 ? isWordOrPlural(word, part) : word === part
-    })
-    if (matches) return true
+    const window = words.slice(start, start + term.length)
+    if (
+      term.every((part, i) => (i === last ? isWordOrPlural(window[i], part) : window[i] === part))
+    ) {
+      return true
+    }
   }
   return false
 }

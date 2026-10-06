@@ -2,12 +2,23 @@ import { describe, expect, it } from 'vitest'
 import { isSensitiveName, splitWords } from '../../src/sensitive.ts'
 
 describe('splitWords', () => {
-  it('splits camelCase, PascalCase, snake_case, kebab-case and digits', () => {
+  it('D16: splits camelCase, PascalCase, snake_case, kebab-case and digits', () => {
     expect(splitWords('passwordHash')).toEqual(['password', 'hash'])
     expect(splitWords('APIKey')).toEqual(['api', 'key'])
     expect(splitWords('tax_id')).toEqual(['tax', 'id'])
     expect(splitWords('home-address')).toEqual(['home', 'address'])
     expect(splitWords('zip5Code')).toEqual(['zip', '5', 'code'])
+  })
+
+  it('D16: keeps an acronym with a plural s together and still splits an acronym from a word', () => {
+    expect(splitWords('SSNs')).toEqual(['ssns'])
+    expect(splitWords('OTPs')).toEqual(['otps'])
+    expect(splitWords('taxIDs')).toEqual(['tax', 'ids'])
+    expect(splitWords('tax_IDs')).toEqual(['tax', 'ids'])
+    expect(splitWords('ZIPCode')).toEqual(['zip', 'code'])
+    expect(splitWords('IDNumber')).toEqual(['id', 'number'])
+    expect(splitWords('userIPAddress')).toEqual(['user', 'ip', 'address'])
+    expect(splitWords('SSNToken')).toEqual(['ssn', 'token'])
   })
 })
 
@@ -76,6 +87,38 @@ describe('sensitive-name lint', () => {
     'salt',
     'pass',
     'passCode',
+    'SSNs',
+    'userSSNs',
+    'IBANs',
+    'OTPs',
+    'taxIDs',
+    'tax_IDs',
+    'hashed',
+    'hashedValue',
+    'hashed_value',
+    'salted',
+    'saltedValue',
+    'zipcode',
+    'ZIPCODE',
+    'passcode',
+    'PASSCODE',
+    'passkey',
+    'geolocation',
+    'geoip',
+    'ipaddr',
+    'IPADDR',
+    'cardnumber',
+    'EMAIL_ADDRESS',
+    'API_KEY',
+    'PASSWORD_HASH',
+    'UserEmail',
+    'CreditCardNumber',
+    'phone2',
+    'cvv2',
+    'address2',
+    'APIKey',
+    'userIP',
+    'clientIP',
   ])('D16: flags %s', (name) => {
     expect(isSensitiveName(name)).toBe(true)
   })
