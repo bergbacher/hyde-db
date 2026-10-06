@@ -24,7 +24,19 @@ export interface TestDb {
   readonly files: OutputFiles
 }
 
-/** Runs a script with `psql -v ON_ERROR_STOP=1 -f -` inside the database container, as the docs do. */
+/** docker exec's own failure statuses: daemon error (125), command not invokable (126), command not found (127). */
+const DOCKER_EXEC_FAILURES: ReadonlySet<number> = new Set([125, 126, 127])
+const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the Docker daemon)/
+
+/**
+ * Runs a script with `psql -v ON_ERROR_STOP=1 -f -` inside the database container, as the docs do.
+ *
+ * A returned PsqlResult always means psql itself ran: status 0 is success and status 3 is a
+ * script error under ON_ERROR_STOP (psql's own 1 and 2 are returned as they are). Every way in
+ * which docker or the container, not psql, failed throws, so an attack test cannot pass
+ * vacuously on a result that never reached the database: a missing docker CLI (D22), a
+ * timeout, no exit status (signal), exit 125/126/127, or a docker daemon error.
+ */
 export function psql(database: string, script: string): PsqlResult {
   const { containerId, user } = inject('pg')
   const result = spawnSync(
@@ -45,19 +57,32 @@ export function psql(database: string, script: string): PsqlResult {
       '-f',
       '-',
     ],
-    { input: script, encoding: 'utf8' },
+    { input: script, encoding: 'utf8', timeout: 60_000 },
   )
   if (result.error) {
     // A missing docker CLI must fail loudly and say what to do, never look like a psql failure (D22).
     if ('code' in result.error && result.error.code === 'ENOENT') {
       throw new Error(
-        'integration tests need the docker CLI on PATH (psql runs inside the database container, D43)',
+        'integration tests need the docker CLI on PATH (psql runs inside the database container, D43): install Docker or put the docker CLI on PATH',
         { cause: result.error },
       )
     }
     throw result.error
   }
-  return { status: result.status ?? -1, stdout: result.stdout, stderr: result.stderr }
+  if (result.status === null) {
+    throw new Error(
+      `docker exec could not run psql: it ended without an exit status (signal ${result.signal})`,
+    )
+  }
+  if (DOCKER_EXEC_FAILURES.has(result.status)) {
+    throw new Error(
+      `docker exec could not run psql (exit status ${result.status}): ${result.stderr.trim()}`,
+    )
+  }
+  if (DOCKER_DAEMON_ERROR.test(result.stderr)) {
+    throw new Error(`docker exec could not run psql: ${result.stderr.trim()}`)
+  }
+  return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
 
 export function urlFor(database: string, user?: string, password?: string): string {
@@ -104,17 +129,33 @@ export async function createTestDatabase(options: CreateOptions = {}): Promise<T
   const name = `hyde_${id}`
   const role = `hyde_${id}_reader`
   await adminQuery('postgres', `CREATE DATABASE ${name}`)
-  const harden = options.hardenPublicSchema ?? true
-  const setup = psql(
-    name,
-    `${readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')}\n${harden ? 'REVOKE CREATE ON SCHEMA public FROM PUBLIC;\n' : ''}`,
-  )
-  if (setup.status !== 0) throw new Error(setup.stderr)
-  return { name, role, password: `pw_${id}`, files: buildFiles(role) }
+  try {
+    const harden = options.hardenPublicSchema ?? true
+    const setup = psql(
+      name,
+      `${readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')}\n${harden ? 'REVOKE CREATE ON SCHEMA public FROM PUBLIC;\n' : ''}`,
+    )
+    if (setup.status !== 0) {
+      throw new Error(
+        `test database setup failed (psql exit status ${setup.status}): ${setup.stderr}`,
+      )
+    }
+    return { name, role, password: `pw_${id}`, files: buildFiles(role) }
+  } catch (error) {
+    // Do not leave a half-built database behind when setup fails.
+    await dropDatabaseAndRole(name, role)
+    throw error
+  }
 }
 
+/** Drops the database and the AI role (roles are cluster-wide and would leak across tests). */
 export async function dropTestDatabase(db: TestDb): Promise<void> {
-  await adminQuery('postgres', `DROP DATABASE IF EXISTS ${db.name} WITH (FORCE)`)
+  await dropDatabaseAndRole(db.name, db.role)
+}
+
+async function dropDatabaseAndRole(name: string, role: string): Promise<void> {
+  await adminQuery('postgres', `DROP DATABASE IF EXISTS ${name} WITH (FORCE)`)
+  await adminQuery('postgres', `DROP ROLE IF EXISTS "${role}"`)
 }
 
 export function apply(db: TestDb, sql: string = db.files['ai-views.sql']): PsqlResult {
