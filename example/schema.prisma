@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator ai {
+  provider = "prisma-ai-views"
+  output   = "./ai"     // ai-views.sql, ai-views-drop.sql, ai-schema.md (commit these)
+  // default = "hidden"  // unannotated fields are hidden (the default)
+  strict   = "true"     // every field must be classified, so new columns fail CI until someone decides
+  // role = "ai_reader"   schema = "ai"   statementTimeout = "15s"
+}
+
+datasource db {
+  provider = "postgresql"
+  // Prisma 6: url = env("DATABASE_URL")   (Prisma 7: set it in prisma.config.ts)
+}
+
+/// A customer account.
+model User {
+  /// @ai.visible
+  id           Int       @id @default(autoincrement())
+  /// @ai.visible
+  createdAt    DateTime  @default(now()) @map("created_at")
+  /// @ai.hidden
+  email        String    @unique
+  /// @ai.hidden
+  passwordHash String    @map("password_hash")
+  /// @ai.hidden
+  fullName     String    @map("full_name")
+  /// @ai.visible
+  /// ISO 3166 country code
+  country      String
+  /// @ai.visible
+  plan         Plan
+  orders       Order[]
+
+  @@map("users")
+}
+
+model Order {
+  /// @ai.visible
+  id         Int      @id @default(autoincrement())
+  /// @ai.visible
+  userId     Int      @map("user_id")
+  user       User     @relation(fields: [userId], references: [id])
+  /// @ai.visible
+  /// Total in cents
+  totalCents Int      @map("total_cents")
+  /// @ai.visible
+  placedAt   DateTime @map("placed_at")
+  /// @ai.hidden
+  shippingAddress String @map("shipping_address")
+
+  @@map("orders")
+}
+
+/// Internal only, never exposed.
+/// @ai.exclude
+model ApiKey {
+  id     Int    @id
+  secret String
+
+  @@map("api_keys")
+}
+
+enum Plan {
+  FREE
+  PRO
+}

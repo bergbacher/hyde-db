@@ -1,0 +1,51 @@
+// Characterization case "loose": exercises the non-strict rules of the base
+// (global hidden default, @ai.default(visible), relation hints, a model without
+// visible columns, an explicitly visible sensitive name).
+generator ai {
+  provider = "prisma-ai-views"
+  output   = "./ai"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Product catalogue entry.
+/// @ai.default(visible)
+model Product {
+  id          Int       @id
+  title       String
+  /// Price in cents
+  priceCents  Int       @map("price_cents")
+  /// @ai.hidden
+  supplierRef String    @map("supplier_ref")
+  tags        String[]
+  status      Status
+  categoryId  Int?      @map("category_id")
+  category    Category? @relation(fields: [categoryId], references: [id])
+
+  @@map("products")
+}
+
+model Category {
+  /// @ai.visible
+  id           Int       @id
+  /// @ai.visible
+  /// Display label
+  label        String
+  internalCode String    @map("internal_code")
+  /// @ai.visible
+  /// Public support inbox
+  supportEmail String    @map("support_email")
+  products     Product[]
+}
+
+model Session {
+  id        String @id
+  userAgent String @map("user_agent")
+}
+
+enum Status {
+  DRAFT
+  LIVE
+}
