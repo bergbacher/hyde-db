@@ -6,7 +6,8 @@ import {
   connectAsReader,
   createTestDatabase,
   dropTestDatabase,
-  psql,
+  pasteFix,
+  pasteFixAndReapply,
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
@@ -47,8 +48,7 @@ describe('SECURITY DEFINER functions', () => {
   it('D13: the suggested REVOKE fixes it, even on a first deploy', async () => {
     await adminQuery(db.name, PEEK)
     const failed = apply(db)
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D13: a direct grant to the role is named in the fix', async () => {
@@ -61,8 +61,7 @@ describe('SECURITY DEFINER functions', () => {
     expect(suggestedFix(failed)).toBe(
       `REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC, ${db.role} CASCADE;`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D82, D13: a function the role owns is refused as owned first, then as executable', async () => {
@@ -73,14 +72,13 @@ describe('SECURITY DEFINER functions', () => {
     expect(owned.stderr).toContain(
       `role ${db.role} owns objects it must not own: function public.peek(integer). Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`,
     )
-    expect(psql(db.name, suggestedFix(owned)).status).toBe(0)
+    await pasteFix(db, owned, { ownership: true })
     const executable = apply(db)
     expect(executable.status).toBe(3)
     expect(suggestedFix(executable)).toBe(
       'REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC CASCADE;',
     )
-    expect(psql(db.name, suggestedFix(executable)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, executable)
   })
 
   it('D13: definer functions in schemas the role cannot use, and invoker functions, are allowed', async () => {
@@ -107,8 +105,7 @@ describe('sequences', () => {
   it('D13: the suggested REVOKE fixes a readable sequence', async () => {
     await adminQuery(db.name, 'GRANT USAGE ON SEQUENCE public.orders_id_seq TO PUBLIC')
     const failed = apply(db)
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D13: a direct sequence grant to the role is named in the fix', async () => {
@@ -119,8 +116,7 @@ describe('sequences', () => {
     expect(suggestedFix(failed)).toBe(
       `REVOKE ALL ON SEQUENCE public.users_id_seq FROM ${db.role} CASCADE;`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D82: a sequence the role owns is refused as owned before it is checked as readable', async () => {
@@ -135,7 +131,6 @@ describe('sequences', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} owns objects it must not own: sequence public.tickets_seq. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed, { ownership: true })
   })
 })

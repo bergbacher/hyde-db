@@ -6,7 +6,7 @@ import {
   apply,
   createTestDatabase,
   dropTestDatabase,
-  psql,
+  pasteFixAndReapply,
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
@@ -59,8 +59,7 @@ describe('role attributes', () => {
     expect(suggestedFix(failed)).toBe(
       `ALTER ROLE ${db.role} NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D49: an attribute given after a first apply is refused on re-apply', async () => {

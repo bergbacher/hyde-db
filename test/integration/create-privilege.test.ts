@@ -51,8 +51,7 @@ describe('CREATE privilege', () => {
     const failed = apply(db)
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} can create objects in schemas: public. Fix: `)
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it('D82: a schema the role owns is refused as owned before CREATE is checked', async () => {
@@ -64,8 +63,7 @@ describe('CREATE privilege', () => {
     expect(failed.stderr).toContain(
       `role ${db.role} owns objects it must not own: schema scratch. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER; -- run as an administrator`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed, { ownership: true })
   })
 
   it('D24: a direct CREATE grant names the role in the fix', async () => {
@@ -79,8 +77,7 @@ describe('CREATE privilege', () => {
     expect(failed.status).toBe(3)
     expect(failed.stderr).toContain(`role ${db.role} can create objects in schemas: scratch. Fix: `)
     expect(suggestedFix(failed)).toBe(`REVOKE CREATE ON SCHEMA scratch FROM ${db.role} CASCADE;`)
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
-    expect(apply(db).status).toBe(0)
+    await pasteFixAndReapply(db, failed)
   })
 
   it("D24: the applying session's own temporary schema is not a leak", async () => {
