@@ -21,11 +21,16 @@ jobs:
       checks: read
     steps:
       - name: Fail unless the ci-ok check passed on the tagged commit
+        # A missing run, and one without a conclusion yet, give jq null; // "none" names that case.
         run: |
-          conclusion="$(gh api "repos/${{ github.repository }}/commits/$GITHUB_SHA/check-runs?per_page=100" \
-            --jq '[.check_runs[] | select(.name == "ci-ok")] | sort_by(.started_at) | last | .conclusion')"
+          conclusion="$(gh api "repos/${{ github.repository }}/commits/$GITHUB_SHA/check-runs?check_name=ci-ok&per_page=100" \
+            --jq '[.check_runs[] | select(.name == "ci-ok")] | sort_by(.started_at) | last | .conclusion // "none"')"
+          if [ "$conclusion" = "none" ]; then
+            echo "::error::ci-ok has not finished or has not run on this commit; wait for CI or start it, then re-run this workflow."
+            exit 1
+          fi
           if [ "$conclusion" != "success" ]; then
-            echo "::error::CI has not passed on this commit (ci-ok: ${conclusion:-none}); wait for it or re-run it."
+            echo "::error::CI has not passed on this commit (ci-ok: $conclusion); fix it or re-run it, then re-run this workflow."
             exit 1
           fi
         env:

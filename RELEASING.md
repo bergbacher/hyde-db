@@ -25,6 +25,8 @@ git push origin v<version>
 
 The repository setting "Allow GitHub Actions to create and approve pull requests" must be on, or `version.yml` cannot open the pull request.
 
+Make `ci-ok` the single required status check of `main` (Settings, Branches, the branch protection rule or ruleset for `main`). `ci-ok` passes only when every other CI job passed, so requiring the individual jobs as well adds nothing, and a renamed matrix job would then block every pull request.
+
 ## First release
 
 npm trusted publishing cannot create a package, so the first publish authenticates with a token. The owner does these steps in order:
@@ -44,7 +46,7 @@ From then on `release.yml` authenticates through OIDC and no long-lived npm toke
 | --- | --- |
 | The tag minus the leading `v` equals `package.json` `version` | A tag that does not match the version would publish the wrong release, so it fails. Fix the version, delete the tag locally and on `origin`, tag again. |
 | The tagged commit is an ancestor of `main` | Only reviewed code that passed CI on `main` is released. |
-| The `ci-ok` check run on the tagged commit concluded `success` | D64: a release counts only when every CI job passed on the release commit. If it has not, wait for CI or re-run it, then re-run the release. |
+| The `ci-ok` check run on the tagged commit concluded `success` | D64: a release counts only when every CI job passed on the release commit. When `ci-ok` has not finished or has not run on that commit, the job says so. Wait for CI, or start it, then re-run the release. |
 | Lint, type check, unit tests with the coverage gate, build with publint and attw | The release job needs no Docker. The attack suite and end-to-end matrices already ran in CI on that commit (D64). |
 
 The publish step runs `npm publish <tarball> --provenance --access public` on Node 24 (npm 11.5.1 or newer) with `id-token: write`.

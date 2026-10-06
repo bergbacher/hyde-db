@@ -6,6 +6,7 @@ const ci = readRepoFile('.github', 'workflows', 'ci.yml')
 const release = readRepoFile('.github', 'workflows', 'release.yml')
 const version = readRepoFile('.github', 'workflows', 'version.yml')
 const dependabot = readRepoFile('.github', 'dependabot.yml')
+const releasing = readRepoFile('RELEASING.md')
 
 /** The text of one top-level job, from its key to the next job or the end. */
 function job(workflow: string, name: string): string {
@@ -170,6 +171,24 @@ describe('release workflow', () => {
     expect(passed).toContain('CI has not passed on this commit')
     expect(release.match(/checks: read/g)).toHaveLength(1)
     expect(job(release, 'pack')).toContain('needs: ci-passed')
+  })
+
+  it('D64: asks GitHub only for the ci-ok check runs of the tagged commit', () => {
+    expect(job(release, 'ci-passed')).toContain(
+      'commits/$GITHUB_SHA/check-runs?check_name=ci-ok&per_page=100',
+    )
+  })
+
+  it('D64: a missing or unfinished ci-ok run says so instead of printing null', () => {
+    const passed = job(release, 'ci-passed')
+    // jq prints null for a missing run and for one without a conclusion yet; // "none" names it.
+    expect(passed).toContain('.conclusion // "none"')
+    expect(passed).toContain('if [ "$conclusion" = "none" ]; then')
+    expect(passed).toContain('ci-ok has not finished or has not run on this commit')
+  })
+
+  it('D64, D126: RELEASING.md says to make ci-ok the single required status check', () => {
+    expect(releasing).toContain('Make `ci-ok` the single required status check')
   })
 
   it('D63: relies on full history for the main check, with no extra fetch', () => {
