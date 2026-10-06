@@ -58,9 +58,12 @@ ALTER ROLE "ai_reader" SET search_path = "ai";
 ALTER ROLE "ai_reader" NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
 
 -- Safety check: abort if the role can read any relation outside the AI schema
--- (e.g. via PUBLIC grants or membership in another role).
+-- (e.g. via PUBLIC grants or membership in another role), execute a SECURITY DEFINER
+-- function, or read a sequence.
 DO $$
-DECLARE leaks text;
+DECLARE
+  leaks text;
+  fixes text;
 BEGIN
   SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY 1) INTO leaks
   FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
@@ -75,6 +78,29 @@ BEGIN
   IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
              WHERE r.rolname = 'ai_reader') THEN
     RAISE EXCEPTION 'hyde-db: role ai_reader must not be a member of other roles';
+  END IF;
+  SELECT string_agg(format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), ', ' ORDER BY n.nspname, p.proname),
+         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid)), concat_ws(', ', CASE WHEN has_function_privilege('public', p.oid, 'EXECUTE') THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(p.proacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('EXECUTE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, p.proname)
+    INTO leaks, fixes
+  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r
+  WHERE r.rolname = 'ai_reader'
+    AND p.prosecdef
+    AND n.nspname NOT IN ('pg_catalog', 'information_schema')
+    AND n.nspname NOT LIKE 'pg\_%'
+    AND has_schema_privilege(r.oid, n.oid, 'USAGE')
+    AND has_function_privilege(r.oid, p.oid, 'EXECUTE');
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: role ai_reader can execute SECURITY DEFINER functions: %. Fix: %', leaks, fixes;
+  END IF;
+  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),
+         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', format('%I.%I', n.nspname, c.relname), concat_ws(', ', CASE WHEN has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE') THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT', 'USAGE', 'UPDATE')) THEN quote_ident(r.rolname) END)), ' ' ORDER BY n.nspname, c.relname)
+    INTO leaks, fixes
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r
+  WHERE r.rolname = 'ai_reader'
+    AND c.relkind = 'S'
+    AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(r.oid, c.oid, 'SELECT, USAGE, UPDATE') ELSE false END;
+  IF leaks IS NOT NULL THEN
+    RAISE EXCEPTION 'hyde-db: role ai_reader can read sequences: %. Fix: %', leaks, fixes;
   END IF;
 END $$;
 

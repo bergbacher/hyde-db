@@ -11,14 +11,34 @@ export interface RenderInput {
   readonly views: readonly View[]
 }
 
+/**
+ * SQL listing who must lose a privilege: PUBLIC when it holds it, and the AI role when it holds
+ * it directly. The role may not exist yet when the fix is run (a failed first apply rolls back
+ * its creation), so it is only named when it has a direct grant.
+ */
+function grantees(publicHolds: string, acl: string, privileges: readonly string[]): string {
+  const list = privileges.map((p) => `'${p}'`).join(', ')
+  return (
+    `concat_ws(', ', CASE WHEN ${publicHolds} THEN 'PUBLIC' END, ` +
+    `CASE WHEN EXISTS (SELECT 1 FROM aclexplode(${acl}) a WHERE a.grantee = r.oid AND a.privilege_type IN (${list})) ` +
+    'THEN quote_ident(r.rolname) END)'
+  )
+}
+
 /** The final safety check: every way the role could reach data outside the views aborts the script. */
 function renderFinalCheck(config: ResolvedConfig): string[] {
   const role = ql(config.role)
+  const routine =
+    "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
+  const sequence = "format('%I.%I', n.nspname, c.relname)"
   return [
     '-- Safety check: abort if the role can read any relation outside the AI schema',
-    '-- (e.g. via PUBLIC grants or membership in another role).',
+    '-- (e.g. via PUBLIC grants or membership in another role), execute a SECURITY DEFINER',
+    '-- function, or read a sequence.',
     'DO $$',
-    'DECLARE leaks text;',
+    'DECLARE',
+    '  leaks text;',
+    '  fixes text;',
     'BEGIN',
     `  SELECT string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY 1) INTO leaks`,
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace',
@@ -33,6 +53,29 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member',
     `             WHERE r.rolname = ${role}) THEN`,
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} must not be a member of other roles';`,
+    '  END IF;',
+    `  SELECT string_agg(${routine}, ', ' ORDER BY n.nspname, p.proname),`,
+    `         string_agg(format('REVOKE EXECUTE ON ROUTINE %s FROM %s;', ${routine}, ${grantees("has_function_privilege('public', p.oid, 'EXECUTE')", 'p.proacl', ['EXECUTE'])}), ' ' ORDER BY n.nspname, p.proname)`,
+    '    INTO leaks, fixes',
+    '  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r',
+    `  WHERE r.rolname = ${role}`,
+    '    AND p.prosecdef',
+    `    AND n.nspname NOT IN ('pg_catalog', 'information_schema')`,
+    `    AND n.nspname NOT LIKE 'pg\\_%'`,
+    "    AND has_schema_privilege(r.oid, n.oid, 'USAGE')",
+    "    AND has_function_privilege(r.oid, p.oid, 'EXECUTE');",
+    '  IF leaks IS NOT NULL THEN',
+    `    RAISE EXCEPTION '${BRAND}: role ${config.role} can execute SECURITY DEFINER functions: %. Fix: %', leaks, fixes;`,
+    '  END IF;',
+    `  SELECT string_agg(${sequence}, ', ' ORDER BY n.nspname, c.relname),`,
+    `         string_agg(format('REVOKE ALL ON SEQUENCE %s FROM %s;', ${sequence}, ${grantees("has_sequence_privilege('public', c.oid, 'SELECT, USAGE, UPDATE')", 'c.relacl', ['SELECT', 'USAGE', 'UPDATE'])}), ' ' ORDER BY n.nspname, c.relname)`,
+    '    INTO leaks, fixes',
+    '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
+    `  WHERE r.rolname = ${role}`,
+    `    AND c.relkind = 'S'`,
+    "    AND CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(r.oid, c.oid, 'SELECT, USAGE, UPDATE') ELSE false END;",
+    '  IF leaks IS NOT NULL THEN',
+    `    RAISE EXCEPTION '${BRAND}: role ${config.role} can read sequences: %. Fix: %', leaks, fixes;`,
     '  END IF;',
     'END $$;',
   ]

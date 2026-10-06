@@ -87,6 +87,15 @@ describe('apply SQL', () => {
     expect(custom).not.toContain("'ai'")
   })
 
+  it('D13: aborts on executable SECURITY DEFINER functions and readable sequences', () => {
+    expect(sql).toContain('    AND p.prosecdef')
+    expect(sql).toContain('REVOKE EXECUTE ON ROUTINE %s FROM %s;')
+    expect(sql).toContain(
+      "CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(r.oid, c.oid, 'SELECT, USAGE, UPDATE') ELSE false END",
+    )
+    expect(sql).toContain('REVOKE ALL ON SEQUENCE %s FROM %s;')
+  })
+
   it('uses the configured schema, role and timeout everywhere', () => {
     const custom = renderApplySql({
       config: {
