@@ -1,0 +1,65 @@
+// Contract fixture: Prisma features whose DMMF shape hyde-db depends on (A19, A21, D34).
+generator ai {
+  provider        = "hyde-db"
+  output          = "./ai"
+  previewFeatures = ["views"]
+}
+
+datasource db {
+  provider = "postgresql"
+  schemas  = ["auth", "public"]
+}
+
+/// A user of the app
+model User {
+  /// @ai.visible
+  id     Int                      @id @default(autoincrement())
+  /// @ai.hidden
+  email  String                   @unique @map("email_address")
+  posts  Post[]
+  /// @ai.visible
+  secret String?                  @ignore
+  /// @ai.visible
+  geom   Unsupported("geometry")?
+  /// @ai.visible
+  role   Role                     @default(USER)
+  /// @ai.visible
+  tags   String[]
+
+  @@map("users")
+  @@schema("auth")
+}
+
+model Post {
+  /// @ai.visible
+  id       Int  @id
+  /// @ai.visible
+  authorId Int  @map("author_id")
+  author   User @relation(fields: [authorId], references: [id])
+
+  @@schema("public")
+}
+
+model Legacy {
+  id Int @id
+
+  @@ignore
+  @@schema("public")
+}
+
+/// A read-only report
+view UserInfo {
+  /// @ai.visible
+  id    Int    @unique
+  /// @ai.hidden
+  email String
+
+  @@schema("public")
+}
+
+enum Role {
+  USER
+  ADMIN
+
+  @@schema("public")
+}
