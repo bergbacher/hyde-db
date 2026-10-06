@@ -273,10 +273,34 @@ describe('analysis rules', () => {
     ])
   })
 
-  it('the AI schema must differ from the source schema', () => {
+  it('D12: the AI schema must differ from the source schema', () => {
     const a = analyze(datamodel(), { schema: 'public' })
     expect(a.diagnostics).toMatchObject([
       { code: 'HYDE_SCHEMA_CONFLICT', location: 'config.schema' },
     ])
+  })
+
+  it("D12: the AI schema must differ from every model's @@schema, excluded models included (A13)", () => {
+    const a = analyze(
+      datamodel(
+        model('Audit', [scalar('id', '@ai.visible')], { schema: 'ai' }),
+        model('Hidden', [scalar('id', '@ai.visible')], {
+          schema: 'ai',
+          documentation: '@ai.exclude',
+        }),
+        model('User', [scalar('id', '@ai.visible')], { schema: 'auth' }),
+      ),
+    )
+    expect(a.diagnostics.map((d) => [d.code, d.location])).toEqual([
+      ['HYDE_SCHEMA_CONFLICT', 'model Audit'],
+      ['HYDE_SCHEMA_CONFLICT', 'model Hidden'],
+    ])
+  })
+
+  it('D12: a multiSchema model in the AI schema fails as Prisma parses it', () => {
+    const { datamodel: dmmf, config } = parseSchema(
+      'datasource db {\n  provider = "postgresql"\n  schemas  = ["ai", "public"]\n}\ngenerator ai {\n  provider = "hyde-db"\n}\nmodel Audit {\n  /// @ai.visible\n  id Int @id\n  @@schema("ai")\n}\n',
+    )
+    expect(analyze(dmmf, config).diagnostics.map((d) => d.code)).toEqual(['HYDE_SCHEMA_CONFLICT'])
   })
 })

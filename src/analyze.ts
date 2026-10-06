@@ -4,6 +4,7 @@ import { readFieldAnnotations, readModelAnnotations } from './annotations.ts'
 import { validateConfig } from './config.ts'
 import { type Model, toDatamodel } from './datamodel.ts'
 import {
+  modelInAiSchema,
   relationAnnotated,
   schemaEqualsSource,
   sensitiveExplicit,
@@ -125,6 +126,9 @@ export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): 
   const diagnostics: Diagnostic[] = [...configDiagnostics]
 
   if (config.schema === config.sourceSchema) diagnostics.push(schemaEqualsSource(config.schema))
+  for (const model of models) {
+    if (model.schema === config.schema) diagnostics.push(modelInAiSchema(model.name, config.schema))
+  }
 
   const modelsByName = new Map(models.map((m) => [m.name, m]))
   const candidates: View[] = []
