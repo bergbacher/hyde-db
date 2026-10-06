@@ -407,6 +407,32 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
+  it('D137: sourceSchema follows the schema the Prisma URL selects, and the login step needs a libpq URL', () => {
+    const row = readme.split('\n').find((line) => line.startsWith('| `sourceSchema` |')) ?? ''
+    expect(row).toContain('hyde-db never reads the database URL')
+    expect(row).toContain('`?schema=<name>`, set `sourceSchema` to that name')
+    const after = section('After the first deploy', '###')
+    expect(after).toContain('a libpq URL of the same database without Prisma parameters')
+    expect(after).toContain('in a shell where you run no Prisma command')
+  })
+
+  it('A99, D140: says roles are cluster-wide, in the role row and the deploy text', () => {
+    const sentence = 'give each database, and each generator block, its own `role`'
+    const row = readme.split('\n').find((line) => line.startsWith('| `role` |')) ?? ''
+    expect(row).toContain('Roles belong to the whole cluster')
+    expect(row).toContain(sentence)
+    const before = section('Before the first deploy', '###')
+    expect(before).toContain('A role belongs to the whole cluster')
+    expect(before).toContain('cannot separate them')
+    expect(before).toContain(sentence)
+  })
+
+  it('says the views block prisma migrate dev and db push the same way, so development drops and applies too', () => {
+    const deploy = section('Every deploy', '###')
+    expect(deploy).toContain('`prisma migrate dev` and `prisma db push`')
+    expect(deploy).toContain('run the drop script before them and the apply script after')
+  })
+
   it('D136: sends a Prisma URL with parameters to the prisma db execute path', () => {
     const deploy = section('Every deploy', '###')
     expect(deploy).toContain('a plain libpq URL')
@@ -498,10 +524,25 @@ describe('README (a view of LEDGER.md)', () => {
       'exits 0 and changes nothing',
       'schema `public` belongs to the bootstrap superuser',
       'catalog objects and `pg_temp_N` schemas',
-      'run it as the owner or a superuser',
+      'run it as the owner, a member of the owner role, or a superuser',
     ]) {
       expect(withoutSuperuser, phrase).toContain(phrase)
     }
+  })
+
+  it('A95, D134: a member of the owner role revokes as the owner, and a deploy user can make itself one', () => {
+    const withoutSuperuser = section('Running fixes without a superuser', '###')
+    for (const phrase of [
+      'it works only when the owner, a member of the owner role, or a superuser runs it',
+      'owns the object or is a member of the owner role that inherits its privileges',
+      "A member counts only when it inherits the owner role's privileges.",
+      'a `CREATEROLE` deploy user by default does not inherit the roles it creates',
+      'GRANT <owner> TO CURRENT_USER;',
+      'REVOKE <owner> FROM CURRENT_USER;',
+    ]) {
+      expect(withoutSuperuser, phrase).toContain(phrase)
+    }
+    expect(withoutSuperuser).not.toContain('so it works only when the owner or a superuser runs it')
   })
 
   it('D134: says, both ways, whether a fix that needs the owner is marked', () => {
@@ -716,9 +757,10 @@ describe('README (a view of LEDGER.md)', () => {
     expect(prose).toContain('exits with status 2')
   })
 
-  it('D9, D47, D112: programmatic use: never throws on config, the dialect union and a nullable sourceSchema', () => {
+  it('D9, D142, D47, D112: programmatic use: never throws on config, the dialect union and a nullable sourceSchema', () => {
     const api = section('Programmatic use')
     expect(api).toContain('never throw on config input')
+    expect(citedRecords(api)).toContain('D142')
     expect(api).toContain(`\`dialect: '${DEFAULT_CONFIG.dialect}'\``)
     expect(api).toContain('`View.sourceSchema` is `string | null`')
     expect(api).toContain('may gain members in minor releases')

@@ -102,11 +102,11 @@ generator redacted {
 | `strict` | `"true"` | `"true"`, `"false"` | `"true"`: every scalar and enum field needs `@hyde.visible` or `@hyde.hidden`, and `@hyde.default` is an error. |
 | `default` | `"hidden"` | `"hidden"`, `"visible"` | Visibility of unannotated fields; takes effect only with `strict = "false"`. |
 | `schema` | `"redacted"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Schema that holds the views; the scripts drop and recreate it. |
-| `role` | `"redacted_reader"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Role that may read the views. |
-| `sourceSchema` | `"public"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Schema of models without `@@schema`. |
+| `role` | `"redacted_reader"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Role that may read the views. Roles belong to the whole cluster, not to one database: give each database, and each generator block, its own `role`. |
+| `sourceSchema` | `"public"` | `[a-z_][a-z0-9_]*`, at most 63 characters | Schema of models without `@@schema`. hyde-db never reads the database URL: when the URL Prisma uses selects a schema with `?schema=<name>`, set `sourceSchema` to that name. |
 | `statementTimeout` | `"15s"` | digits with an optional `ms`, `s` or `min` (bare digits are milliseconds), at most 2147483647 ms | The reader role's default statement timeout; a zero value turns it off and warns. |
 
-<!-- D66, D25, D59, A42 -->
+<!-- D66, D25, D59, A42, D140, A99, D137 -->
 
 - With an extra word in `provider`, the failure message is: <!-- D66 -->
 
@@ -164,6 +164,8 @@ On these versions schema `public` belongs to the bootstrap superuser. Run by any
 REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;
 ```
 
+A role belongs to the whole cluster, not to one database. With the default `role`, every database you deploy to in one cluster shares one `redacted_reader` and one password, and that reader reads the views of each of them. `REVOKE CONNECT` cannot separate them, because the shared role needs `CONNECT` on each. So give each database, and each generator block, its own `role`. <!-- D140, A99 -->
+
 ### Every deploy
 
 **In CI**, regenerate and fail when the committed files are stale, so every pull request shows what the reader gains or loses:
@@ -209,6 +211,8 @@ npx prisma db execute --file prisma/redacted/redacted-views.sql --schema prisma/
 
 The paths assume `prisma/schema.prisma` and `output = "./redacted"`. Who may run the scripts is in [deploy permissions](#deploy-permissions).
 
+**During development**, the views block `prisma migrate dev` and `prisma db push` the same way when they change a column a view uses: run the drop script before them and the apply script after.
+
 ### After the first deploy
 
 **1. Let the reader log in.** The apply script creates `redacted_reader` without login. Open an interactive psql session: <!-- D66, D68 -->
@@ -216,6 +220,8 @@ The paths assume `prisma/schema.prisma` and `output = "./redacted"`. Who may run
 ```sh
 psql "${DATABASE_URL:?export DATABASE_URL first}"
 ```
+
+This step needs psql, so `DATABASE_URL` must be a libpq URL of the same database without Prisma parameters such as `?schema=`. If the URL Prisma uses carries them, export the URL without them for this step only, in a shell where you run no Prisma command. <!-- D137 -->
 
 In it, run `\password redacted_reader` first. It prompts for the password, so the password lands neither in your shell history nor in `ps` output, and psql sends it hashed. Then allow the login with `ALTER ROLE redacted_reader LOGIN;`. Setting the password first means the role never accepts logins without one.
 
@@ -311,7 +317,7 @@ Every error starts with `hyde-db: `. The third column is the text that follows, 
 - Column privileges the reader passed on to others are revoked as the reader first, before its own grant goes, for example `SET ROLE redacted_reader; REVOKE SELECT (secret) ON public.api_keys FROM PUBLIC CASCADE; RESET ROLE;`. <!-- D108, A69 -->
 - When a grantor no longer holds the grant option behind something it passed on, the fix lends it that exact option for its revoke and takes it back afterwards: `GRANT … WITH GRANT OPTION;` before, and `REVOKE GRANT OPTION FOR … CASCADE;` or `REVOKE … CASCADE;` after. The option comes from a role the grantor belongs to that still holds it and is not a superuser, run as that role with `SET ROLE`, or else from the owner. A superuser never lends, because its `GRANT` and `REVOKE` act as the owner. <!-- D127, A90, A91, D130, A92 -->
 - A fix that contains `SET ROLE` ends with `-- run as a superuser`, and so does every fix for rows 13 and 15. The fix for row 3 ends with `-- run as an administrator`. Both are SQL comments, so they paste harmlessly. <!-- D108, D109, D138 -->
-- A fix that revokes as an object's owner ends with `-- run as <owner> or a superuser`, naming the owner, when the apply ran as a role that is not that owner, not a member of the owner role and not a superuser. On PostgreSQL 14 and older that owner is the bootstrap superuser for schema `public`; on every version it is for catalog objects and `pg_temp_N` schemas. A fix that revokes as several owners, not all of which that role acts as, ends with `-- run as a superuser`. Run by any other role, such a `REVOKE` changes nothing; see [running fixes without a superuser](#running-fixes-without-a-superuser). <!-- D134, A95 -->
+- A fix that revokes as an object's owner ends with `-- run as <owner> or a superuser`, naming the owner, when the apply ran as a role that is not that owner, not a member of the owner role that inherits its privileges, and not a superuser. On PostgreSQL 14 and older that owner is the bootstrap superuser for schema `public`; on every version it is for catalog objects and `pg_temp_N` schemas. A fix that revokes as several owners, not all of which that role acts as, ends with `-- run as a superuser`. Run by any other role, such a `REVOKE` changes nothing; see [running fixes without a superuser](#running-fixes-without-a-superuser). <!-- D134, A95 -->
 - The `ALTER SYSTEM` fix of row 13 is printed without `BEGIN; … COMMIT;`, because PostgreSQL refuses `ALTER SYSTEM` inside a transaction. <!-- D109 -->
 
 A fix as an apply prints it, after `Fix: ` (one line):
@@ -342,13 +348,13 @@ Row 13's fix depends on where `lo_compat_privileges` is on. Every one ends with 
 
 ### Running fixes without a superuser
 
-A printed `REVOKE` outside `SET ROLE` removes grants that the object's owner made, so it works only when the owner or a superuser runs it. PostgreSQL revokes only grants made by the role that runs the statement. Run by a role that neither owns the object nor holds the grant option, the statement prints a warning such as `WARNING:  no privileges could be revoked for "public"`, psql exits 0, and nothing changes. Run by any other role that is not the owner, it changes nothing either, with or without that warning. Either way, the next apply refuses the same object again: run it as the owner or a superuser. <!-- A95 -->
+A printed `REVOKE` outside `SET ROLE` removes grants that the object's owner made, so it works only when the owner, a member of the owner role, or a superuser runs it. A member counts only when it inherits the owner role's privileges. That is the default, except that on PostgreSQL 16 and later a `CREATEROLE` deploy user by default does not inherit the roles it creates. PostgreSQL runs a `GRANT` or `REVOKE` by such a member, or by a superuser, as the owner; any other role revokes only grants it made itself. Run by a role that neither owns the object nor holds the grant option, the statement prints a warning such as `WARNING:  no privileges could be revoked for "public"`, psql exits 0, and nothing changes. Run by any other role that holds the grant option, it changes nothing either, and prints no warning. Either way, the next apply refuses the same object again: run it as the owner, a member of the owner role, or a superuser. A deploy user that is none of these can run `GRANT <owner> TO CURRENT_USER;` first, where it may grant that role (see the `SET ROLE` row below), and `REVOKE <owner> FROM CURRENT_USER;` after. <!-- A95, A100, D134, D144 -->
 
 Where the deploy user is a non-superuser with `CREATEROLE`, for example on a managed service without superuser access, this is what it can run, as probed: <!-- D125, A94, A39, A82, A95 -->
 
 | Fix | Run by a non-superuser deploy user with `CREATEROLE` |
 |---|---|
-| A `REVOKE` without `SET ROLE` | Works when the deploy user owns the object: it revokes as the owner. Otherwise it exits 0 and changes nothing (see above), and the fix ends with `-- run as <owner> or a superuser`. On PostgreSQL 14 and older, schema `public` belongs to the bootstrap superuser; catalog objects and `pg_temp_N` schemas need their owner or a superuser too. |
+| A `REVOKE` without `SET ROLE` | Works when the deploy user owns the object or is a member of the owner role that inherits its privileges: it revokes as the owner. Otherwise it exits 0 and changes nothing (see above), and the fix ends with `-- run as <owner> or a superuser`. On PostgreSQL 14 and older, schema `public` belongs to the bootstrap superuser; catalog objects and `pg_temp_N` schemas need their owner or a superuser too. |
 | Contains `SET ROLE <role>` (`-- run as a superuser`) | Fails with `permission denied to set role`. Works after `GRANT <role> TO CURRENT_USER;` for each role the fix names after `SET ROLE`; afterwards run `REVOKE <role> FROM CURRENT_USER;`. On PostgreSQL 16 and later that grant needs `ADMIN OPTION` on the role, which the deploy user holds on roles it created, `redacted_reader` included. For a role someone else created, the grant fails with `Only roles with the ADMIN option on role … may grant this role`, and only a role with that option can run the fix. On 14, `CREATEROLE` is enough for any role that is not a superuser. |
 | `REASSIGN OWNED BY redacted_reader TO CURRENT_USER;` (row 3) | Fails with `permission denied to reassign objects`. Works after `GRANT redacted_reader TO CURRENT_USER;`; afterwards run `REVOKE redacted_reader FROM CURRENT_USER;`. |
 | `ALTER ROLE redacted_reader NO…;` (row 2) | `NOCREATEROLE` works. `NOCREATEDB` works on 14, and on 16 and later only when the deploy user has `CREATEDB` itself. `NOREPLICATION` and `NOBYPASSRLS` need a superuser on 14, and on 16 and later a role that has that attribute itself. `NOSUPERUSER` needs a superuser. |
@@ -442,7 +448,7 @@ DROP ROLE ai_reader;
 
 ## Programmatic use
 
-The package exports `build`, `analyze` and their types, nothing else. Both take the DMMF datamodel exactly as Prisma passes it to a generator (`options.dmmf.datamodel`) plus the generator config, and never throw on config input: every config problem becomes a diagnostic. <!-- D9, D47 -->
+The package exports `build`, `analyze` and their types, nothing else. Both take the DMMF datamodel exactly as Prisma passes it to a generator (`options.dmmf.datamodel`) plus the generator config, and never throw on config input: every config problem becomes a diagnostic. <!-- D9, D142, D47 -->
 
 ```ts
 import { analyze, build } from 'hyde-db'

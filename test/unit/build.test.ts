@@ -83,7 +83,7 @@ describe('public API', () => {
     expect(Object.keys(api).sort()).toEqual(['analyze', 'build'])
   })
 
-  it('D9: analyze returns diagnostics instead of throwing for exotic config values', () => {
+  it('D142: analyze returns diagnostics instead of throwing for exotic config values', () => {
     for (const [label, value] of exotic) {
       for (const key of ['strict', 'default', 'statementTimeout', 'role', 'schema', 'unknownKey']) {
         const skipped = (value === null || value === undefined) && key !== 'unknownKey'
@@ -96,7 +96,7 @@ describe('public API', () => {
     }
   })
 
-  it('D9: analyze and build report one error for a whole config that is not an object', () => {
+  it('D142: analyze and build report one error for a whole config that is not an object', () => {
     const notObjects: readonly unknown[] = [
       5,
       'strict',
@@ -127,7 +127,7 @@ describe('public API', () => {
     }
   })
 
-  it('D9: analyze and build treat a null or undefined whole config as the defaults', () => {
+  it('D142: analyze and build treat a null or undefined whole config as the defaults', () => {
     for (const value of [null, undefined]) {
       const config = value as unknown as GeneratorConfig
       expect(analyze(users, config).diagnostics).toEqual([])
@@ -135,7 +135,7 @@ describe('public API', () => {
     }
   })
 
-  it('D9: analyze and build report hostile config objects instead of throwing', () => {
+  it('D142: analyze and build report hostile config objects instead of throwing', () => {
     const boom = (): never => {
       throw new Error('boom')
     }

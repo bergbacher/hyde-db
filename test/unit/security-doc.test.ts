@@ -106,6 +106,13 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     expect(CHECKLIST).toContain('REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;')
   })
 
+  it('A99, D140: the cluster step says a role belongs to the whole cluster and gives each database its own role, as the README does', () => {
+    const sentence = 'give each database, and each generator block, its own `role`'
+    expect(CHECKLIST).toContain('A role belongs to the whole cluster')
+    expect(CHECKLIST).toContain(sentence)
+    expect(readmeProse).toContain(sentence)
+  })
+
   it("A15, A95, D24: gives the REVOKE CREATE step for PostgreSQL 14 and older, run in the application's database by the owner of public or a superuser", () => {
     expect(CHECKLIST).toContain('REVOKE CREATE ON SCHEMA public FROM PUBLIC;')
     expect(CHECKLIST).toContain('PostgreSQL 14 and older')

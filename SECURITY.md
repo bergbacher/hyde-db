@@ -65,6 +65,8 @@ Run each step once.
    REVOKE CONNECT ON DATABASE other_database FROM PUBLIC;
    ```
 
+   A role belongs to the whole cluster, not to one database: databases that share one reader role share its password, and that reader reads the views of each of them. So give each database, and each generator block, its own `role`. <!-- D140, A99 -->
+
 2. **PostgreSQL 14 and older**, and clusters upgraded from them, give `PUBLIC` the `CREATE` privilege on schema `public`. The apply script refuses to finish until it is gone. So run this before the first apply, in the application's database, as the owner of schema `public` or a superuser. On these versions `public` belongs to the bootstrap superuser. Run by any other role, the statement prints `WARNING:  no privileges could be revoked for "public"` and changes nothing. <!-- D24, A15, A95 -->
 
    ```sql

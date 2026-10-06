@@ -1,5 +1,5 @@
 // Config validation (D17, D25, D29): every problem becomes a diagnostic; nothing throws, whatever
-// a JavaScript caller passes (D9).
+// a JavaScript caller passes (D142).
 // An invalid value keeps the safe default for its key so analysis can go on.
 import {
   configNotAnObject,

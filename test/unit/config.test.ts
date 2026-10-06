@@ -219,7 +219,7 @@ describe('a zero statementTimeout (D59)', () => {
   })
 })
 
-describe('exotic input (D9)', () => {
+describe('exotic input (D142)', () => {
   const circular: Record<string, unknown> = {}
   circular.self = circular
   const bare = Object.create(null) as Record<string, unknown>
@@ -247,7 +247,7 @@ describe('exotic input (D9)', () => {
     hint: 'Pass an object of generator config keys, or omit it.',
   })
 
-  it('D9: validateConfig never throws for an exotic value of any key', () => {
+  it('D142: validateConfig never throws for an exotic value of any key', () => {
     for (const [label, value] of exotic) {
       for (const key of [...CONFIG_KEYS, 'unknownKey']) {
         const { diagnostics } = validateConfig({ [key]: value })
@@ -264,7 +264,7 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: validateConfig treats a null or undefined config as defaults, without a diagnostic', () => {
+  it('D142: validateConfig treats a null or undefined config as defaults, without a diagnostic', () => {
     for (const value of [null, undefined]) {
       expect(validateConfig(value as unknown as GeneratorConfig)).toEqual({
         config: DEFAULT_CONFIG,
@@ -273,7 +273,7 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: validateConfig reports exactly one error for a config that is not an object', () => {
+  it('D142: validateConfig reports exactly one error for a config that is not an object', () => {
     const notObjects: readonly (readonly [unknown, string])[] = [
       ['strict', 'string'],
       ['', 'string'],
@@ -286,7 +286,7 @@ describe('exotic input (D9)', () => {
       [[], 'array'],
       [[[['a']], []], 'array'],
       [['strict'], 'array'],
-      // Boxed primitives and built-in objects are not a bag of keys (D9): refused once, by tag.
+      // Boxed primitives and built-in objects are not a bag of keys (D142): refused once, by tag.
       [Object(1), 'Number'],
       [new String('strict'), 'String'],
       [new Boolean(false), 'Boolean'],
@@ -310,7 +310,7 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: validateConfig keeps accepting class instances and cross-realm plain objects', () => {
+  it('D142: validateConfig keeps accepting class instances and cross-realm plain objects', () => {
     class Settings {
       strict = 'false'
     }
@@ -322,7 +322,7 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: validateConfig reads circular and prototype-less objects like any other object', () => {
+  it('D142: validateConfig reads circular and prototype-less objects like any other object', () => {
     for (const value of [circular, bare]) {
       const { config, diagnostics } = validateConfig(value)
       expect(config).toEqual(DEFAULT_CONFIG)
@@ -332,7 +332,7 @@ describe('exotic input (D9)', () => {
     }
   })
 
-  it('D9: a getter that throws becomes one error for its key; other keys are still read', () => {
+  it('D142: a getter that throws becomes one error for its key; other keys are still read', () => {
     const { config, diagnostics } = validateConfig({
       role: 'safe_reader',
       get strict(): string {
@@ -352,7 +352,7 @@ describe('exotic input (D9)', () => {
     ])
   })
 
-  it('D9: an unknown key is reported without reading its value, so a throwing getter is harmless', () => {
+  it('D142: an unknown key is reported without reading its value, so a throwing getter is harmless', () => {
     const { diagnostics } = validateConfig({
       get strickt(): string {
         return boom()
@@ -363,7 +363,7 @@ describe('exotic input (D9)', () => {
     ])
   })
 
-  it('D9: a Proxy whose get trap throws becomes one error per known key it lists', () => {
+  it('D142: a Proxy whose get trap throws becomes one error per known key it lists', () => {
     const proxy = new Proxy({ strict: 'true', role: 'safe_reader' }, { get: boom })
     expect(validateConfig(proxy).diagnostics.map((d) => [d.code, d.location])).toEqual([
       ['HYDE_CONFIG_INVALID_VALUE', 'config.role'],
@@ -371,7 +371,7 @@ describe('exotic input (D9)', () => {
     ])
   })
 
-  it('D9: a config whose keys cannot be listed becomes one error for config', () => {
+  it('D142: a config whose keys cannot be listed becomes one error for config', () => {
     const revoked = Proxy.revocable({}, {})
     revoked.revoke()
     const hostile: readonly (readonly [string, GeneratorConfig])[] = [

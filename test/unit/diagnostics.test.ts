@@ -129,7 +129,7 @@ describe('diagnostics catalog', () => {
   })
 })
 
-describe('value formatting (D9)', () => {
+describe('value formatting (D142)', () => {
   const got = (value: unknown): string =>
     invalidConfigValue('role', value, 'a name').message.replace(/^.*, got /, '')
   const circular: Record<string, unknown> = {}
@@ -137,7 +137,7 @@ describe('value formatting (D9)', () => {
   const bare = Object.create(null) as Record<string, unknown>
   bare.self = bare
 
-  it('D9: shows any value without throwing', () => {
+  it('D142: shows any value without throwing', () => {
     expect(got('x')).toBe('"x"')
     expect(got(['a'])).toBe('["a"]')
     expect(got({ a: 1 })).toBe('{"a":1}')
@@ -212,8 +212,8 @@ describe('warnings', () => {
   })
 })
 
-describe('config shape errors (D9)', () => {
-  it('D9: a config that is not an object names the received type', () => {
+describe('config shape errors (D142)', () => {
+  it('D142: a config that is not an object names the received type', () => {
     expect(configNotAnObject('array')).toEqual({
       code: 'HYDE_CONFIG_INVALID_VALUE',
       severity: 'error',
@@ -223,7 +223,7 @@ describe('config shape errors (D9)', () => {
     })
   })
 
-  it('D9: an unreadable config or config value is an invalid-value error with a fix hint', () => {
+  it('D142: an unreadable config or config value is an invalid-value error with a fix hint', () => {
     expect(unreadableConfig()).toMatchObject({
       code: 'HYDE_CONFIG_INVALID_VALUE',
       location: 'config',
