@@ -231,7 +231,7 @@ describe('generator protocol', () => {
     for (const file of OUTPUT_FILES) expect(existsSync(join(output, file)), file).toBe(true)
   })
 
-  it('writes each file under a temporary name and renames it into place, leaving no temporary file', async () => {
+  it('D145: writes each file under a temporary name and renames it into place, leaving no temporary file', async () => {
     const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     const target = join(output, 'redacted-views.sql')
     // A hard link shares the old file's content: writing in place would change it too, while a
@@ -247,7 +247,7 @@ describe('generator protocol', () => {
     expect(readdirSync(output).sort()).toEqual([...OUTPUT_FILES].sort())
   })
 
-  it('a file it cannot put in place fails generate with "hyde-db: could not write <path>: <reason>", leaving no temporary file', async () => {
+  it('D145: a file it cannot put in place fails generate with "hyde-db: could not write <path>: <reason>", leaving no temporary file', async () => {
     const output = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     // A non-empty directory where the schema doc goes: no file can be renamed onto it.
     mkdirSync(join(output, 'redacted-schema.md', 'keep'), { recursive: true })
@@ -262,7 +262,7 @@ describe('generator protocol', () => {
     expect(stdout).toBe('')
   })
 
-  it('an output directory it cannot create fails generate with "hyde-db: could not write <path>: <reason>"', async () => {
+  it('D145: an output directory it cannot create fails generate with "hyde-db: could not write <path>: <reason>"', async () => {
     const parent = mkdtempSync(join(tmpdir(), 'hyde-gen-'))
     writeFileSync(join(parent, 'file'), '')
     const output = join(parent, 'file', 'redacted')
