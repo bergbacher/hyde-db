@@ -198,9 +198,9 @@ function revokeFix(
  * SQL for the note naming who must run a fix whose statements outside `SET ROLE` act as the owners
  * `owner` of the objects a check found, aggregated over them (D134): NULL when the deploying role
  * acts as every one of them (it is the owner, a member of the owner role or a superuser);
- * ` -- run as <owner> or a superuser` when there is one owner it does not act as; otherwise
- * ` -- run as a superuser`. A REVOKE by any other role, even one that holds the grant option,
- * changes nothing, often without a warning (A95).
+ * ` -- run as <owner> or a superuser` when the objects have one owner and the role does not act as
+ * it; otherwise, for several owners, ` -- run as a superuser`. A REVOKE by any other role changes
+ * nothing (A95), without even a warning when that role holds the grant option.
  */
 function runAs(owner: string): string {
   return (
@@ -259,7 +259,10 @@ const SEQUENCE_PRIVILEGES: readonly string[] = ['SELECT', 'USAGE', 'UPDATE']
 /** The privileges a column grant can carry. */
 const COLUMN_PRIVILEGES = 'SELECT, INSERT, UPDATE, REFERENCES'
 
-/** Configuration parameter privileges (PostgreSQL 15+): SET of a superuser-only one, and ALTER SYSTEM. */
+/**
+ * Configuration parameter privileges (PostgreSQL 15+): SET, which matters for parameters that only
+ * superusers could set otherwise, and ALTER SYSTEM.
+ */
 const PARAMETER_PRIVILEGES: readonly string[] = ['SET', 'ALTER SYSTEM']
 
 /**
