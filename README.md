@@ -468,7 +468,7 @@ const { config, views, diagnostics, counts, files } = build(datamodel, { strict:
 
 ## Development
 
-Needs Node.js 22.22 or later, pnpm 10 and Docker. `LEDGER.md` is the single source of truth for decisions; this README is a view of it, and test names start with the record they verify. <!-- D37, D36, D19 -->
+Needs Node.js 22.22 or later, pnpm 10 and Docker. `LEDGER.md` is the single source of truth for decisions; this README is a view of it, and test names start with the record they verify. Module layout, the final-check pipeline and the test layers are in [docs/architecture.md](docs/architecture.md). <!-- D37, D36, D19, D46, D20 -->
 
 | Command | What it runs |
 |---|---|
