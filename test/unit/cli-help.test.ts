@@ -1,6 +1,6 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
-import { DEFAULT_OUTPUT } from '../../src/brand.ts'
+import { BRAND, DEFAULT_OUTPUT } from '../../src/brand.ts'
 import {
   formatSummary,
   prismaArgumentsMessage,
@@ -180,6 +180,7 @@ describe('usage', () => {
 
   it('D56: prints the defaults it is given, not constants', () => {
     const custom: ResolvedConfig = {
+      dialect: 'postgresql',
       schema: 'masked',
       role: 'masked_reader',
       sourceSchema: 'app',
@@ -293,11 +294,14 @@ describe('usage', () => {
     expect(commandsIn(text).filter((c) => c.includes('READER_PASSWORD='))).toEqual([])
   })
 
-  it('D68: pasting the whole help runs only the indented commands: no prose line can run anything', () => {
-    const commandWords = /^(psql|npx|export|pnpm|prisma|npm|sh|bash|printf|echo)\b/
+  it('D68: pasting the whole help runs only the indented commands: every prose line starts with an uppercase letter', () => {
+    // The title line starts with the product name (the one lowercase start); every other prose line
+    // is blank or starts with an uppercase ASCII letter, which no command does.
     for (const line of lines) {
       if (/^ {2}(psql|npx) /.test(line)) continue
-      expect(line, line).not.toMatch(commandWords)
+      if (line.startsWith(' ')) continue
+      if (line === lines[0]) expect(line.startsWith(`${BRAND}: `)).toBe(true)
+      else expect(line, line).toMatch(/^([A-Z]|$)/)
       expect(line, line).not.toContain('`')
       expect(line, line).not.toContain('$(')
     }

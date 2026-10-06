@@ -12,6 +12,7 @@ export type {
   DmmfModel,
   GeneratorConfig,
   OutputFiles,
+  PostgresqlConfig,
   ResolvedConfig,
   Severity,
   View,

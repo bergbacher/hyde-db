@@ -66,8 +66,11 @@ export function repositoryUrl(repository: unknown): string | undefined {
   return /^https?:\/\//.test(url) ? url : undefined
 }
 
+/** The generator-block keys: the resolved config's keys except `dialect`, which the package sets (D112). */
+type ConfigKey = Exclude<keyof ResolvedConfig, 'dialect'>
+
 /** What each config key does; the keys themselves come from CONFIG_KEYS, the values from the caller. */
-const CONFIG_NOTES: Readonly<Record<keyof ResolvedConfig, string>> = {
+const CONFIG_NOTES: Readonly<Record<ConfigKey, string>> = {
   schema: 'schema that holds the views',
   role: 'login-less role that can SELECT only those views',
   sourceSchema: 'schema of your Prisma tables (a model @@schema overrides it)',
@@ -78,7 +81,7 @@ const CONFIG_NOTES: Readonly<Record<keyof ResolvedConfig, string>> = {
 
 function configLines(config: ResolvedConfig): string[] {
   return CONFIG_KEYS.map((name) => {
-    const key = name as keyof ResolvedConfig
+    const key = name as ConfigKey
     const setting = `  ${key} = "${String(config[key])}"`
     return `${setting.padEnd(28)}  ${CONFIG_NOTES[key]}`
   })
@@ -127,9 +130,9 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  npx prisma migrate deploy',
     'Create the views and the role:',
     `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
-    'Give the reader role a login password, once. First export READER_PASSWORD=... in your shell;',
-    'the password must not contain a single quote. Typed inline, it lands in your shell history and',
-    `in ps output. To avoid that, run \\password ${config.role} in an interactive psql instead.`,
+    'Give the reader role a login password, once. First export READER_PASSWORD=... in your shell.',
+    'The password must not contain a single quote. Typed inline, it lands in your shell history and in ps output.',
+    `To avoid that, run \\password ${config.role} in an interactive psql instead.`,
     'Otherwise run:',
     // The shell aborts, running nothing, when READER_PASSWORD is unset or empty: no placeholder to paste.
     `  psql "${DB_URL}" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,

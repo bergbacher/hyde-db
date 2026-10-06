@@ -33,7 +33,9 @@ export type GeneratorConfig = Readonly<Record<string, unknown>>
 
 export type Visibility = 'visible' | 'hidden'
 
-export interface ResolvedConfig {
+/** The resolved config of a PostgreSQL database. `dialect` is set by the package, never by the generator block. */
+export interface PostgresqlConfig {
+  readonly dialect: 'postgresql'
   readonly schema: string
   readonly role: string
   readonly sourceSchema: string
@@ -41,6 +43,12 @@ export interface ResolvedConfig {
   readonly strict: boolean
   readonly statementTimeout: string
 }
+
+/**
+ * The resolved config, a union discriminated on `dialect`. The union may gain members in minor
+ * releases, so switch on `dialect` instead of assuming one shape.
+ */
+export type ResolvedConfig = PostgresqlConfig
 
 export type Severity = 'error' | 'warning'
 
@@ -91,7 +99,8 @@ export interface ViewRelation {
 export interface View {
   readonly model: string
   readonly name: string
-  readonly sourceSchema: string
+  /** The schema the view reads from: never `null` on PostgreSQL, `null` where the database has no schemas. */
+  readonly sourceSchema: string | null
   readonly source: string
   readonly columns: readonly ViewColumn[]
   readonly relations: readonly ViewRelation[]

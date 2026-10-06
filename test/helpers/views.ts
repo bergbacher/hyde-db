@@ -2,6 +2,7 @@
 import type { ResolvedConfig, View } from '../../src/types.ts'
 
 export const config: ResolvedConfig = {
+  dialect: 'postgresql',
   schema: 'redacted',
   role: 'redacted_reader',
   sourceSchema: 'public',

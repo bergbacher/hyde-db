@@ -9,6 +9,7 @@ const codes = (raw: Record<string, unknown>): string[] =>
 describe('config validation', () => {
   it('D54: defaults are schema redacted, role redacted_reader, source public, hidden, strict, 15s', () => {
     expect(DEFAULT_CONFIG).toEqual({
+      dialect: 'postgresql',
       schema: 'redacted',
       role: 'redacted_reader',
       sourceSchema: 'public',
@@ -19,8 +20,8 @@ describe('config validation', () => {
     expect(validateConfig()).toEqual({ config: DEFAULT_CONFIG, diagnostics: [] })
   })
 
-  it('D54: CONFIG_KEYS names exactly the keys of DEFAULT_CONFIG, in the same order', () => {
-    expect([...CONFIG_KEYS]).toEqual(Object.keys(DEFAULT_CONFIG))
+  it('D54: CONFIG_KEYS names exactly the keys of DEFAULT_CONFIG except the resolved dialect, in the same order', () => {
+    expect([...CONFIG_KEYS]).toEqual(Object.keys(DEFAULT_CONFIG).filter((key) => key !== 'dialect'))
   })
 
   it('accepts every valid key as Prisma passes it (strings)', () => {
@@ -34,6 +35,7 @@ describe('config validation', () => {
     })
     expect(diagnostics).toEqual([])
     expect(config).toEqual({
+      dialect: 'postgresql',
       schema: 'safe',
       role: 'safe_reader',
       sourceSchema: 'app',

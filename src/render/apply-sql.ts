@@ -515,7 +515,7 @@ export function renderApplySql({ config, views }: RenderInput): string {
     // Views run with the owner's privileges (no security_invoker), so the reader
     // role needs no rights on the underlying tables at all.
     out.push(
-      `CREATE VIEW ${S}.${qi(view.name)} AS SELECT\n${cols}\nFROM ${qi(view.sourceSchema)}.${qi(view.source)};`,
+      `CREATE VIEW ${S}.${qi(view.name)} AS SELECT\n${cols}\nFROM ${qi(view.sourceSchema ?? config.sourceSchema)}.${qi(view.source)};`,
     )
     if (view.doc) out.push(`COMMENT ON VIEW ${S}.${qi(view.name)} IS ${ql(view.doc)};`)
     for (const c of view.columns) {

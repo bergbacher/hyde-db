@@ -4,15 +4,14 @@ import { readFieldAnnotations, readModelAnnotations } from './annotations.ts'
 import { validateConfig } from './config.ts'
 import { type Model, toDatamodel } from './datamodel.ts'
 import {
-  modelInViewsSchema,
   relationAnnotated,
-  schemaEqualsSource,
   sensitiveExplicit,
   sensitiveImplicit,
   strictModelDefault,
   strictUnannotated,
   viewNameCollision,
 } from './diagnostics.ts'
+import { postgresqlConfigRules } from './dialects/postgresql.ts'
 import { isSensitiveName } from './sensitive.ts'
 import type {
   Analysis,
@@ -120,16 +119,25 @@ function analyzeModel(
   }
 }
 
+/** View names share one schema; with multiSchema two tables could collide. */
+export function viewCollisions(views: readonly View[]): Diagnostic[] {
+  const diagnostics: Diagnostic[] = []
+  const seen = new Map<string, string>()
+  for (const view of views) {
+    const where = view.sourceSchema === null ? view.source : `${view.sourceSchema}.${view.source}`
+    const first = seen.get(view.name)
+    if (first !== undefined) diagnostics.push(viewNameCollision(view.name, first, where))
+    seen.set(view.name, where)
+  }
+  return diagnostics
+}
+
 export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): Analysis {
   const { models } = toDatamodel(datamodel)
   const { config, diagnostics: configDiagnostics } = validateConfig(rawConfig)
   const diagnostics: Diagnostic[] = [...configDiagnostics]
 
-  if (config.schema === config.sourceSchema) diagnostics.push(schemaEqualsSource(config.schema))
-  for (const model of models) {
-    if (model.schema === config.schema)
-      diagnostics.push(modelInViewsSchema(model.name, config.schema))
-  }
+  diagnostics.push(...postgresqlConfigRules(config, models))
 
   const modelsByName = new Map(models.map((m) => [m.name, m]))
   const candidates: View[] = []
@@ -140,14 +148,7 @@ export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): 
     if (view !== undefined) candidates.push(view)
   }
 
-  // View names share one schema; with multiSchema two tables could collide.
-  const seen = new Map<string, string>()
-  for (const view of candidates) {
-    const where = `${view.sourceSchema}.${view.source}`
-    const first = seen.get(view.name)
-    if (first !== undefined) diagnostics.push(viewNameCollision(view.name, first, where))
-    seen.set(view.name, where)
-  }
+  diagnostics.push(...viewCollisions(candidates))
 
   // Relations to models without a view are not worth describing.
   const exposed = new Set(candidates.map((v) => v.name))
