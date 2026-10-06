@@ -1,5 +1,5 @@
-// D79: the reader must not read other roles' large objects, through their ACL or because
-// lo_compat_privileges turns the checks off, from whichever source sets it (A58, A61).
+// D90: the reader must not read other roles' large objects, through their ACL or because
+// lo_compat_privileges turns the checks off, from whichever source sets it (A58, A61, A70).
 import { PostgreSqlContainer, type StartedPostgreSqlContainer } from '@testcontainers/postgresql'
 import { afterAll, afterEach, beforeAll, describe, expect, inject, it } from 'vitest'
 import { readRepoFile } from '../helpers/files.ts'
@@ -29,7 +29,7 @@ const COMPAT = 'lo_compat_privileges is on, which turns off privilege checks on 
 const SUPERUSER = ' -- run as a superuser'
 
 describe('large objects', () => {
-  it("D79: an ACL entry for the reader or PUBLIC on another role's large object aborts apply, and the printed REVOKEs fix it", async () => {
+  it("D90: an ACL entry for the reader or PUBLIC on another role's large object aborts apply, and the printed REVOKEs fix it", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     const [first, second] = await adminQuery(
@@ -52,7 +52,7 @@ describe('large objects', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it('D79: lo_compat_privileges set for the database aborts apply, and the printed fix resets it', async () => {
+  it('D90: lo_compat_privileges set for the database aborts apply, and the printed fix resets it', async () => {
     const db = await freshDb()
     await adminQuery('postgres', `ALTER DATABASE ${db.name} SET lo_compat_privileges = on`)
     const failed = apply(db)
@@ -63,7 +63,7 @@ describe('large objects', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it("A61, D79: lo_compat_privileges set for the reader's role, also in this database, aborts apply though the applying session does not see it", async () => {
+  it("A61, D90: lo_compat_privileges set for the reader's role, also in this database, aborts apply though the applying session does not see it", async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -112,7 +112,7 @@ describe('lo_compat_privileges for the whole server', () => {
     await container?.stop()
   })
 
-  it('D79: lo_compat_privileges turned on with ALTER SYSTEM aborts apply, and the printed ALTER SYSTEM fixes it', async () => {
+  it('D90: lo_compat_privileges turned on with ALTER SYSTEM aborts apply, and the printed ALTER SYSTEM fixes it', async () => {
     expect(
       run('ALTER SYSTEM SET lo_compat_privileges = on;\nSELECT pg_reload_conf();').status,
     ).toBe(0)
@@ -128,7 +128,7 @@ describe('lo_compat_privileges for the whole server', () => {
     expect(reapplied.status, reapplied.stderr).toBe(0)
   })
 
-  it('A61, D79: lo_compat_privileges set for all roles aborts apply, and the printed fix resets it for all roles', async () => {
+  it('A61, D90: lo_compat_privileges set for all roles aborts apply, and the printed fix resets it for all roles', async () => {
     expect(run('ALTER ROLE ALL SET lo_compat_privileges = on;').status).toBe(0)
     const failed = run(script)
     expect(failed.status).toBe(3)
@@ -138,5 +138,56 @@ describe('lo_compat_privileges for the whole server', () => {
     expect(run(suggestedFix(failed)).status).toBe(0)
     const reapplied = run(script)
     expect(reapplied.status, reapplied.stderr).toBe(0)
+  })
+})
+
+describe('lo_compat_privileges on the server command line', () => {
+  // A server started with `-c lo_compat_privileges=on` would make the other files' applies abort,
+  // so this test gets a server of its own, which is thrown away afterwards.
+  let container: StartedPostgreSqlContainer | undefined
+  let run: (script: string, user?: string) => PsqlResult = () => {
+    throw new Error('the server has not started')
+  }
+  const role = 'hyde_cmdline_reader'
+  let script = ''
+
+  beforeAll(async () => {
+    container = await new PostgreSqlContainer(inject('pg').image)
+      .withCommand(['postgres', '-c', 'lo_compat_privileges=on'])
+      .start()
+    const containerId = container.getId()
+    const admin = container.getUsername()
+    const database = container.getDatabase()
+    run = (sql: string, user = admin) => psql(database, sql, { server: { containerId, user } })
+    script = buildFiles(role)['redacted-views.sql']
+    const tables = readRepoFile('test', 'fixtures', 'sql', 'example-tables.sql')
+    // The reader logs in through the container's local socket to show what its sessions get.
+    expect(
+      run(`${tables}\nREVOKE CREATE ON SCHEMA public FROM PUBLIC;\nCREATE ROLE ${role} LOGIN;`)
+        .status,
+    ).toBe(0)
+  })
+  afterAll(async () => {
+    await container?.stop()
+  })
+
+  /** lo_compat_privileges as a new session of the reader sees it. */
+  function readerSetting(): string {
+    const shown = run('\\t\n\\a\nSHOW lo_compat_privileges;', role)
+    expect(shown.status, shown.stderr).toBe(0)
+    return shown.stdout.trim()
+  }
+
+  it('A70, D90: lo_compat_privileges set on the server command line reaches the reader and aborts apply; the printed setting for the reader turns it off', () => {
+    expect(readerSetting()).toBe('on')
+    const failed = run(script)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(
+      `${COMPAT} for role ${role}: the server command line. Fix: ALTER ROLE ${role} SET lo_compat_privileges = off;${SUPERUSER}`,
+    )
+    expect(run(suggestedFix(failed)).status).toBe(0)
+    const reapplied = run(script)
+    expect(reapplied.status, reapplied.stderr).toBe(0)
+    expect(readerSetting()).toBe('off')
   })
 })

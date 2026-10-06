@@ -8,6 +8,7 @@ import {
   createTestDatabase,
   dropTestDatabase,
   pasteFixAndReapply,
+  psql,
   suggestedFix,
   type TestDb,
 } from './helpers/db.ts'
@@ -22,6 +23,23 @@ async function freshDb(): Promise<TestDb> {
   return db
 }
 const ABORT = 'has privileges on system catalog objects beyond their initial privileges'
+
+/** Gives the reader SELECT on pg_authid WITH GRANT OPTION, which it passes on to PUBLIC for one column. */
+async function readerPassesOnPassword(db: TestDb): Promise<void> {
+  await adminQuery(
+    db.name,
+    `GRANT SELECT ON pg_catalog.pg_authid TO "${db.role}" WITH GRANT OPTION;
+     SET ROLE "${db.role}"; GRANT SELECT (rolpassword) ON pg_catalog.pg_authid TO PUBLIC; RESET ROLE`,
+  )
+}
+/** Whether PUBLIC can read password hashes in this database. */
+async function publicReadsPasswords(db: TestDb): Promise<boolean> {
+  const [row] = await adminQuery(
+    db.name,
+    "SELECT has_column_privilege('public', 'pg_catalog.pg_authid', 'rolpassword', 'SELECT') AS can",
+  )
+  return row?.can === true
+}
 
 describe('catalog privileges', () => {
   it('D81: a stock database has no catalog privileges beyond the initial ones', async () => {
@@ -103,5 +121,36 @@ describe('catalog privileges', () => {
       `REVOKE USAGE ON SCHEMA pg_toast FROM ${db.role} CASCADE; REVOKE SELECT ON TABLE ${toast?.name} FROM ${db.role} CASCADE;`,
     )
     pasteFixAndReapply(db, failed)
+  })
+
+  it('A69, D89: a column privilege the reader passed on from its pg_authid grant is revoked as the reader before its own grant', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    await readerPassesOnPassword(db)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(failed.stderr).toContain(`role ${db.role} ${ABORT}: pg_catalog.pg_authid. Fix: `)
+    expect(suggestedFix(failed)).toBe(
+      `SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+    )
+    pasteFixAndReapply(db, failed)
+    expect(await publicReadsPasswords(db)).toBe(false)
+  })
+
+  it('A69, D89: a column privilege the reader passed on outlives CASCADE on its pg_authid grant; the fix gives the reader the grant option back to revoke it', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    await readerPassesOnPassword(db)
+    expect(
+      psql(db.name, `REVOKE SELECT ON pg_catalog.pg_authid FROM "${db.role}" CASCADE`).status,
+    ).toBe(0)
+    expect(await publicReadsPasswords(db)).toBe(true)
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    expect(suggestedFix(failed)).toBe(
+      `GRANT SELECT (rolpassword) ON TABLE pg_catalog.pg_authid TO ${db.role} WITH GRANT OPTION; SET ROLE ${db.role}; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM PUBLIC CASCADE; RESET ROLE; REVOKE SELECT (rolpassword) ON TABLE pg_catalog.pg_authid FROM ${db.role} CASCADE;`,
+    )
+    pasteFixAndReapply(db, failed)
+    expect(await publicReadsPasswords(db)).toBe(false)
   })
 })

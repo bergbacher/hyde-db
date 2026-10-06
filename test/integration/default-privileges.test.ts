@@ -1,9 +1,11 @@
-// D84: the final check refuses default privileges that would make objects created later readable
-// to the reader role (A53, A59, A65), and prints the ALTER DEFAULT PRIVILEGES that removes them.
+// D91: the final check refuses default privileges of other roles that would make objects created
+// later readable to the reader role (A53, A59, A65), and prints the ALTER DEFAULT PRIVILEGES that
+// removes them; the reader's own defaults are ignored (A71).
 import { afterEach, describe, expect, inject, it } from 'vitest'
 import {
   adminQuery,
   apply,
+  connectAsReader,
   createTestDatabase,
   dropTestDatabase,
   pasteFixAndReapply,
@@ -35,7 +37,7 @@ async function readerCanUseNewTable(db: TestDb): Promise<boolean> {
 }
 
 describe('default privileges', () => {
-  it('D84: default privileges granting the reader SELECT on future tables abort apply, and the printed fix works', async () => {
+  it('D91: default privileges granting the reader SELECT on future tables abort apply, and the printed fix works', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -51,7 +53,7 @@ describe('default privileges', () => {
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
-  it('D84: default privileges granting PUBLIC SELECT on future tables abort apply, and the printed fix works', async () => {
+  it('D91: default privileges granting PUBLIC SELECT on future tables abort apply, and the printed fix works', async () => {
     const db = await freshDb()
     await adminQuery(
       db.name,
@@ -66,7 +68,7 @@ describe('default privileges', () => {
     expect(await readerCanUseNewTable(db)).toBe(false)
   })
 
-  it('D84: database-wide defaults are fixed without IN SCHEMA, for sequences to PUBLIC and functions to the reader', async () => {
+  it('D91: database-wide defaults are fixed without IN SCHEMA, for sequences to PUBLIC and functions to the reader', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
     await adminQuery(
@@ -85,7 +87,7 @@ describe('default privileges', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it('D84: default privileges granting PUBLIC CREATE on future schemas abort apply, and the printed fix works', async () => {
+  it('D91: default privileges granting PUBLIC CREATE on future schemas abort apply, and the printed fix works', async () => {
     const db = await freshDb()
     await adminQuery(db.name, 'ALTER DEFAULT PRIVILEGES GRANT CREATE ON SCHEMAS TO PUBLIC')
     const failed = apply(db)
@@ -96,7 +98,7 @@ describe('default privileges', () => {
     pasteFixAndReapply(db, failed)
   })
 
-  it('A65, D84: PUBLIC default privileges on large objects abort apply on PostgreSQL 18; earlier servers have none and pass', async () => {
+  it('A65, D91: PUBLIC default privileges on large objects abort apply on PostgreSQL 18; earlier servers have none and pass', async () => {
     const db = await freshDb()
     if ((await serverVersion(db.name)) >= 180000) {
       await adminQuery(db.name, 'ALTER DEFAULT PRIVILEGES GRANT SELECT ON LARGE OBJECTS TO PUBLIC')
@@ -112,13 +114,32 @@ describe('default privileges', () => {
     }
   })
 
-  it("D84: PUBLIC's defaults on functions and types are not refused", async () => {
+  it("D91: PUBLIC's defaults on functions and types are not refused", async () => {
     const db = await freshDb()
     await adminQuery(
       db.name,
       `ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO PUBLIC;
        ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON TYPES TO PUBLIC`,
     )
+    const result = apply(db)
+    expect(result.status, result.stderr).toBe(0)
+  })
+
+  it("A71, D91: the reader's own default privileges do not block the deploy", async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    const reader = await connectAsReader(db)
+    try {
+      await reader.query('SET default_transaction_read_only = off')
+      await reader.query('ALTER DEFAULT PRIVILEGES GRANT SELECT ON TABLES TO PUBLIC')
+    } finally {
+      await reader.end()
+    }
+    const [row] = await adminQuery(
+      db.name,
+      `SELECT count(*)::int AS n FROM pg_default_acl WHERE defaclrole = '${db.role}'::regrole`,
+    )
+    expect(row?.n).toBe(1)
     const result = apply(db)
     expect(result.status, result.stderr).toBe(0)
   })

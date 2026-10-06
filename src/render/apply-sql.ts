@@ -1,7 +1,7 @@
 // Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
 // views, grants the reader role SELECT on exactly those views, and aborts with a pasteable fix if
-// the role could reach anything else (D11, D13, D24, D49, D76, D79–D85); it revokes nothing
-// itself (D69).
+// the role could reach anything else (D11, D13, D24, D49, D76, D80–D82, D89–D91); it revokes
+// nothing itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -12,36 +12,67 @@ export interface RenderInput {
   readonly views: readonly View[]
 }
 
+/** The privilege names as a SQL list of string literals. */
+function privilegeList(privileges: readonly string[]): string {
+  return privileges.map((p) => `'${p}'`).join(', ')
+}
+
+/**
+ * SQL for a REVOKE, run as grantor `t.grantor` on the grantees `t.grantees`, of exactly the
+ * `privileges` in `acl` that it granted to PUBLIC or the reader role `r` on `object`; NULL when it
+ * granted none. REVOKE ALL on a table or sequence, run as a grantor, also revokes the privileges
+ * that columns carry, and fails when the grantor holds no grant option for any of them (a grantor
+ * of TRIGGER or of a sequence's USAGE alone).
+ */
+function revokeAsGrantor(object: string, acl: string, privileges: readonly string[]): string {
+  return (
+    `(SELECT format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(DISTINCT x.privilege_type, ', ' ORDER BY x.privilege_type), ${object}, t.grantees) ` +
+    `FROM aclexplode(${acl}) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privilegeList(privileges)}) HAVING count(*) > 0)`
+  )
+}
+
 /**
  * SQL for the statements that take `privileges` on one object away from PUBLIC and the reader role
  * `r`, or NULL when neither holds any. `what` is SQL for the privilege-and-object part, e.g.
- * `ALL ON public.users`; `whatAsGrantor`, when given, replaces it in the statements run as a
- * third-party grantor `t.grantor`.
+ * `ALL ON public.users`. `asGrantor`, when given, is SQL for the statements run as a grantor
+ * `t.grantor` other than the owner on its grantees `t.grantees`; by default they revoke `what`.
  *
- * A superuser's REVOKE acts as the owner and leaves grants made by a third-party grantor in place
+ * A superuser's REVOKE acts as the owner and leaves grants made by any other grantor in place
  * (A56), so those are revoked as their grantor; the owner's grants follow in one statement.
- * CASCADE also removes what a grantee passed on (A54), so grants the reader made are never revoked
- * as the reader: CASCADE on its own grant removes them (A67). The reader is only named when it owns
- * the object or holds a grant, so a fix still runs after a failed first apply rolled back the
- * role's creation.
+ * CASCADE also removes what a grantee passed on within the same ACL (A54), but not the column
+ * grants it passed on from a table grant (A69). So the reader is a grantor like any other, and its
+ * revokes come first, while it still holds the grant options they need. `regrant`, when given, is
+ * SQL for the privilege-and-object part the reader must be given back WITH GRANT OPTION first
+ * because its own grant was already revoked, or NULL; the owner's statement then names the reader.
+ * The reader is otherwise only named when it owns the object or holds a grant, so a fix still runs
+ * after a failed first apply rolled back the role's creation.
  */
 function revokeFix(
   what: string,
   owner: string,
   acl: string,
   privileges: readonly string[],
-  options: { readonly publicByDefault?: boolean; readonly whatAsGrantor?: string } = {},
+  options: {
+    readonly publicByDefault?: boolean
+    readonly asGrantor?: string
+    readonly regrant?: string
+  } = {},
 ): string {
-  const held = `FROM aclexplode(${acl}) a WHERE a.privilege_type IN (${privileges.map((p) => `'${p}'`).join(', ')})`
-  const asGrantor =
-    `(SELECT string_agg(format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, ${options.whatAsGrantor ?? what}, t.grantees), ' ' ORDER BY t.grantor) ` +
+  const held = `FROM aclexplode(${acl}) a WHERE a.privilege_type IN (${privilegeList(privileges)})`
+  const statements =
+    options.asGrantor ?? `format('REVOKE %s FROM %s CASCADE;', ${what}, t.grantees)`
+  const asGrantor = options.regrant
+    ? `format('%sSET ROLE %s; %s RESET ROLE;', CASE WHEN t.grantor = r.oid THEN 'GRANT ' || ${options.regrant} || ' TO ' || quote_ident(r.rolname) || ' WITH GRANT OPTION; ' END, `
+    : "format('SET ROLE %s; %s RESET ROLE;', "
+  const asGrantors =
+    `(SELECT string_agg(${asGrantor}t.grantor::regrole, ${statements}), ' ' ORDER BY t.grantor <> r.oid, t.grantor) ` +
     "FROM (SELECT g.grantor, string_agg(CASE WHEN g.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END, ', ' ORDER BY g.grantee) AS grantees " +
-    `FROM (SELECT DISTINCT a.grantor, a.grantee ${held} AND a.grantee IN (0, r.oid) AND a.grantor <> ${owner} AND a.grantor <> r.oid) g GROUP BY g.grantor) t)`
+    `FROM (SELECT DISTINCT a.grantor, a.grantee ${held} AND a.grantee IN (0, r.oid) AND a.grantor <> ${owner}) g GROUP BY g.grantor) t)`
   // PUBLIC holds a function's EXECUTE by default while its ACL is NULL.
   const asOwner =
     `nullif(concat_ws(', ', CASE WHEN ${options.publicByDefault ? `${acl} IS NULL OR ` : ''}EXISTS (SELECT 1 ${held} AND a.grantee = 0 AND a.grantor = ${owner}) THEN 'PUBLIC' END, ` +
-    `CASE WHEN r.oid = ${owner} OR EXISTS (SELECT 1 ${held} AND a.grantee = r.oid AND a.grantor = ${owner}) THEN quote_ident(r.rolname) END), '')`
-  return `concat_ws(' ', ${asGrantor}, 'REVOKE ' || ${what} || ' FROM ' || ${asOwner} || ' CASCADE;')`
+    `CASE WHEN r.oid = ${owner} OR EXISTS (SELECT 1 ${held} AND a.grantee = r.oid AND a.grantor = ${owner})${options.regrant ? ` OR ${options.regrant} IS NOT NULL` : ''} THEN quote_ident(r.rolname) END), '')`
+  return `concat_ws(' ', ${asGrantors}, 'REVOKE ' || ${what} || ' FROM ' || ${asOwner} || ' CASCADE;')`
 }
 
 /** Role attributes the reader role must not have, as pg_roles columns, in the order the abort lists them (D49). */
@@ -81,6 +112,9 @@ const TABLE_PRIVILEGES: readonly string[] = [
   'TRIGGER',
 ]
 
+/** Sequence privileges, any of which lets a role read a sequence (D13). */
+const SEQUENCE_PRIVILEGES: readonly string[] = ['SELECT', 'USAGE', 'UPDATE']
+
 /** The privileges a column grant can carry. */
 const COLUMN_PRIVILEGES = 'SELECT, INSERT, UPDATE, REFERENCES'
 
@@ -101,10 +135,11 @@ const CATALOG_SCHEMAS = "('pg_catalog', 'information_schema', 'pg_toast')"
 /**
  * SQL for the privileges of PUBLIC and the reader role `r` on the catalog schemas and their
  * relations and functions beyond the initial ones (D81), one row per privilege: object, REVOKE
- * target, privilege, grantee, grantor and owner. An entry is extra when the initial ACL grants that
- * privilege neither to its grantee nor to PUBLIC. Objects without a pg_init_privs row start from
- * their default ACL; information_schema records none, and initdb grants PUBLIC USAGE on it and
- * SELECT on its views, except on the internal _pg_ views.
+ * target, privilege, grantee, grantor, owner, and whether the grantor is the reader and no longer
+ * holds the grant option behind it (only a column grant can outlive it, A69). An entry is extra
+ * when the initial ACL grants that privilege neither to its grantee nor to PUBLIC. Objects without
+ * a pg_init_privs row start from their default ACL; information_schema records none, and initdb
+ * grants PUBLIC USAGE on it and SELECT on its views, except on the internal _pg_ views.
  */
 function catalogEntries(): string[] {
   const relation = "format('%I.%I', n.nspname, c.relname)"
@@ -115,7 +150,8 @@ function catalogEntries(): string[] {
   return [
     `    SELECT ${relation} AS object, format('TABLE %s', ${relation}) AS target,`,
     "           CASE WHEN x.col IS NULL THEN x.privilege_type ELSE format('%s (%I)', x.privilege_type, x.col) END AS privilege,",
-    '           x.grantee, x.grantor, c.relowner AS owner',
+    '           x.grantee, x.grantor, c.relowner AS owner,',
+    "           x.col IS NOT NULL AND x.grantor = r.oid AND NOT has_column_privilege(r.oid, c.oid, x.col, x.privilege_type || ' WITH GRANT OPTION') AS lost",
     '    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN LATERAL (',
     "      SELECT NULL::name AS col, a.grantee, a.grantor, a.privilege_type, '{}'::aclitem[] AS initial FROM aclexplode(c.relacl) a",
     `      UNION ALL SELECT att.attname, a.grantee, a.grantor, a.privilege_type, coalesce(${initial('pg_class', 'c.oid', 'att.attnum')}, '{}')`,
@@ -125,12 +161,12 @@ function catalogEntries(): string[] {
     `      AND NOT EXISTS (SELECT 1 FROM aclexplode(x.initial || coalesce(${initial('pg_class', 'c.oid', '0')},`,
     "            CASE WHEN n.nspname = 'information_schema' AND c.relname NOT LIKE '\\_pg\\_%' THEN acldefault('r', c.relowner) || makeaclitem(0, c.relowner, 'SELECT', false) ELSE acldefault('r', c.relowner) END)) b",
     '        WHERE b.grantee IN (x.grantee, 0) AND b.privilege_type = x.privilege_type)',
-    `    UNION ALL SELECT ${routine}, format('ROUTINE %s', ${routine}), a.privilege_type, a.grantee, a.grantor, p.proowner`,
+    `    UNION ALL SELECT ${routine}, format('ROUTINE %s', ${routine}), a.privilege_type, a.grantee, a.grantor, p.proowner, false`,
     '    FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN LATERAL aclexplode(p.proacl) a',
     `    WHERE n.nspname IN ${CATALOG_SCHEMAS} AND a.grantee IN (0, r.oid)`,
     `      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(${initial('pg_proc', 'p.oid', '0')}, acldefault('f', p.proowner))) b`,
     '        WHERE b.grantee IN (a.grantee, 0) AND b.privilege_type = a.privilege_type)',
-    "    UNION ALL SELECT format('%I', n.nspname), format('SCHEMA %I', n.nspname), a.privilege_type, a.grantee, a.grantor, n.nspowner",
+    "    UNION ALL SELECT format('%I', n.nspname), format('SCHEMA %I', n.nspname), a.privilege_type, a.grantee, a.grantor, n.nspowner, false",
     '    FROM pg_namespace n CROSS JOIN LATERAL aclexplode(n.nspacl) a',
     `    WHERE n.nspname IN ${CATALOG_SCHEMAS} AND a.grantee IN (0, r.oid)`,
     `      AND NOT EXISTS (SELECT 1 FROM aclexplode(coalesce(${initial('pg_namespace', 'n.oid', '0')},`,
@@ -147,11 +183,22 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
   const routine =
     "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
   const relation = "format('%I.%I', n.nspname, c.relname)"
-  // A grantor that holds only column privileges cannot REVOKE ALL on the table (A67), so its
-  // grants are revoked column by column unless it granted a table privilege.
+  // A grantor revokes exactly the table privileges it granted, then ALL on the columns it granted
+  // privileges on: one that holds only column privileges cannot REVOKE on the table (A69).
   const relationAsGrantor =
-    `CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid)) THEN format('ALL ON %s', ${relation}) ` +
-    `ELSE format('ALL (%s) ON %s', (SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM ${COLUMNS} AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid))), ${relation}) END`
+    `concat_ws(' ', ${revokeAsGrantor(relation, 'c.relacl', TABLE_PRIVILEGES)}, ` +
+    `(SELECT format('REVOKE ALL (%s) ON %s FROM %s CASCADE;', string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum), ${relation}, t.grantees) ` +
+    `FROM ${COLUMNS} AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid)) HAVING count(*) > 0))`
+  // Columns on which the reader passed on a grant whose grant option it no longer holds: CASCADE on
+  // its table grant leaves such grants in place (A69), and it can revoke them only when given the
+  // option back.
+  const relationRegrant =
+    `(SELECT format('ALL (%s) ON %s', string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum), ${relation}) ` +
+    `FROM ${COLUMNS} AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = r.oid AND x.grantee IN (0, r.oid) ` +
+    "AND NOT has_column_privilege(r.oid, c.oid, att.attnum, x.privilege_type || ' WITH GRANT OPTION')) HAVING count(*) > 0)"
+  // Settings in pg_db_role_setting that reach the reader's sessions in this database.
+  const readerSetting = (alias: string): string =>
+    `${alias}.setrole IN (0, r.oid) AND ${alias}.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))`
   // Where a pg_db_role_setting row applies: to all roles, the reader's role, the database, or the
   // reader's role in the database; as text for the abort and as the target of ALTER … RESET.
   const settingScope = (all: string, role: string, database: string, both: string): string =>
@@ -175,8 +222,8 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '--     ones;',
     '--   holds any privilege on a relation outside the views schema, or can use a foreign server;',
     '--   can execute a SECURITY DEFINER function or use a sequence;',
-    '--   gains privileges on objects created later through default privileges (before the schema',
-    '--     check: this script creates the views schema under them);',
+    "--   gains privileges on objects created later through other roles' default privileges (before",
+    '--     the schema check: this script creates the views schema under them);',
     '--   can create objects in any schema;',
     '--   can read large objects of other roles, or lo_compat_privileges turns their checks off.',
     '-- Each abort prints the statements that fix it, to be run by an administrator.',
@@ -231,17 +278,24 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  SELECT string_agg(o.object, \', \' ORDER BY o.object COLLATE "C"), string_agg(o.fix, \' \' ORDER BY o.object COLLATE "C")',
     '    INTO leaks, fixes',
     '  FROM (',
-    "    SELECT f.object, string_agg(f.fix, ' ' ORDER BY f.grantee, f.grantor) FILTER (WHERE f.grantor <> f.reader) AS fix",
+    // As in revokeFix: the reader's revokes first, after giving it back a grant option it lost.
+    "    SELECT f.object, string_agg(f.fix, ' ' ORDER BY f.grantor <> f.reader, f.grantee, f.grantor) AS fix",
     '    FROM (',
-    '      SELECT e.object, e.grantee, e.grantor, r.oid AS reader,',
-    "             concat(CASE WHEN e.grantor <> e.owner THEN format('SET ROLE %s; ', e.grantor::regrole) END,",
-    "                    format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(e.privilege, ', ' ORDER BY e.privilege COLLATE \"C\"), e.target, CASE WHEN e.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(r.rolname) END),",
-    "                    CASE WHEN e.grantor <> e.owner THEN ' RESET ROLE;' END) AS fix",
-    '      FROM pg_roles r CROSS JOIN LATERAL (',
-    ...catalogEntries().map((line) => `    ${line}`),
-    '      ) e',
-    `      WHERE r.rolname = ${role}`,
-    '      GROUP BY e.object, e.target, e.grantee, e.grantor, e.owner, r.oid, r.rolname',
+    '      SELECT p.object, p.grantee, p.grantor, p.reader,',
+    "             concat(CASE WHEN p.lost THEN format('GRANT %s ON %s TO %I WITH GRANT OPTION; ', p.privileges, p.target, p.rolname) END,",
+    "                    CASE WHEN p.grantor <> p.owner THEN format('SET ROLE %s; ', p.grantor::regrole) END,",
+    "                    format('REVOKE %s ON %s FROM %s CASCADE;', p.privileges, p.target, CASE WHEN p.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(p.rolname) END),",
+    "                    CASE WHEN p.grantor <> p.owner THEN ' RESET ROLE;' END,",
+    "                    CASE WHEN p.lost THEN format(' REVOKE %s ON %s FROM %I CASCADE;', p.privileges, p.target, p.rolname) END) AS fix",
+    '      FROM (',
+    '        SELECT e.object, e.target, e.grantee, e.grantor, e.owner, r.oid AS reader, r.rolname,',
+    '               string_agg(e.privilege, \', \' ORDER BY e.privilege COLLATE "C") AS privileges, bool_or(e.lost) AS lost',
+    '        FROM pg_roles r CROSS JOIN LATERAL (',
+    ...catalogEntries().map((line) => `      ${line}`),
+    '        ) e',
+    `        WHERE r.rolname = ${role}`,
+    '        GROUP BY e.object, e.target, e.grantee, e.grantor, e.owner, r.oid, r.rolname',
+    '      ) p',
     '    ) f GROUP BY f.object',
     '  ) o;',
     '  IF leaks IS NOT NULL THEN',
@@ -253,7 +307,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  END IF;',
     `  SELECT string_agg(${relation}, ', ' ORDER BY n.nspname, c.relname),`,
     // REVOKE ALL also clears the grantees' column grants.
-    `         string_agg(${revokeFix(`format('ALL ON %s', ${relation})`, 'c.relowner', `c.relacl || ARRAY(SELECT unnest(att.attacl) FROM ${COLUMNS})`, TABLE_PRIVILEGES, { whatAsGrantor: relationAsGrantor })}, ' ' ORDER BY n.nspname, c.relname)`,
+    `         string_agg(${revokeFix(`format('ALL ON %s', ${relation})`, 'c.relowner', `c.relacl || ARRAY(SELECT unnest(att.attacl) FROM ${COLUMNS})`, TABLE_PRIVILEGES, { asGrantor: relationAsGrantor, regrant: relationRegrant })}, ' ' ORDER BY n.nspname, c.relname)`,
     '    INTO leaks, fixes',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
@@ -296,7 +350,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     ),
     '  END IF;',
     `  SELECT string_agg(${relation}, ', ' ORDER BY n.nspname, c.relname),`,
-    `         string_agg(${revokeFix(`format('ALL ON SEQUENCE %s', ${relation})`, 'c.relowner', 'c.relacl', ['SELECT', 'USAGE', 'UPDATE'])}, ' ' ORDER BY n.nspname, c.relname)`,
+    `         string_agg(${revokeFix(`format('ALL ON SEQUENCE %s', ${relation})`, 'c.relowner', 'c.relacl', SEQUENCE_PRIVILEGES, { asGrantor: revokeAsGrantor(`format('SEQUENCE %s', ${relation})`, 'c.relacl', SEQUENCE_PRIVILEGES) })}, ' ' ORDER BY n.nspname, c.relname)`,
     '    INTO leaks, fixes',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
@@ -310,7 +364,9 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '    INTO leaks, fixes',
     '  FROM pg_default_acl d JOIN pg_roles o ON o.oid = d.defaclrole',
     '    LEFT JOIN pg_namespace dn ON dn.oid = d.defaclnamespace CROSS JOIN pg_roles r',
-    `  WHERE r.rolname = ${role}`,
+    // The reader's own defaults reach only objects it creates itself, and refusing them would let
+    // it block every deploy (A71).
+    `  WHERE r.rolname = ${role} AND d.defaclrole <> r.oid`,
     '    AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a',
     `                WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ${PUBLIC_DEFAULT_KINDS}));`,
     '  IF leaks IS NOT NULL THEN',
@@ -333,18 +389,22 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  IF leaks IS NOT NULL THEN',
     abort(`role ${config.role} can create objects in schemas: %. Fix: %`, 'leaks', 'fixes'),
     '  END IF;',
-    // The applying session sees only the server configuration reliably; settings for the reader's
-    // role, all roles or the database come from pg_db_role_setting, each reset where it is set (A61).
+    // The applying session sees only the server's setting reliably, and it reaches the reader unless
+    // a setting in pg_db_role_setting overrides it there; those settings for the reader's role, all
+    // roles or the database are each reset where they are set (A61). A setting on the server
+    // command line cannot be reset by SQL, so it is turned off for the reader's role (A70).
     "  SELECT string_agg(c.source, ', ' ORDER BY c.n), string_agg(c.fix, ' ' ORDER BY c.n) || ' -- run as a superuser'",
     '    INTO leaks, fixes',
     '  FROM pg_roles r CROSS JOIN LATERAL (',
-    "    SELECT 0 AS n, 'the server configuration' AS source, 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' AS fix",
-    "    FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on' AND s.source = 'configuration file'",
+    "    SELECT 0 AS n, CASE s.source WHEN 'command line' THEN 'the server command line' ELSE 'the server configuration' END AS source,",
+    "           CASE s.source WHEN 'command line' THEN format('ALTER ROLE %I SET lo_compat_privileges = off;', r.rolname) ELSE 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' END AS fix",
+    "    FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on' AND s.source IN ('configuration file', 'command line')",
+    `      AND NOT EXISTS (SELECT 1 FROM pg_db_role_setting o CROSS JOIN LATERAL unnest(o.setconfig) cfg WHERE ${readerSetting('o')} AND cfg ~* '^lo_compat_privileges=')`,
     '    UNION ALL SELECT row_number() OVER (ORDER BY s.setdatabase, s.setrole),',
     `           ${settingScope("'all roles'", "format('role %I', r.rolname)", "format('database %I', current_database())", "format('role %I in database %I', r.rolname, current_database())")},`,
     `           format('ALTER %s RESET lo_compat_privileges;', ${settingScope("'ROLE ALL'", "format('ROLE %I', r.rolname)", "format('DATABASE %I', current_database())", "format('ROLE %I IN DATABASE %I', r.rolname, current_database())")})`,
     '    FROM pg_db_role_setting s',
-    '    WHERE s.setrole IN (0, r.oid) AND s.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))',
+    `    WHERE ${readerSetting('s')}`,
     "      AND EXISTS (SELECT 1 FROM unnest(s.setconfig) cfg WHERE cfg ~* '^lo_compat_privileges=(on|t|tr|tru|true|y|ye|yes|1)$')",
     '  ) c',
     `  WHERE r.rolname = ${role};`,
@@ -385,6 +445,8 @@ export function renderApplySql({ config, views }: RenderInput): string {
     '-- could read anything outside the views.',
     '',
     'SET client_min_messages = warning;',
+    // A session holding a lock on the views makes the deploy fail instead of wait forever (A72).
+    "SET lock_timeout = '60s';",
     'BEGIN;',
     '',
     'DO $$ BEGIN',

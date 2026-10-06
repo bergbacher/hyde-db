@@ -16,7 +16,7 @@ describe('apply SQL', () => {
   })
 
   it('runs as one transaction and creates the role only when missing', () => {
-    expect(sql).toContain('SET client_min_messages = warning;\nBEGIN;\n')
+    expect(sql).toContain("SET client_min_messages = warning;\nSET lock_timeout = '60s';\nBEGIN;\n")
     expect(sql).toContain(
       "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'redacted_reader') THEN",
     )
@@ -47,11 +47,19 @@ describe('apply SQL', () => {
     expect(sql).toContain('ALTER ROLE "redacted_reader" SET search_path = "redacted";')
   })
 
+  it('A72, D92: sets lock_timeout once, before the transaction, so a lock held by a reader fails the deploy', () => {
+    expect(sql.match(/lock_timeout/g)).toHaveLength(1)
+    expect(sql.indexOf("SET lock_timeout = '60s';")).toBeLessThan(sql.indexOf('BEGIN;'))
+  })
+
   it('D69: does not revoke anything in the source schema itself', () => {
     expect(sql).not.toContain('REVOKE ALL ON SCHEMA')
     expect(sql).not.toContain('REVOKE ALL ON ALL TABLES IN SCHEMA')
     expect(sql).not.toMatch(/^REVOKE /m)
   })
+
+  /** The final safety check's DO block, from its header comment to the end of the script. */
+  const finalCheckBlock = sql.slice(sql.indexOf('-- Safety check'))
 
   /** The part of the final DO block from the last occurrence of `from` before the abort message `to`, up to it. */
   function check(from: string, to: string): string {
@@ -71,7 +79,7 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D85: the relation check refuses any table or column privilege, but not MAINTAIN', () => {
+  it('D89: the relation check refuses any table or column privilege, but not MAINTAIN', () => {
     expect(relationCheck).toContain(
       "AND (has_table_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')\n" +
         "         OR has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'));",
@@ -79,7 +87,7 @@ describe('apply SQL', () => {
     expect(sql).not.toContain('MAINTAIN')
   })
 
-  it('D85: the relation abort revokes ALL per relation, in schema and relation order, columns included', () => {
+  it('D89: the relation abort revokes ALL per relation, in schema and relation order, columns included', () => {
     expect(sql).toContain(
       `RAISE EXCEPTION '${BRAND}: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, fixes;`,
     )
@@ -92,7 +100,7 @@ describe('apply SQL', () => {
     expect(sql).not.toContain('ORDER BY 1)')
   })
 
-  it('D85: every REVOKE fix revokes grants of a third-party grantor as that grantor, never as the reader, with CASCADE', () => {
+  it('A69, D89: every REVOKE fix revokes as each grantor that is not the owner, the reader first, with CASCADE', () => {
     for (const owner of [
       'c.relowner',
       'p.proowner',
@@ -101,30 +109,63 @@ describe('apply SQL', () => {
       'l.lomowner',
       'fs.srvowner',
     ]) {
-      expect(sql).toContain(
-        `AND a.grantee IN (0, r.oid) AND a.grantor <> ${owner} AND a.grantor <> r.oid)`,
-      )
+      expect(sql).toContain(`AND a.grantee IN (0, r.oid) AND a.grantor <> ${owner}) g`)
       expect(sql).toContain(`AND a.grantee = 0 AND a.grantor = ${owner})`)
       expect(sql).toContain(`r.oid = ${owner} OR EXISTS (`)
     }
+    expect(sql).not.toContain('a.grantor <> r.oid')
     expect(sql).toContain(
-      "format('SET ROLE %s; REVOKE %s FROM %s CASCADE; RESET ROLE;', t.grantor::regrole, ",
+      "format('SET ROLE %s; %s RESET ROLE;', t.grantor::regrole, format('REVOKE %s FROM %s CASCADE;', format('CREATE ON DATABASE %I', d.datname), t.grantees))",
     )
-    expect(sql).toContain("' ' ORDER BY t.grantor)")
-    expect(sql).not.toContain('t.grantor <> r.oid')
+    // The reader's revokes come before anything that takes away the grant options they need.
+    expect(sql).toContain("' ' ORDER BY t.grantor <> r.oid, t.grantor)")
+    expect(sql).not.toContain("' ' ORDER BY t.grantor)")
     expect(sql).toContain("|| ' CASCADE;')")
     // Every REVOKE on an object ends in CASCADE; ALTER DEFAULT PRIVILEGES revokes no grants.
     expect(sql).not.toMatch(/'REVOKE [^']*FROM %s;'/)
   })
 
-  it('A67, D85: a third-party grantor that granted only column privileges revokes them column by column', () => {
+  /** The REVOKE of exactly the privileges a grantor granted on `object`. */
+  const exactly = (object: string, privileges: string): string =>
+    `(SELECT format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(DISTINCT x.privilege_type, ', ' ORDER BY x.privilege_type), ${object}, t.grantees) ` +
+    `FROM aclexplode(c.relacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid) AND x.privilege_type IN (${privileges}) HAVING count(*) > 0)`
+
+  it('A69, D89: a grantor, the reader included, revokes exactly the table privileges it granted, then ALL on the columns it granted privileges on', () => {
     expect(relationCheck).toContain(
-      "CASE WHEN EXISTS (SELECT 1 FROM aclexplode(c.relacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid)) THEN format('ALL ON %s', format('%I.%I', n.nspname, c.relname)) " +
-        "ELSE format('ALL (%s) ON %s', (SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid))), format('%I.%I', n.nspname, c.relname)) END",
+      `concat_ws(' ', ${exactly("format('%I.%I', n.nspname, c.relname)", "'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER'")}, ` +
+        "(SELECT format('REVOKE ALL (%s) ON %s FROM %s CASCADE;', string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum), format('%I.%I', n.nspname, c.relname), t.grantees) " +
+        'FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = t.grantor AND x.grantee IN (0, r.oid)) HAVING count(*) > 0))',
     )
   })
 
-  it('D13, D24, D76, D79, D80: definer functions, sequences, schemas, the database, large objects and foreign servers use the same fix', () => {
+  it('D13, D89: a grantor revokes exactly the sequence privileges it granted', () => {
+    expect(sql).toContain(
+      exactly(
+        "format('SEQUENCE %s', format('%I.%I', n.nspname, c.relname))",
+        "'SELECT', 'USAGE', 'UPDATE'",
+      ),
+    )
+  })
+
+  it('A69, D89: a reader that lost the grant option behind a column grant it passed on is given it back to revoke it, then loses it', () => {
+    const regrant =
+      "(SELECT format('ALL (%s) ON %s', string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum), format('%I.%I', n.nspname, c.relname)) " +
+      'FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped ' +
+      'AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantor = r.oid AND x.grantee IN (0, r.oid) ' +
+      "AND NOT has_column_privilege(r.oid, c.oid, att.attnum, x.privilege_type || ' WITH GRANT OPTION')) HAVING count(*) > 0)"
+    expect(relationCheck).toContain(
+      `format('%sSET ROLE %s; %s RESET ROLE;', CASE WHEN t.grantor = r.oid THEN 'GRANT ' || ${regrant} || ' TO ' || quote_ident(r.rolname) || ' WITH GRANT OPTION; ' END, t.grantor::regrole, concat_ws(' ', `,
+    )
+    // The owner's statement then names the reader, which takes the grant option away again.
+    expect(relationCheck).toContain(
+      `CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER') AND a.grantee = r.oid AND a.grantor = c.relowner) OR ${regrant} IS NOT NULL THEN quote_ident(r.rolname) END`,
+    )
+    // Only relations and catalog relations regrant: other objects have no column grants that
+    // could outlive the grant option behind them.
+    expect(sql.match(/WITH GRANT OPTION; /g)).toHaveLength(2)
+  })
+
+  it('D13, D24, D76, D80, D90: definer functions, sequences, schemas, the database, large objects and foreign servers use the same fix', () => {
     expect(sql).toContain("format('EXECUTE ON ROUTINE %s', ")
     expect(sql).toContain('p.proacl IS NULL OR EXISTS (')
     expect(sql).toContain("format('ALL ON SEQUENCE %s', ")
@@ -147,7 +188,7 @@ describe('apply SQL', () => {
     'must not be a member of other roles',
   )
 
-  it('D85: the membership abort prints a REVOKE … CASCADE per membership, GRANTED BY its grantor on PostgreSQL 16+', () => {
+  it('D89: the membership abort prints a REVOKE … CASCADE per membership, GRANTED BY its grantor on PostgreSQL 16+', () => {
     expect(membershipCheck).toContain(
       "string_agg((SELECT string_agg(format('REVOKE %I FROM %I%s CASCADE;', g.rolname, r.rolname, CASE WHEN current_setting('server_version_num')::int >= 160000 THEN format(' GRANTED BY %s', m.grantor::regrole) END), ' ' ORDER BY m.grantor) FROM pg_auth_members m WHERE m.roleid = g.oid AND m.member = r.oid), ' ' ORDER BY g.rolname)",
     )
@@ -218,16 +259,34 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D81, D85: the catalog fix revokes exactly the extra privileges, as their grantor when it is neither the owner nor the reader', () => {
-    expect(catalogCheck).toContain('FILTER (WHERE f.grantor <> f.reader)')
+  it('A69, D81, D89: the catalog fix revokes exactly the extra privileges, as each grantor that is not the owner, the reader first', () => {
+    expect(catalogCheck).not.toContain('FILTER')
     expect(catalogCheck).toContain(
-      "format('REVOKE %s ON %s FROM %s CASCADE;', string_agg(e.privilege, ', ' ORDER BY e.privilege COLLATE \"C\"), e.target, ",
+      'string_agg(e.privilege, \', \' ORDER BY e.privilege COLLATE "C") AS privileges, bool_or(e.lost) AS lost',
     )
     expect(catalogCheck).toContain(
-      "CASE WHEN e.grantor <> e.owner THEN format('SET ROLE %s; ', e.grantor::regrole) END",
+      "format('REVOKE %s ON %s FROM %s CASCADE;', p.privileges, p.target, CASE WHEN p.grantee = 0 THEN 'PUBLIC' ELSE quote_ident(p.rolname) END)",
+    )
+    expect(catalogCheck).toContain(
+      "CASE WHEN p.grantor <> p.owner THEN format('SET ROLE %s; ', p.grantor::regrole) END",
+    )
+    expect(catalogCheck).toContain(
+      "' ' ORDER BY f.grantor <> f.reader, f.grantee, f.grantor) AS fix",
     )
     expect(sql).toContain(
       `RAISE EXCEPTION '${BRAND}: role redacted_reader has privileges on system catalog objects beyond their initial privileges: %. Fix: %', leaks, fixes;`,
+    )
+  })
+
+  it('A69, D89: a column grant the reader passed on in the catalog after losing its grant option is revoked after giving the option back', () => {
+    expect(catalogCheck).toContain(
+      "x.col IS NOT NULL AND x.grantor = r.oid AND NOT has_column_privilege(r.oid, c.oid, x.col, x.privilege_type || ' WITH GRANT OPTION') AS lost",
+    )
+    expect(catalogCheck).toContain(
+      "CASE WHEN p.lost THEN format('GRANT %s ON %s TO %I WITH GRANT OPTION; ', p.privileges, p.target, p.rolname) END",
+    )
+    expect(catalogCheck).toContain(
+      "CASE WHEN p.lost THEN format(' REVOKE %s ON %s FROM %I CASCADE;', p.privileges, p.target, p.rolname) END",
     )
   })
 
@@ -238,9 +297,9 @@ describe('apply SQL', () => {
     )
   })
 
-  it('A61, D79: refuses lo_compat_privileges from the server configuration and from every role or database setting that reaches the reader', () => {
+  it('A61, A70, D90: refuses lo_compat_privileges from the server configuration or command line and from every role or database setting that reaches the reader', () => {
     expect(sql).toContain(
-      "FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on' AND s.source = 'configuration file'",
+      "FROM pg_settings s WHERE s.name = 'lo_compat_privileges' AND s.setting = 'on' AND s.source IN ('configuration file', 'command line')",
     )
     expect(sql).toContain(
       'WHERE s.setrole IN (0, r.oid) AND s.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database()))',
@@ -253,15 +312,26 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D79: the lo_compat_privileges fix resets it where it is set, for a superuser', () => {
-    expect(sql).toContain("'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();'")
+  it('A70, D90: a server setting is refused only when no role or database setting that reaches the reader overrides it', () => {
+    expect(sql).toContain(
+      "AND NOT EXISTS (SELECT 1 FROM pg_db_role_setting o CROSS JOIN LATERAL unnest(o.setconfig) cfg WHERE o.setrole IN (0, r.oid) AND o.setdatabase IN (0, (SELECT d.oid FROM pg_database d WHERE d.datname = current_database())) AND cfg ~* '^lo_compat_privileges=')",
+    )
+  })
+
+  it('A70, D90: the lo_compat_privileges fix resets it where it is set, and turns it off for the reader when the server command line sets it', () => {
+    expect(sql).toContain(
+      "CASE s.source WHEN 'command line' THEN 'the server command line' ELSE 'the server configuration' END",
+    )
+    expect(sql).toContain(
+      "CASE s.source WHEN 'command line' THEN format('ALTER ROLE %I SET lo_compat_privileges = off;', r.rolname) ELSE 'ALTER SYSTEM SET lo_compat_privileges = off; SELECT pg_reload_conf();' END",
+    )
     expect(sql).toContain(
       "format('ALTER %s RESET lo_compat_privileges;', CASE WHEN s.setdatabase = 0 AND s.setrole = 0 THEN 'ROLE ALL' WHEN s.setdatabase = 0 THEN format('ROLE %I', r.rolname) WHEN s.setrole = 0 THEN format('DATABASE %I', current_database()) ELSE format('ROLE %I IN DATABASE %I', r.rolname, current_database()) END)",
     )
     expect(sql).toContain("|| ' -- run as a superuser'")
   })
 
-  it("D79: refuses ACL entries for the role or PUBLIC on other roles' large objects", () => {
+  it("D90: refuses ACL entries for the role or PUBLIC on other roles' large objects", () => {
     expect(sql).toContain('FROM pg_largeobject_metadata l CROSS JOIN pg_roles r')
     expect(sql).toContain('AND l.lomowner <> r.oid')
     expect(sql).toContain(
@@ -274,7 +344,7 @@ describe('apply SQL', () => {
     'objects created later (default privileges)',
   )
 
-  it('A65, D84: refuses default privileges for the role on anything, and for PUBLIC on tables, sequences, schemas and large objects', () => {
+  it('A65, D91: refuses default privileges for the role on anything, and for PUBLIC on tables, sequences, schemas and large objects', () => {
     expect(defaultsCheck).toContain('FROM pg_default_acl d')
     expect(defaultsCheck).toContain(
       "WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ('r', 'S', 'n', 'L')))",
@@ -287,7 +357,13 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D84: the fix is ALTER DEFAULT PRIVILEGES … REVOKE ALL, IN SCHEMA only for per-schema defaults, for every object type', () => {
+  it("A71, D91: ignores the reader's own default privileges, which reach only objects it can create", () => {
+    expect(defaultsCheck).toContain(
+      "  WHERE r.rolname = 'redacted_reader' AND d.defaclrole <> r.oid\n",
+    )
+  })
+
+  it('D91: the fix is ALTER DEFAULT PRIVILEGES … REVOKE ALL, IN SCHEMA only for per-schema defaults, for every object type', () => {
     expect(defaultsCheck).toContain(
       "format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, CASE WHEN d.defaclnamespace <> 0 THEN format(' IN SCHEMA %I', dn.nspname) END, ",
     )
@@ -296,7 +372,7 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D49, D82, D85, D76, D81, D80, D13, D84, D24, D79: the final check runs in a fixed order', () => {
+  it('D49, D82, D89, D76, D81, D80, D13, D91, D24, D90: the final check runs in a fixed order', () => {
     const order = [
       'has attributes it must not have',
       'owns objects it must not own',
@@ -315,6 +391,12 @@ describe('apply SQL', () => {
     ].map((message) => sql.indexOf(message))
     expect(order.every((position) => position > 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('D89: every abort of the final check prints a fix', () => {
+    const aborts = finalCheckBlock.split('\n').filter((line) => line.includes('RAISE EXCEPTION'))
+    expect(aborts).toHaveLength(13)
+    for (const abort of aborts) expect(abort).toMatch(/\. Fix: \S/)
   })
 
   it('D54: is branded hyde-db', () => {

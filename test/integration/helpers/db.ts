@@ -27,6 +27,8 @@ export interface TestDb {
 /** docker exec's own failure statuses: daemon error (125), command not invokable (126), command not found (127). */
 const DOCKER_EXEC_FAILURES: ReadonlySet<number> = new Set([125, 126, 127])
 const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the Docker daemon)/
+/** A hyde-db abort whose fix is empty or built from a NULL: nothing an administrator could paste (D89). */
+const NO_FIX = /ERROR:\s+hyde-db: .*Fix:(?:[ \t]*$|.*<NULL>)/m
 
 export interface PsqlOptions {
   /** Pass `-v ON_ERROR_STOP=1`, as the docs do. Default true; false mimics a client that runs past errors (D58). */
@@ -43,7 +45,8 @@ export interface PsqlOptions {
  * ON_ERROR_STOP a script error still exits 0). Every way in which docker or the container,
  * not psql, failed throws, so an attack test cannot pass vacuously on a result that never
  * reached the database: a missing docker CLI (D22), a timeout, no exit status (signal),
- * exit 125/126/127, or a docker daemon error.
+ * exit 125/126/127, or a docker daemon error. An abort that prints no fix to paste throws too, so
+ * every abort any test triggers is checked for one (D89).
  */
 export function psql(database: string, script: string, options: PsqlOptions = {}): PsqlResult {
   const { containerId, user } = options.server ?? inject('pg')
@@ -89,6 +92,9 @@ export function psql(database: string, script: string, options: PsqlOptions = {}
   }
   if (DOCKER_DAEMON_ERROR.test(result.stderr)) {
     throw new Error(`docker exec could not run psql: ${result.stderr.trim()}`)
+  }
+  if (NO_FIX.test(result.stderr)) {
+    throw new Error(`an abort printed no fix to paste: ${result.stderr.trim()}`)
   }
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }
@@ -178,7 +184,7 @@ export async function connectAsReader(db: TestDb, database: string = db.name): P
   return client
 }
 
-/** The statements an aborted apply suggests after "Fix: " (D13, D24, D49, D70, D71, D72). */
+/** The statements an aborted apply suggests after "Fix: " (D13, D24, D49, D89). */
 export function suggestedFix(result: PsqlResult): string {
   const match = /Fix: (.*)$/m.exec(result.stderr)
   if (match?.[1] === undefined) throw new Error(`no fix in: ${result.stderr}`)

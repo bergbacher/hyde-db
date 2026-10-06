@@ -28,9 +28,14 @@ describe('drop SQL', () => {
   })
 
   it('D58: runs the guard and the drop in one transaction, so a refused drop changes nothing', () => {
-    expect(sql).toContain('SET client_min_messages = warning;\nBEGIN;\n')
+    expect(sql).toContain("SET client_min_messages = warning;\nSET lock_timeout = '60s';\nBEGIN;\n")
     expect(sql.indexOf('BEGIN;')).toBeLessThan(sql.indexOf('DO $$'))
     expect(sql.endsWith('DROP SCHEMA IF EXISTS "redacted" CASCADE;\nCOMMIT;\n')).toBe(true)
+  })
+
+  it('A72, D92: sets lock_timeout once, before the transaction, so a lock held by a reader fails the drop', () => {
+    expect(sql.match(/lock_timeout/g)).toHaveLength(1)
+    expect(sql.indexOf("SET lock_timeout = '60s';")).toBeLessThan(sql.indexOf('BEGIN;'))
   })
 
   it('D11: the marker guard checks the configured schema', () => {
