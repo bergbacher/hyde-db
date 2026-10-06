@@ -31,8 +31,11 @@ interface Setup {
   readonly xApp: string
 }
 
-/** A deployed database with roles g3 ∈ grp and x_app; `nested` puts a role between g3 and grp. */
-async function setUp(nested = false): Promise<Setup> {
+/**
+ * A deployed database with roles g3 ∈ grp and x_app; `nested` puts a role between g3 and grp, and
+ * `superuserGroup` makes grp a superuser.
+ */
+async function setUp({ nested = false, superuserGroup = false } = {}): Promise<Setup> {
   const db = await createTestDatabase()
   created.push(db)
   expect(apply(db).status).toBe(0)
@@ -44,7 +47,8 @@ async function setUp(nested = false): Promise<Setup> {
   ] as const
   for (const role of nested ? [grp, middle, g3, xApp] : [grp, g3, xApp]) {
     roles.push(role)
-    await adminQuery('postgres', `CREATE ROLE "${role}" NOLOGIN`)
+    const superuser = superuserGroup && role === grp ? ' SUPERUSER' : ''
+    await adminQuery('postgres', `CREATE ROLE "${role}" NOLOGIN${superuser}`)
   }
   await adminQuery(
     'postgres',
@@ -122,7 +126,7 @@ describe('a table or sequence grant masked by a group option', () => {
   }
 
   it('A90, D127, D128: the option is borrowed from a group g3 belongs to through another role, for two privileges at once', async () => {
-    const s = await setUp(true)
+    const s = await setUp({ nested: true })
     const { db, g3, grp, xApp } = s
     await adminQuery(
       db.name,
@@ -176,6 +180,28 @@ describe('a table or sequence grant masked by a group option', () => {
       `${inOneTransaction(
         `GRANT SELECT ON public.api_keys TO ${g3} WITH GRANT OPTION; SET ROLE ${g3}; REVOKE SELECT ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE; ` +
           `REVOKE SELECT ON public.api_keys FROM ${g3} CASCADE; GRANT SELECT (id) ON public.api_keys TO ${g3} WITH GRANT OPTION;`,
+      )}${AS_SUPERUSER}`,
+    )
+    await pasteFixAndReapply(db, failed)
+  })
+
+  it("A92, D130: a superuser group never lends the option; the owner lends it, and g3's own owner-granted entry stays exactly as it was", async () => {
+    const { db, g3, grp } = await setUp({ superuserGroup: true })
+    await adminQuery(
+      db.name,
+      `GRANT ALL ON public.api_keys TO "${grp}" WITH GRANT OPTION;
+       GRANT SELECT ON public.api_keys TO "${g3}" WITH GRANT OPTION;
+       SET ROLE "${g3}"; GRANT SELECT ON public.api_keys TO "${db.role}"; RESET ROLE;
+       REVOKE GRANT OPTION FOR SELECT ON public.api_keys FROM "${g3}" CASCADE`,
+    )
+    const failed = apply(db)
+    expect(failed.status).toBe(3)
+    // A superuser's GRANT and REVOKE act as the owner, so borrowing from grp would take back g3's
+    // own SELECT (A92); the owner lends instead, and g3 keeps SELECT without the option.
+    expect(suggestedFix(failed)).toBe(
+      `${inOneTransaction(
+        `GRANT SELECT ON public.api_keys TO ${g3} WITH GRANT OPTION; SET ROLE ${g3}; REVOKE SELECT ON public.api_keys FROM ${db.role} CASCADE; RESET ROLE; ` +
+          `REVOKE GRANT OPTION FOR SELECT ON public.api_keys FROM ${g3} CASCADE;`,
       )}${AS_SUPERUSER}`,
     )
     await pasteFixAndReapply(db, failed)

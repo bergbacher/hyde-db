@@ -1,6 +1,6 @@
 // D110: a reader that holds a lock on a view makes the apply and drop scripts fail at lock_timeout
 // instead of waiting for it forever (A72); the failed script changes nothing, and the setting does
-// not outlive the script (A84).
+// not outlive the script (A84). D131: no setting the scripts make outlives them.
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -62,6 +62,36 @@ describe('lock_timeout', () => {
       )
       expect(result.status, result.stderr).toBe(0)
       expect(result.stdout).toContain('after=0')
+    })
+  }
+})
+
+describe('session settings', () => {
+  for (const file of ['redacted-views.sql', 'redacted-views-drop.sql'] as const) {
+    it(`D131: ${file} sets client_min_messages for its own transaction only, and no notice leaks before it`, async () => {
+      const db = await freshDb()
+      const [server] = await adminQuery(
+        db.name,
+        "SELECT reset_val FROM pg_settings WHERE name = 'client_min_messages'",
+      )
+      // Run twice in one session: without the views schema (DROP SCHEMA IF EXISTS notices that it
+      // skips) and with it (DROP SCHEMA … CASCADE notices what it drops); the drop script runs
+      // after an apply, so it meets the schema first.
+      const show = (label: string): string =>
+        `SELECT '${label}=' || current_setting('client_min_messages');`
+      const runs =
+        file === 'redacted-views.sql'
+          ? [db.files[file], db.files[file]]
+          : [db.files['redacted-views.sql'], db.files[file], db.files[file]]
+      const result = psql(
+        db.name,
+        runs.map((script, index) => `${script}\n${show(`after${index}`)}`).join('\n'),
+      )
+      expect(result.status, result.stderr).toBe(0)
+      for (const index of runs.keys())
+        expect(result.stdout).toContain(`after${index}=${server?.reset_val}`)
+      expect(server?.reset_val).toBe('notice')
+      expect(result.stderr).not.toContain('NOTICE')
     })
   }
 })

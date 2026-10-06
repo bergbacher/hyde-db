@@ -278,21 +278,24 @@ export interface PasteOptions {
   readonly orphans?: readonly string[]
   /** Skip the ACL comparison, for fixes that change ownership rather than revoke (REASSIGN OWNED). */
   readonly ownership?: boolean
+  /** The role that pastes the fix, after `SET ROLE`; default the suite's superuser. */
+  readonly role?: string
 }
 
 /**
- * Pastes the fix an aborted apply printed, verbatim, as the suite's superuser; it must succeed.
- * The fix may remove only the refused ACL entries: those that let the reader or PUBLIC in, the
- * grants the reader made itself, and the given orphans; every other entry stays exactly as it was
- * (D135).
+ * Pastes the fix an aborted apply printed, verbatim, and returns psql's result; the paste must
+ * succeed. The fix may remove only the refused ACL entries: those that let the reader or PUBLIC
+ * in, the grants the reader made itself, and the given orphans; every other entry stays exactly as
+ * it was (D135).
  */
 export async function pasteFix(
   db: TestDb,
   failed: PsqlResult,
   options: PasteOptions = {},
-): Promise<void> {
+): Promise<PsqlResult> {
   const before = await aclEntries(db.name)
-  const pasted = psql(db.name, suggestedFix(failed))
+  const fix = suggestedFix(failed)
+  const pasted = psql(db.name, options.role ? `SET ROLE "${options.role}";\n${fix}` : fix)
   expect(pasted.status, pasted.stderr).toBe(0)
   if (!options.ownership) {
     const after = await aclEntries(db.name)
@@ -305,6 +308,7 @@ export async function pasteFix(
       'the fix removed ACL entries other than the refused ones',
     ).toEqual([])
   }
+  return pasted
 }
 
 export interface ReapplyOptions extends PasteOptions {

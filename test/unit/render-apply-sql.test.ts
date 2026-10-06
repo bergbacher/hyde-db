@@ -17,7 +17,7 @@ describe('apply SQL', () => {
 
   it('runs as one transaction and creates the role only when missing', () => {
     expect(sql).toContain(
-      "SET client_min_messages = warning;\nBEGIN;\nSET LOCAL lock_timeout = '60s';\n",
+      "\nBEGIN;\nSET LOCAL client_min_messages = warning;\nSET LOCAL lock_timeout = '60s';\n",
     )
     expect(sql).toContain(
       "IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'redacted_reader') THEN",
@@ -51,12 +51,23 @@ describe('apply SQL', () => {
 
   it('A72, A84, D110: sets lock_timeout once, inside the transaction and for it alone, so a lock held by a reader fails the deploy', () => {
     expect(sql.match(/lock_timeout/g)).toHaveLength(1)
-    expect(sql).toContain("\nBEGIN;\nSET LOCAL lock_timeout = '60s';\n")
+    expect(sql).toContain("\nSET LOCAL lock_timeout = '60s';\n")
   })
 
   it('turns JIT off for its own transaction, which would compile the final check on every deploy', () => {
-    expect(sql).toContain("\nBEGIN;\nSET LOCAL lock_timeout = '60s';\nSET LOCAL jit = off;\n")
+    expect(sql).toContain("\nSET LOCAL lock_timeout = '60s';\nSET LOCAL jit = off;\n")
     expect(sql.match(/jit/g)).toHaveLength(1)
+  })
+
+  it('A84, D131: every session setting is SET LOCAL, right after BEGIN, so none outlives the script', () => {
+    const settings = sql.split('\n').filter((line) => /^SET /.test(line))
+    expect(settings).toEqual([
+      'SET LOCAL client_min_messages = warning;',
+      "SET LOCAL lock_timeout = '60s';",
+      'SET LOCAL jit = off;',
+    ])
+    expect(sql).toContain(`\nBEGIN;\n${settings.join('\n')}\n`)
+    expect(sql.indexOf('BEGIN;')).toBeLessThan(sql.indexOf('SET '))
   })
 
   it('D69: does not revoke anything in the source schema itself', () => {
@@ -71,6 +82,14 @@ describe('apply SQL', () => {
     `${superuser})`
   /** The fix of an abort, marked for a superuser when it switches roles (D108). */
   const PRINTED = printed("CASE WHEN fixes LIKE '%SET ROLE %' THEN ' -- run as a superuser' END")
+  /** The fix of an abort that revokes as the objects' owners: otherwise marked with `runner` (D134). */
+  const OWNERS = printed(
+    "CASE WHEN fixes LIKE '%SET ROLE %' THEN ' -- run as a superuser' ELSE runner END",
+  )
+  /** Who must run a fix revoking as the owners `owner` of the objects found (D134). */
+  const runAs = (owner: string): string =>
+    `CASE WHEN bool_and(pg_has_role(${owner}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${owner}) = 1 ` +
+    `THEN format(' -- run as %s or a superuser', min(${owner})::regrole) ELSE ' -- run as a superuser' END`
 
   /** The final safety check's DO block, from its header comment to the end of the script. */
   const finalCheckBlock = sql.slice(sql.indexOf('-- Safety check'))
@@ -103,14 +122,14 @@ describe('apply SQL', () => {
 
   it('D108: the relation abort revokes ALL per relation, in schema and relation order, columns included', () => {
     expect(sql).toContain(
-      `RAISE EXCEPTION '${BRAND}: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, ${PRINTED};`,
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, ${OWNERS};`,
     )
     expect(relationCheck).toContain("format('ALL ON %s', format('%I.%I', n.nspname, c.relname))")
     // A NULL ACL stands for the default one, so the merged ACL is never an empty array (A88).
     expect(relationCheck).toContain(
       "aclexplode(coalesce(c.relacl, acldefault('r', c.relowner)) || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped))",
     )
-    expect(relationCheck).toMatch(/\), ' ' ORDER BY n\.nspname, c\.relname\)\n/)
+    expect(relationCheck).toMatch(/\), ' ' ORDER BY n\.nspname, c\.relname\),\n/)
     expect(relationCheck).not.toContain('REVOKE SELECT')
     expect(sql).not.toContain('ORDER BY 1)')
   })
@@ -191,9 +210,13 @@ describe('apply SQL', () => {
   /** Whether grantor `who` itself holds `privilege` with the grant option in `acl` (A87). */
   const ownOption = (acl: string, who: string, privilege: string): string =>
     `EXISTS (SELECT 1 FROM aclexplode(${acl}) h WHERE h.grantee = ${who} AND h.privilege_type = ${privilege} AND h.is_grantable)`
-  /** A role other than `who`, the owner and the reader that `who` has the privileges of, holding `privilege` with the grant option in `acl` (A90). */
+  /**
+   * A role other than `who`, the owner and the reader that `who` has the privileges of, holding
+   * `privilege` with the grant option in `acl` (A90), and not a superuser (A92, D130).
+   */
   const masking = (acl: string, who: string, privilege: string, owner: string): string =>
-    `(SELECT min(h.grantee) FROM aclexplode(${acl}) h WHERE h.privilege_type = ${privilege} AND h.is_grantable AND h.grantee NOT IN (0, ${who}, ${owner}, r.oid) AND pg_has_role(${who}, h.grantee, 'USAGE'))`
+    `(SELECT min(h.grantee) FROM aclexplode(${acl}) h WHERE h.privilege_type = ${privilege} AND h.is_grantable AND h.grantee NOT IN (0, ${who}, ${owner}, r.oid) AND pg_has_role(${who}, h.grantee, 'USAGE') ` +
+    'AND NOT EXISTS (SELECT 1 FROM pg_roles s WHERE s.oid = h.grantee AND s.rolsuper))'
   /** Pass-ons by `t.grantor` whose grant option it no longer holds itself, each with the role that lends it (A87, A90). */
   function lost(acl: string, owner: string, privileges: string, columns: boolean): string {
     const objectLevel =
@@ -266,6 +289,49 @@ describe('apply SQL', () => {
     }
   })
 
+  it('A92, D130: no superuser lends a grant option, so every lender choice leaves superusers out', () => {
+    const choices =
+      sql.match(/SELECT coalesce\(\(SELECT min\(h\.grantee\)[\s\S]*?AS lender\) b/g) ?? []
+    expect(choices.length).toBeGreaterThan(2)
+    for (const choice of choices) {
+      expect(choice).toContain(
+        'AND NOT EXISTS (SELECT 1 FROM pg_roles s WHERE s.oid = h.grantee AND s.rolsuper)), ',
+      )
+    }
+  })
+
+  /** Per check whose fix revokes as the owners of the objects found: its abort and the owner column. */
+  const OWNER_CHECKS: readonly (readonly [abort: string, owner: string])[] = [
+    ['can create schemas in database', 'd.datdba'],
+    ['beyond their initial privileges', 'e.owner'],
+    ['can read relations outside schema', 'c.relowner'],
+    ['can use foreign servers', 'fs.srvowner'],
+    ['can execute SECURITY DEFINER functions', 'p.proowner'],
+    ['can read sequences', 'c.relowner'],
+    ['can create objects in schemas', 'n.nspowner'],
+    ['can read large objects it does not own', 'l.lomowner'],
+  ]
+
+  it('A95, D134: a fix that revokes as owners the deploying role does not act as names who must run it', () => {
+    for (const [abort, owner] of OWNER_CHECKS) {
+      const query = sql.slice(
+        sql.lastIndexOf('\n  SELECT ', sql.indexOf(abort)),
+        sql.indexOf(abort),
+      )
+      expect(query, abort).toContain(runAs(owner))
+      expect(sql, abort).toMatch(
+        new RegExp(
+          `${abort.replace(/[()]/g, '\\$&')}[^\n]*Fix: %', leaks, ${OWNERS.replace(/[$()*+.?[\\\]^{|}]/g, '\\$&')};`,
+        ),
+      )
+    }
+    expect(sql.match(/INTO leaks, fixes, runner/g)).toHaveLength(OWNER_CHECKS.length - 1)
+    expect(sql).toContain(`         (SELECT ${runAs('e.owner')} FROM e),\n`)
+    expect(sql).toContain('    INTO leaks, runner, fixes;')
+    // The other aborts' fixes do not revoke as an owner.
+    expect(sql.match(/ELSE runner END/g)).toHaveLength(OWNER_CHECKS.length)
+  })
+
   it('A82, D108, D127: no fix grants or revokes ALL as a grantor', () => {
     expect(sql).not.toContain('GRANT ALL')
     expect(sql).not.toContain("'GRANT ' || ")
@@ -286,7 +352,7 @@ describe('apply SQL', () => {
     expect(sql).toContain('FROM pg_foreign_server fs CROSS JOIN pg_roles r')
     expect(sql).toContain("AND has_server_privilege(r.oid, fs.oid, 'USAGE');")
     expect(sql).toContain(
-      `RAISE EXCEPTION '${BRAND}: role redacted_reader can use foreign servers: %. Fix: %', leaks, ${PRINTED};`,
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader can use foreign servers: %. Fix: %', leaks, ${OWNERS};`,
     )
   })
 
@@ -386,7 +452,7 @@ describe('apply SQL', () => {
       '\' \' ORDER BY f.object COLLATE "C", f.grantor <> f.reader, f.grantor) FROM (',
     )
     expect(sql).toContain(
-      `RAISE EXCEPTION '${BRAND}: role redacted_reader has privileges on system catalog objects beyond their initial privileges: %. Fix: %', leaks, ${PRINTED};`,
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader has privileges on system catalog objects beyond their initial privileges: %. Fix: %', leaks, ${OWNERS};`,
     )
   })
 
@@ -413,7 +479,7 @@ describe('apply SQL', () => {
   it('D76: refuses CREATE on the current database', () => {
     expect(sql).toContain("AND has_database_privilege(r.oid, d.oid, 'CREATE');")
     expect(sql).toContain(
-      `RAISE EXCEPTION '${BRAND}: role redacted_reader can create schemas in database %. Fix: %', leaks, ${PRINTED};`,
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader can create schemas in database %. Fix: %', leaks, ${OWNERS};`,
     )
   })
 
@@ -464,7 +530,7 @@ describe('apply SQL', () => {
     expect(sql).toContain('FROM pg_largeobject_metadata l CROSS JOIN pg_roles r')
     expect(sql).toContain('AND l.lomowner <> r.oid')
     expect(sql).toContain(
-      `RAISE EXCEPTION '${BRAND}: role redacted_reader can read large objects it does not own: %. Fix: %', leaks, ${PRINTED};`,
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader can read large objects it does not own: %. Fix: %', leaks, ${OWNERS};`,
     )
   })
 
@@ -501,23 +567,39 @@ describe('apply SQL', () => {
     )
   })
 
+  /**
+   * The final check's aborts in the order they run, each with words of the line in the header
+   * comment that announces it.
+   */
+  const CHECK_ORDER: readonly (readonly [abort: string, header: string])[] = [
+    ['has attributes it must not have', 'has SUPERUSER, CREATEDB'],
+    ['owns objects it must not own', 'owns any object in this database'],
+    ['must not be a member of other roles', 'is a member of another role'],
+    ['can create schemas in database', 'can create schemas in this database'],
+    ['beyond their initial privileges', 'holds privileges on pg_catalog'],
+    ['can read relations outside schema', 'holds any privilege on a relation outside'],
+    ['can use foreign servers', 'or can use a foreign server'],
+    ['can execute SECURITY DEFINER functions', 'can execute a SECURITY DEFINER function'],
+    ['can read sequences', 'or use a sequence'],
+    // Before the schema check: the script creates the views schema under these defaults.
+    ['objects created later (default privileges)', 'gains privileges on objects created later'],
+    ['can create objects in schemas', 'can create objects in any schema'],
+    ['lo_compat_privileges is on', 'has lo_compat_privileges on'],
+    ['can read large objects it does not own', 'can read large objects of other roles'],
+  ]
+
   it('D49, D82, D108, D76, D81, D80, D13, D91, D24, D109: the final check runs in a fixed order', () => {
-    const order = [
-      'has attributes it must not have',
-      'owns objects it must not own',
-      'must not be a member of other roles',
-      'can create schemas in database',
-      'beyond their initial privileges',
-      'can read relations outside schema',
-      'can use foreign servers',
-      'can execute SECURITY DEFINER functions',
-      'can read sequences',
-      // Before the schema check: the script creates the views schema under these defaults.
-      'objects created later (default privileges)',
-      'can create objects in schemas',
-      'lo_compat_privileges is on',
-      'can read large objects it does not own',
-    ].map((message) => sql.indexOf(message))
+    const order = CHECK_ORDER.map(([abort]) => sql.indexOf(abort))
+    expect(order.every((position) => position > 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
+  })
+
+  it('the header comment announces the checks in the order they run', () => {
+    const header = sql.slice(
+      sql.indexOf('-- Safety check'),
+      sql.indexOf('DO $$', sql.indexOf('-- Safety check')),
+    )
+    const order = CHECK_ORDER.map(([, words]) => header.indexOf(words))
     expect(order.every((position) => position > 0)).toBe(true)
     expect(order).toEqual([...order].sort((a, b) => a - b))
   })

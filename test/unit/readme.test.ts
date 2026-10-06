@@ -533,6 +533,7 @@ describe('README (a view of LEDGER.md)', () => {
     const shapes: readonly (readonly [string, string])[] = [
       ['`BEGIN; … COMMIT;`', "'BEGIN; ' || fixes || ' COMMIT;'"],
       ['`-- run as a superuser`', "' -- run as a superuser'"],
+      ['`-- run as <owner> or a superuser`', "' -- run as %s or a superuser'"],
       ['contains `SET ROLE`', "fixes LIKE '%SET ROLE %'"],
       ['`ALTER SYSTEM`', "fixes NOT LIKE 'ALTER SYSTEM %'"],
       [

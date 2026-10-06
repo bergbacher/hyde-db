@@ -1,7 +1,7 @@
 // Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
 // views, grants the reader role SELECT on exactly those views, and aborts with a pasteable fix if
 // the role could reach anything else (D11, D13, D24, D49, D76, D80–D82, D91, D108, D109, D111,
-// D123, D124, D127, D128); it revokes nothing itself (D69).
+// D123, D124, D127, D130, D131, D134, D135); it revokes nothing itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -19,6 +19,10 @@ function privilegeList(privileges: readonly string[]): string {
 
 /** SQL for the qualified name of relation `c` in schema `n`. */
 const RELATION = "format('%I.%I', n.nspname, c.relname)"
+
+/** SQL for routine `p` in schema `n` as GRANT and REVOKE name it, with its argument types. */
+const ROUTINE =
+  "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
 
 /** SQL condition: `att` is a user column (no system or dropped one) of relation `c`. */
 const USER_COLUMN = 'att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped'
@@ -52,13 +56,16 @@ function ownOption(acl: string, who: string, privilege: string): string {
  * `b.lender`, for a FROM clause: a role other than `who`, the owner and the reader whose privileges
  * `who` has and that holds the option in `acl` (the role that masks the loss, A87), else `owner`.
  * Borrowed from that role and taken back by it, the option leaves every other grant as it was (A90).
- * A column option can only be lent by a role that holds it on the column itself: PostgreSQL checks
- * a column grant option against the column's own ACL, so `acl` is the column ACL there.
+ * A superuser never lends: its GRANT and REVOKE act as the owner, so taking the option back would
+ * also take what `who` holds from the owner (A92, D130). A column option can only be lent by a role
+ * that holds it on the column itself: PostgreSQL checks a column grant option against the column's
+ * own ACL, so `acl` is the column ACL there.
  */
 function lender(acl: string, who: string, privilege: string, owner: string): string {
   return (
     `CROSS JOIN LATERAL (SELECT coalesce((SELECT min(h.grantee) FROM aclexplode(${acl}) h WHERE h.privilege_type = ${privilege} AND h.is_grantable ` +
-    `AND h.grantee NOT IN (0, ${who}, ${owner}, r.oid) AND pg_has_role(${who}, h.grantee, 'USAGE')), ${owner}) AS lender) b`
+    `AND h.grantee NOT IN (0, ${who}, ${owner}, r.oid) AND pg_has_role(${who}, h.grantee, 'USAGE') ` +
+    `AND NOT EXISTS (SELECT 1 FROM pg_roles s WHERE s.oid = h.grantee AND s.rolsuper)), ${owner}) AS lender) b`
   )
 }
 
@@ -188,15 +195,30 @@ function revokeFix(
 }
 
 /**
+ * SQL for the note naming who must run a fix whose statements outside `SET ROLE` act as the owners
+ * `owner` of the objects a check found, aggregated over them (D134): NULL when the deploying role
+ * acts as every one of them (it is the owner, a member of the owner role or a superuser);
+ * ` -- run as <owner> or a superuser` when there is one owner it does not act as; otherwise
+ * ` -- run as a superuser`. A REVOKE by any other role, even one that holds the grant option,
+ * changes nothing, often without a warning (A95).
+ */
+function runAs(owner: string): string {
+  return (
+    `CASE WHEN bool_and(pg_has_role(${owner}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${owner}) = 1 ` +
+    `THEN format(' -- run as %s or a superuser', min(${owner})::regrole) ELSE ' -- run as a superuser' END`
+  )
+}
+
+/**
  * SQL for the text an abort prints after "Fix: " from the statements in `fixes`: one transaction
  * when there are several, so a pasted fix applies completely or not at all (A82; ALTER SYSTEM
  * cannot run in one), marked to be run as a superuser when it switches roles or `superuser` says
- * so.
+ * so, and otherwise with the note in `runner` (D134).
  */
-function printedFix(fixes: string, superuser = false): string {
+function printedFix(fixes: string, superuser = false, runner?: string): string {
   const mark = superuser
     ? "' -- run as a superuser'"
-    : `CASE WHEN ${fixes} LIKE '%SET ROLE %' THEN ' -- run as a superuser' END`
+    : `CASE WHEN ${fixes} LIKE '%SET ROLE %' THEN ' -- run as a superuser'${runner ? ` ELSE ${runner}` : ''} END`
   return `concat(CASE WHEN ${fixes} LIKE '%; %' AND ${fixes} NOT LIKE 'ALTER SYSTEM %' THEN 'BEGIN; ' || ${fixes} || ' COMMIT;' ELSE ${fixes} END, ${mark})`
 }
 
@@ -264,8 +286,7 @@ const CATALOG_SCHEMAS = "('pg_catalog', 'information_schema', 'pg_toast')"
  */
 function catalogEntries(): string[] {
   const relation = RELATION
-  const routine =
-    "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
+  const routine = ROUTINE
   const initial = (classoid: string, objoid: string, objsubid: string): string =>
     `(SELECT ip.initprivs FROM pg_init_privs ip WHERE ip.classoid = '${classoid}'::regclass AND ip.objoid = ${objoid} AND ip.objsubid = ${objsubid})`
   return [
@@ -303,8 +324,10 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
   const role = ql(config.role)
   const abort = (message: string, ...values: string[]): string =>
     `    RAISE EXCEPTION '${BRAND}: ${message}', ${values.map((v) => (v === 'fixes' ? printedFix(v) : v)).join(', ')};`
-  const routine =
-    "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
+  // An abort whose fix revokes as the owners of the objects found, which the deployer may not be.
+  const ownersAbort = (message: string): string =>
+    `    RAISE EXCEPTION '${BRAND}: ${message}', leaks, ${printedFix('fixes', false, 'runner')};`
+  const routine = ROUTINE
   const relation = RELATION
   // The catalog entries a grantor's statements revoke: the reader revokes only column privileges.
   const revoked = '(e.grantor <> e.reader OR e.on_column)'
@@ -345,13 +368,16 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     "--   gains privileges on objects created later through other roles' default privileges (before",
     '--     the schema check: this script creates the views schema under them);',
     '--   can create objects in any schema;',
-    '--   can read large objects of other roles, or lo_compat_privileges turns their checks off.',
+    '--   has lo_compat_privileges on, which turns off privilege checks on large objects;',
+    '--   can read large objects of other roles.',
     '-- Each abort prints the statements that fix it, to be run by an administrator, as one',
-    '-- transaction when there are several.',
+    '-- transaction when there are several, and says who must run them when the deploying role',
+    '-- cannot.',
     'DO $$',
     'DECLARE',
     '  leaks text;',
     '  fixes text;',
+    '  runner text;',
     'BEGIN',
     `  SELECT ${heldAttributes(', ', '')},`,
     `         format('ALTER ROLE %I %s;', r.rolname, ${heldAttributes(' ', 'NO')})`,
@@ -388,13 +414,15 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  IF leaks IS NOT NULL THEN',
     abort(`role ${config.role} must not be a member of other roles: %. Fix: %`, 'leaks', 'fixes'),
     '  END IF;',
-    `  SELECT format('%I', d.datname), ${revokeFix("format('CREATE ON DATABASE %I', d.datname)", 'd.datdba', ['CREATE'], { object: "format('DATABASE %I', d.datname)", acl: 'd.datacl' })}`,
-    '    INTO leaks, fixes',
+    // One row at most; aggregated like the other checks for the owner note.
+    `  SELECT string_agg(format('%I', d.datname), ', '), string_agg(${revokeFix("format('CREATE ON DATABASE %I', d.datname)", 'd.datdba', ['CREATE'], { object: "format('DATABASE %I', d.datname)", acl: 'd.datacl' })}, ' '),`,
+    `         ${runAs('d.datdba')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_database d CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role} AND d.datname = current_database()`,
     "    AND has_database_privilege(r.oid, d.oid, 'CREATE');",
     '  IF leaks IS NOT NULL THEN',
-    abort(`role ${config.role} can create schemas in database %. Fix: %`, 'leaks', 'fixes'),
+    ownersAbort(`role ${config.role} can create schemas in database %. Fix: %`),
     '  END IF;',
     // As in revokeFix: each grantor revokes exactly the extra privileges it granted, the reader only
     // column privileges and first, after borrowing the options it lost and before giving them back.
@@ -407,6 +435,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `    ) ce ${lender('ce.lender_acl', 'ce.grantor', 'ce.privilege_type', 'ce.owner')}`,
     `    WHERE r.rolname = ${role})`,
     '  SELECT (SELECT string_agg(DISTINCT e.object COLLATE "C", \', \' ORDER BY e.object COLLATE "C") FROM e),',
+    `         (SELECT ${runAs('e.owner')} FROM e),`,
     '         (SELECT string_agg(f.fix, \' \' ORDER BY f.object COLLATE "C", f.grantor <> f.reader, f.grantor) FROM (',
     '    SELECT g.object, g.grantor, g.reader,',
     `           concat(${catalogLoan.borrow} || ' ', CASE WHEN g.grantor <> g.owner THEN format('SET ROLE %s; ', g.grantor::regrole) END,`,
@@ -415,18 +444,17 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `                  CASE WHEN g.grantor <> g.owner THEN ' RESET ROLE;' END, ' ' || ${catalogLoan.giveBack}) AS fix`,
     `    FROM (SELECT DISTINCT e.object, e.target, e.relid, e.grantor, e.owner, e.reader, e.rolname FROM e WHERE ${revoked}) g`,
     '  ) f)',
-    '    INTO leaks, fixes;',
+    '    INTO leaks, runner, fixes;',
     '  IF leaks IS NOT NULL THEN',
-    abort(
+    ownersAbort(
       `role ${config.role} has privileges on system catalog objects beyond their initial privileges: %. Fix: %`,
-      'leaks',
-      'fixes',
     ),
     '  END IF;',
     `  SELECT string_agg(${relation}, ', ' ORDER BY n.nspname, c.relname),`,
     // REVOKE ALL also clears the grantees' column grants.
-    `         string_agg(${revokeFix(`format('ALL ON %s', ${relation})`, 'c.relowner', TABLE_PRIVILEGES, { object: relation, acl: 'c.relacl', columns: 'r' })}, ' ' ORDER BY n.nspname, c.relname)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix(`format('ALL ON %s', ${relation})`, 'c.relowner', TABLE_PRIVILEGES, { object: relation, acl: 'c.relacl', columns: 'r' })}, ' ' ORDER BY n.nspname, c.relname),`,
+    `         ${runAs('c.relowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     `    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')`,
@@ -435,24 +463,24 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `    AND (has_table_privilege(r.oid, c.oid, '${TABLE_PRIVILEGES.join(', ')}')`,
     `         OR has_any_column_privilege(r.oid, c.oid, '${COLUMN_PRIVILEGES}'));`,
     '  IF leaks IS NOT NULL THEN',
-    abort(
+    ownersAbort(
       `role ${config.role} can read relations outside schema ${config.schema}: %. Fix: %`,
-      'leaks',
-      'fixes',
     ),
     '  END IF;',
     "  SELECT string_agg(format('%I', fs.srvname), ', ' ORDER BY fs.srvname),",
-    `         string_agg(${revokeFix("format('USAGE ON FOREIGN SERVER %I', fs.srvname)", 'fs.srvowner', ['USAGE'], { object: "format('FOREIGN SERVER %I', fs.srvname)", acl: 'fs.srvacl' })}, ' ' ORDER BY fs.srvname)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix("format('USAGE ON FOREIGN SERVER %I', fs.srvname)", 'fs.srvowner', ['USAGE'], { object: "format('FOREIGN SERVER %I', fs.srvname)", acl: 'fs.srvacl' })}, ' ' ORDER BY fs.srvname),`,
+    `         ${runAs('fs.srvowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_foreign_server fs CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     "    AND has_server_privilege(r.oid, fs.oid, 'USAGE');",
     '  IF leaks IS NOT NULL THEN',
-    abort(`role ${config.role} can use foreign servers: %. Fix: %`, 'leaks', 'fixes'),
+    ownersAbort(`role ${config.role} can use foreign servers: %. Fix: %`),
     '  END IF;',
     `  SELECT string_agg(${routine}, ', ' ORDER BY n.nspname, p.proname),`,
-    `         string_agg(${revokeFix(`format('EXECUTE ON ROUTINE %s', ${routine})`, 'p.proowner', ['EXECUTE'], { object: `format('ROUTINE %s', ${routine})`, acl: 'p.proacl', publicByDefault: true })}, ' ' ORDER BY n.nspname, p.proname)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix(`format('EXECUTE ON ROUTINE %s', ${routine})`, 'p.proowner', ['EXECUTE'], { object: `format('ROUTINE %s', ${routine})`, acl: 'p.proacl', publicByDefault: true })}, ' ' ORDER BY n.nspname, p.proname),`,
+    `         ${runAs('p.proowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     '    AND p.prosecdef',
@@ -461,15 +489,12 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     "    AND has_schema_privilege(r.oid, n.oid, 'USAGE')",
     "    AND has_function_privilege(r.oid, p.oid, 'EXECUTE');",
     '  IF leaks IS NOT NULL THEN',
-    abort(
-      `role ${config.role} can execute SECURITY DEFINER functions: %. Fix: %`,
-      'leaks',
-      'fixes',
-    ),
+    ownersAbort(`role ${config.role} can execute SECURITY DEFINER functions: %. Fix: %`),
     '  END IF;',
     `  SELECT string_agg(${relation}, ', ' ORDER BY n.nspname, c.relname),`,
-    `         string_agg(${revokeFix(`format('ALL ON SEQUENCE %s', ${relation})`, 'c.relowner', SEQUENCE_PRIVILEGES, { object: `format('SEQUENCE %s', ${relation})`, acl: 'c.relacl', columns: 's' })}, ' ' ORDER BY n.nspname, c.relname)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix(`format('ALL ON SEQUENCE %s', ${relation})`, 'c.relowner', SEQUENCE_PRIVILEGES, { object: `format('SEQUENCE %s', ${relation})`, acl: 'c.relacl', columns: 's' })}, ' ' ORDER BY n.nspname, c.relname),`,
+    `         ${runAs('c.relowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     `    AND c.relkind = 'S'`,
@@ -479,7 +504,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     "    AND (CASE WHEN c.relkind = 'S' THEN has_sequence_privilege(r.oid, c.oid, 'SELECT, USAGE, UPDATE') ELSE false END",
     "         OR has_any_column_privilege(r.oid, c.oid, 'SELECT'));",
     '  IF leaks IS NOT NULL THEN',
-    abort(`role ${config.role} can read sequences: %. Fix: %`, 'leaks', 'fixes'),
+    ownersAbort(`role ${config.role} can read sequences: %. Fix: %`),
     '  END IF;',
     `  SELECT string_agg(format('%s created by %I%s', lower(${DEFAULT_ACL_KIND}), o.rolname, ${inSchema('in schema')}), ', ' ${defaultsOrder}),`,
     `         string_agg(format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, ${inSchema('IN SCHEMA')}, ${DEFAULT_ACL_KIND}, concat_ws(', ', CASE WHEN d.defaclobjtype IN ${PUBLIC_DEFAULT_KINDS} AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = 0) THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = r.oid) THEN quote_ident(r.rolname) END)), ' ' ${defaultsOrder})`,
@@ -499,8 +524,9 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     ),
     '  END IF;',
     "  SELECT string_agg(format('%I', n.nspname), ', ' ORDER BY n.nspname),",
-    `         string_agg(${revokeFix("format('CREATE ON SCHEMA %I', n.nspname)", 'n.nspowner', ['CREATE'], { object: "format('SCHEMA %I', n.nspname)", acl: 'n.nspacl' })}, ' ' ORDER BY n.nspname)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix("format('CREATE ON SCHEMA %I', n.nspname)", 'n.nspowner', ['CREATE'], { object: "format('SCHEMA %I', n.nspname)", acl: 'n.nspacl' })}, ' ' ORDER BY n.nspname),`,
+    `         ${runAs('n.nspowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_namespace n CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     // The applying session's own temp schema grants CREATE to every role with TEMP on the
@@ -509,7 +535,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '    AND n.oid <> pg_my_temp_schema()',
     "    AND has_schema_privilege(r.oid, n.oid, 'CREATE');",
     '  IF leaks IS NOT NULL THEN',
-    abort(`role ${config.role} can create objects in schemas: %. Fix: %`, 'leaks', 'fixes'),
+    ownersAbort(`role ${config.role} can create objects in schemas: %. Fix: %`),
     '  END IF;',
     // The applying session sees only the server's setting reliably, and it reaches the reader unless
     // a setting in pg_db_role_setting overrides it there; those settings for the reader's role, all
@@ -544,18 +570,15 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     ),
     '  END IF;',
     "  SELECT string_agg(l.oid::text, ', ' ORDER BY l.oid),",
-    `         string_agg(${revokeFix("format('ALL ON LARGE OBJECT %s', l.oid)", 'l.lomowner', ['SELECT', 'UPDATE'], { object: "format('LARGE OBJECT %s', l.oid)", acl: 'l.lomacl' })}, ' ' ORDER BY l.oid)`,
-    '    INTO leaks, fixes',
+    `         string_agg(${revokeFix("format('ALL ON LARGE OBJECT %s', l.oid)", 'l.lomowner', ['SELECT', 'UPDATE'], { object: "format('LARGE OBJECT %s', l.oid)", acl: 'l.lomacl' })}, ' ' ORDER BY l.oid),`,
+    `         ${runAs('l.lomowner')}`,
+    '    INTO leaks, fixes, runner',
     '  FROM pg_largeobject_metadata l CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     '    AND l.lomowner <> r.oid',
     '    AND EXISTS (SELECT 1 FROM aclexplode(l.lomacl) a WHERE a.grantee IN (0, r.oid));',
     '  IF leaks IS NOT NULL THEN',
-    abort(
-      `role ${config.role} can read large objects it does not own: %. Fix: %`,
-      'leaks',
-      'fixes',
-    ),
+    ownersAbort(`role ${config.role} can read large objects it does not own: %. Fix: %`),
     '  END IF;',
     'END $$;',
   ]
@@ -572,10 +595,11 @@ export function renderApplySql({ config, views }: RenderInput): string {
     '-- The whole script is one transaction; the final check aborts it if the role',
     '-- could read anything outside the views.',
     '',
-    'SET client_min_messages = warning;',
     'BEGIN;',
-    // A session holding a lock on the views makes the deploy fail instead of wait forever (A72),
-    // and the setting ends with the transaction (A84).
+    // Every setting ends with the transaction (A84, D131): the notices DROP … CASCADE prints are
+    // noise, a session holding a lock on the views makes the deploy fail instead of wait forever
+    // (A72), and JIT would compile the final check (A93).
+    'SET LOCAL client_min_messages = warning;',
     "SET LOCAL lock_timeout = '60s';",
     // The final check's catalog query is planned from catalog-wide row estimates; JIT would spend
     // about a second compiling it on every deploy for a few rows of work.
