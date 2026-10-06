@@ -53,64 +53,63 @@ describe('apply SQL', () => {
     expect(sql).not.toMatch(/^REVOKE /m)
   })
 
-  /** The relation-leak check of the final DO block, from its query to its abort. */
-  const leakCheck = sql.slice(
-    sql.indexOf("string_agg(format('%I.%I', n.nspname, c.relname)"),
-    sql.indexOf('can read relations outside schema'),
+  /** The part of the final DO block from the first occurrence of `from` to the abort message `to`. */
+  function check(from: string, to: string): string {
+    const end = sql.indexOf(to)
+    return sql.slice(sql.lastIndexOf(from, end), end)
+  }
+
+  const relationCheck = check(
+    "string_agg(format('%I.%I', n.nspname, c.relname)",
+    'can read relations outside schema',
   )
 
-  it('keeps the base leak check on tables, views, materialized views and foreign tables', () => {
-    expect(leakCheck).toContain("AND c.relkind IN ('r', 'p', 'v', 'm', 'f')")
-    expect(leakCheck).toContain(
+  it('keeps the base relation check on tables, views, materialized views and foreign tables', () => {
+    expect(relationCheck).toContain("AND c.relkind IN ('r', 'p', 'v', 'm', 'f')")
+    expect(relationCheck).toContain(
       "AND n.nspname NOT IN ('redacted', 'pg_catalog', 'information_schema')",
     )
-    expect(leakCheck).toContain("AND (has_table_privilege(r.oid, c.oid, 'SELECT')")
-    expect(leakCheck).toContain("OR has_any_column_privilege(r.oid, c.oid, 'SELECT'));")
   })
 
-  it('D65: the relation-leak abort prints its fix', () => {
+  it('D70: the relation check refuses any table or column privilege, but not MAINTAIN', () => {
+    expect(relationCheck).toContain(
+      "AND (has_table_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER')\n" +
+        "         OR has_any_column_privilege(r.oid, c.oid, 'SELECT, INSERT, UPDATE, REFERENCES'));",
+    )
+    expect(sql).not.toContain('MAINTAIN')
+  })
+
+  it('D70: the relation abort prints one REVOKE ALL … CASCADE per relation, in schema and relation order', () => {
     expect(sql).toContain(
       `RAISE EXCEPTION '${BRAND}: role redacted_reader can read relations outside schema redacted: %. Fix: %', leaks, fixes;`,
     )
-    expect(leakCheck).toContain("format('REVOKE SELECT %sON %s FROM %s;', ")
-  })
-
-  it('D65: the relation-leak fix revokes table SELECT, or only the granted columns', () => {
-    expect(leakCheck).toContain(
-      "CASE WHEN has_table_privilege(r.oid, c.oid, 'SELECT') THEN '' ELSE format('(%s) ', ",
+    expect(relationCheck).toContain(
+      "string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname),\n" +
+        "         string_agg(format('REVOKE ALL ON %s FROM %s CASCADE;', format('%I.%I', n.nspname, c.relname), ",
     )
-    expect(leakCheck).toContain(
-      "(SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantee IN (0, r.oid) AND x.privilege_type = 'SELECT'))",
-    )
-  })
-
-  it('D65: the relation-leak fix names PUBLIC and the owning or directly granted role, columns included', () => {
-    expect(leakCheck).toContain(
-      "CASE WHEN has_any_column_privilege('public', c.oid, 'SELECT') THEN 'PUBLIC' END",
-    )
-    expect(leakCheck).toContain(
-      "CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT')) THEN quote_ident(r.rolname) END",
-    )
-  })
-
-  it('D65: lists leaked relations and their fixes in schema and relation order', () => {
-    expect(leakCheck).toContain(
-      "string_agg(format('%I.%I', n.nspname, c.relname), ', ' ORDER BY n.nspname, c.relname)",
-    )
-    expect(leakCheck).toMatch(/ FROM %s;', .*\), ' ' ORDER BY n\.nspname, c\.relname\)\n/)
+    expect(relationCheck).toMatch(/\), ' ' ORDER BY n\.nspname, c\.relname\)\n/)
+    expect(sql).not.toContain('REVOKE SELECT')
     expect(sql).not.toContain('ORDER BY 1)')
   })
 
-  /** The membership check of the final DO block, from its query to its abort. */
-  const membershipCheck = sql.slice(
-    sql.indexOf("string_agg(format('%I', g.rolname)"),
-    sql.indexOf('must not be a member of other roles'),
+  it('D70: the relation fix names PUBLIC and the owning or directly granted role for any privilege, columns included', () => {
+    expect(relationCheck).toContain(
+      "CASE WHEN (has_table_privilege('public', c.oid, 'SELECT, INSERT, UPDATE, DELETE, TRUNCATE, REFERENCES, TRIGGER') OR has_any_column_privilege('public', c.oid, 'SELECT, INSERT, UPDATE, REFERENCES')) THEN 'PUBLIC' END",
+    )
+    expect(relationCheck).toContain(
+      "CASE WHEN r.oid = c.relowner OR EXISTS (SELECT 1 FROM aclexplode(c.relacl || ARRAY(SELECT unnest(att.attacl) FROM pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped)) a WHERE a.grantee = r.oid AND a.privilege_type IN ('SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE', 'REFERENCES', 'TRIGGER')) THEN quote_ident(r.rolname) END",
+    )
+  })
+
+  const membershipCheck = check(
+    "string_agg(format('%I', g.rolname)",
+    'must not be a member of other roles',
   )
 
-  it('D65: the membership abort names each group and prints the REVOKE that ends it', () => {
+  it('D70: the membership abort names each group and prints a REVOKE per membership, GRANTED BY its grantor on PostgreSQL 16+', () => {
     expect(membershipCheck).toContain(
       "string_agg(format('%I', g.rolname), ', ' ORDER BY g.rolname),\n" +
-        "         string_agg(format('REVOKE %I FROM %I;', g.rolname, r.rolname), ' ' ORDER BY g.rolname)",
+        "         string_agg((SELECT string_agg(format('REVOKE %I FROM %I%s;', g.rolname, r.rolname, CASE WHEN current_setting('server_version_num')::int >= 160000 THEN format(' GRANTED BY %s', m.grantor::regrole) END), ' ' ORDER BY m.grantor) FROM pg_auth_members m WHERE m.roleid = g.oid AND m.member = r.oid), ' ' ORDER BY g.rolname)",
     )
     expect(membershipCheck).toContain(
       'AND EXISTS (SELECT 1 FROM pg_auth_members m WHERE m.roleid = g.oid AND m.member = r.oid);',
@@ -120,10 +119,72 @@ describe('apply SQL', () => {
     )
   })
 
-  it('D65: checks membership before relation privileges, which a group could grant with nothing to revoke', () => {
-    const membership = sql.indexOf('must not be a member of other roles')
-    expect(membership).toBeGreaterThan(sql.indexOf('has attributes it must not have'))
-    expect(membership).toBeLessThan(sql.indexOf('can read relations outside schema'))
+  const ownershipCheck = check("string_agg(owned.name, ', '", 'owns objects it must not own')
+
+  it('D71: the ownership abort lists the database, schemas, relations and functions the role owns', () => {
+    expect(ownershipCheck).toContain(
+      "SELECT 1, format('database %I', d.datname) FROM pg_database d WHERE d.datname = current_database() AND d.datdba = r.oid",
+    )
+    expect(ownershipCheck).toContain(
+      "SELECT 2, format('schema %I', n.nspname) FROM pg_namespace n WHERE n.nspowner = r.oid",
+    )
+    expect(ownershipCheck).toContain(
+      "WHERE c.relowner = r.oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S')",
+    )
+    expect(ownershipCheck).toContain('WHERE p.proowner = r.oid')
+    expect(ownershipCheck).toContain('ORDER BY owned.kind, owned.name COLLATE "C"')
+  })
+
+  it("D71: the ownership abort leaves out system schemas, which hold the role's own temporary tables", () => {
+    expect(ownershipCheck.match(/AND n\.nspname NOT LIKE 'pg\\_%'/g)).toHaveLength(3)
+  })
+
+  it('D71: the ownership abort prints REASSIGN OWNED', () => {
+    expect(sql).toContain(
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader owns objects it must not own: %. Fix: REASSIGN OWNED BY % TO CURRENT_USER;', leaks, quote_ident('redacted_reader');`,
+    )
+  })
+
+  const defaultsCheck = check(
+    "string_agg(format('%s created by %I%s'",
+    'objects created later (default privileges)',
+  )
+
+  it('D72: refuses default privileges for the role on anything, and for PUBLIC on tables and sequences', () => {
+    expect(defaultsCheck).toContain('FROM pg_default_acl d')
+    expect(defaultsCheck).toContain(
+      "WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ('r', 'S')))",
+    )
+    expect(sql).toContain(
+      `RAISE EXCEPTION '${BRAND}: role redacted_reader gets privileges on objects created later (default privileges): %. Fix: %', leaks, fixes;`,
+    )
+  })
+
+  it('D72: the fix is ALTER DEFAULT PRIVILEGES … REVOKE ALL, IN SCHEMA only for per-schema defaults, for every object type', () => {
+    expect(defaultsCheck).toContain(
+      "format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, CASE WHEN d.defaclnamespace <> 0 THEN format(' IN SCHEMA %I', dn.nspname) END, ",
+    )
+    expect(defaultsCheck).toContain(
+      "CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' WHEN 'L' THEN 'LARGE OBJECTS' END",
+    )
+    expect(defaultsCheck).toContain(
+      "CASE WHEN d.defaclobjtype IN ('r', 'S') AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = 0) THEN 'PUBLIC' END",
+    )
+  })
+
+  it('D49, D71, D70, D13, D24, D72: the final check runs attributes, ownership, membership, relations, functions, sequences, CREATE, then default privileges', () => {
+    const order = [
+      'has attributes it must not have',
+      'owns objects it must not own',
+      'must not be a member of other roles',
+      'can read relations outside schema',
+      'can execute SECURITY DEFINER functions',
+      'can read sequences',
+      'can create objects in schemas',
+      'objects created later (default privileges)',
+    ].map((message) => sql.indexOf(message))
+    expect(order.every((position) => position > 0)).toBe(true)
+    expect(order).toEqual([...order].sort((a, b) => a - b))
   })
 
   it('D54: is branded hyde-db', () => {

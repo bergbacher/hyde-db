@@ -1,6 +1,7 @@
 // Renders redacted-views.sql: one transaction that recreates the views schema with column-filtered
 // views, grants the reader role SELECT on exactly those views, and aborts with a pasteable fix if
-// the role could reach anything else (D11, D13, D24, D49, D65); it revokes nothing itself (D69).
+// the role could reach anything else (D11, D13, D24, D49, D70, D71, D72); it revokes nothing
+// itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { ResolvedConfig, View } from '../types.ts'
@@ -53,13 +54,30 @@ const COLUMNS =
   'pg_attribute att WHERE att.attrelid = c.oid AND att.attnum > 0 AND NOT att.attisdropped'
 
 /**
- * SQL for the part of a relation-leak fix between `REVOKE SELECT ` and `ON`: '' when the role holds
- * SELECT on the whole relation, else the columns PUBLIC or the role holds SELECT on.
+ * Table privileges, any of which lets a role read rows (A51). MAINTAIN (PostgreSQL 17+) is left
+ * out: it reads no rows, and earlier servers reject its name.
  */
-const LEAKED_COLUMNS =
-  "CASE WHEN has_table_privilege(r.oid, c.oid, 'SELECT') THEN '' ELSE format('(%s) ', " +
-  `(SELECT string_agg(quote_ident(att.attname), ', ' ORDER BY att.attnum) FROM ${COLUMNS} ` +
-  "AND EXISTS (SELECT 1 FROM aclexplode(att.attacl) x WHERE x.grantee IN (0, r.oid) AND x.privilege_type = 'SELECT'))) END"
+const TABLE_PRIVILEGES: readonly string[] = [
+  'SELECT',
+  'INSERT',
+  'UPDATE',
+  'DELETE',
+  'TRUNCATE',
+  'REFERENCES',
+  'TRIGGER',
+]
+
+/** The privileges a column grant can carry. */
+const COLUMN_PRIVILEGES = 'SELECT, INSERT, UPDATE, REFERENCES'
+
+/** Schemas no check looks into: the catalogs, and pg_toast and pg_temp_N (the role's own temporary objects). */
+const NOT_SYSTEM =
+  "n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg\\_%'"
+
+/** The ALTER DEFAULT PRIVILEGES keyword of a pg_default_acl object type; LARGE OBJECTS exist from PostgreSQL 18. */
+const DEFAULT_ACL_KIND =
+  "CASE d.defaclobjtype WHEN 'r' THEN 'TABLES' WHEN 'S' THEN 'SEQUENCES' WHEN 'f' THEN 'FUNCTIONS' " +
+  "WHEN 'T' THEN 'TYPES' WHEN 'n' THEN 'SCHEMAS' WHEN 'L' THEN 'LARGE OBJECTS' END"
 
 /** The final safety check: every way the role could reach data outside the views aborts the script. */
 function renderFinalCheck(config: ResolvedConfig): string[] {
@@ -67,19 +85,29 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
   const routine =
     "format('%I.%I(%s)', n.nspname, p.proname, pg_get_function_identity_arguments(p.oid))"
   const relation = "format('%I.%I', n.nspname, c.relname)"
-  // A table-level REVOKE also revokes the grantees' column grants, so one statement per relation
-  // removes everything that makes it readable.
+  const tablePrivileges = TABLE_PRIVILEGES.join(', ')
+  // REVOKE ALL also clears the grantees' column grants, and CASCADE what the role passed on with
+  // GRANT OPTION (A54), so one statement per relation removes everything that makes it readable.
   const relationGrantees = grantees(
-    "has_any_column_privilege('public', c.oid, 'SELECT')",
+    `(has_table_privilege('public', c.oid, '${tablePrivileges}') OR has_any_column_privilege('public', c.oid, '${COLUMN_PRIVILEGES}'))`,
     'c.relowner',
     `c.relacl || ARRAY(SELECT unnest(att.attacl) FROM ${COLUMNS})`,
-    ['SELECT'],
+    TABLE_PRIVILEGES,
   )
+  // PostgreSQL 16+ keeps one membership per grantor and REVOKE removes only the one it names (A54);
+  // earlier servers keep one per group, which a plain REVOKE removes whatever its grantor.
+  const grantedBy =
+    "CASE WHEN current_setting('server_version_num')::int >= 160000 THEN format(' GRANTED BY %s', m.grantor::regrole) END"
+  const inSchema = (keyword: string): string =>
+    `CASE WHEN d.defaclnamespace <> 0 THEN format(' ${keyword} %I', dn.nspname) END`
+  const defaultsOrder = 'ORDER BY o.rolname, dn.nspname NULLS FIRST, d.defaclobjtype'
   return [
     '-- Safety check: abort if the role has SUPERUSER, CREATEDB, CREATEROLE, REPLICATION or',
-    '-- BYPASSRLS, is a member of another role, can read any relation outside the views schema',
-    '-- (e.g. via PUBLIC, direct or column grants), execute a SECURITY DEFINER function, read a',
-    '-- sequence, or create objects in any schema. Each abort prints the statements that fix it.',
+    '-- BYPASSRLS, owns the database or any schema, relation or function in it, is a member of',
+    '-- another role, holds any privilege on a relation outside the views schema, can execute a',
+    '-- SECURITY DEFINER function, use a sequence or create objects in any schema, or would gain',
+    '-- privileges on objects created later through default privileges. Each abort prints the',
+    '-- statements that fix it.',
     'DO $$',
     'DECLARE',
     '  leaks text;',
@@ -95,9 +123,25 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} has attributes it must not have: %. Fix: %', leaks, fixes;`,
     '  END IF;',
     '  -- The joins on pg_roles below always find the role: this transaction created it above if missing.',
+    '  -- Ownership next: an owner can grant itself access again after any REVOKE, so no REVOKE fixes it.',
+    '  SELECT string_agg(owned.name, \', \' ORDER BY owned.kind, owned.name COLLATE "C") INTO leaks',
+    '  FROM pg_roles r CROSS JOIN LATERAL (',
+    "    SELECT 1, format('database %I', d.datname) FROM pg_database d WHERE d.datname = current_database() AND d.datdba = r.oid",
+    `    UNION ALL SELECT 2, format('schema %I', n.nspname) FROM pg_namespace n WHERE n.nspowner = r.oid AND ${NOT_SYSTEM}`,
+    "    UNION ALL SELECT 3, format('relation %I.%I', n.nspname, c.relname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace",
+    `      WHERE c.relowner = r.oid AND c.relkind IN ('r', 'p', 'v', 'm', 'f', 'S') AND ${NOT_SYSTEM}`,
+    "    UNION ALL SELECT 4, format('function %s', " +
+      routine +
+      ') FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace',
+    `      WHERE p.proowner = r.oid AND ${NOT_SYSTEM}`,
+    '  ) owned (kind, name)',
+    `  WHERE r.rolname = ${role};`,
+    '  IF leaks IS NOT NULL THEN',
+    `    RAISE EXCEPTION '${BRAND}: role ${config.role} owns objects it must not own: %. Fix: REASSIGN OWNED BY % TO CURRENT_USER;', leaks, quote_ident(${role});`,
+    '  END IF;',
     '  -- Membership next: what the role reads through another role has no grant of its own to revoke.',
     "  SELECT string_agg(format('%I', g.rolname), ', ' ORDER BY g.rolname),",
-    "         string_agg(format('REVOKE %I FROM %I;', g.rolname, r.rolname), ' ' ORDER BY g.rolname)",
+    `         string_agg((SELECT string_agg(format('REVOKE %I FROM %I%s;', g.rolname, r.rolname, ${grantedBy}), ' ' ORDER BY m.grantor) FROM pg_auth_members m WHERE m.roleid = g.oid AND m.member = r.oid), ' ' ORDER BY g.rolname)`,
     '    INTO leaks, fixes',
     '  FROM pg_roles g CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
@@ -106,15 +150,15 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} must not be a member of other roles: %. Fix: %', leaks, fixes;`,
     '  END IF;',
     `  SELECT string_agg(${relation}, ', ' ORDER BY n.nspname, c.relname),`,
-    `         string_agg(format('REVOKE SELECT %sON %s FROM %s;', ${LEAKED_COLUMNS}, ${relation}, ${relationGrantees}), ' ' ORDER BY n.nspname, c.relname)`,
+    `         string_agg(format('REVOKE ALL ON %s FROM %s CASCADE;', ${relation}, ${relationGrantees}), ' ' ORDER BY n.nspname, c.relname)`,
     '    INTO leaks, fixes',
     '  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     `    AND c.relkind IN ('r', 'p', 'v', 'm', 'f')`,
     `    AND n.nspname NOT IN (${ql(config.schema)}, 'pg_catalog', 'information_schema')`,
     `    AND n.nspname NOT LIKE 'pg\\_%'`,
-    "    AND (has_table_privilege(r.oid, c.oid, 'SELECT')",
-    "         OR has_any_column_privilege(r.oid, c.oid, 'SELECT'));",
+    `    AND (has_table_privilege(r.oid, c.oid, '${tablePrivileges}')`,
+    `         OR has_any_column_privilege(r.oid, c.oid, '${COLUMN_PRIVILEGES}'));`,
     '  IF leaks IS NOT NULL THEN',
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} can read relations outside schema ${config.schema}: %. Fix: %', leaks, fixes;`,
     '  END IF;',
@@ -153,6 +197,18 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     "    AND has_schema_privilege(r.oid, n.oid, 'CREATE');",
     '  IF leaks IS NOT NULL THEN',
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} can create objects in schemas: %. Fix: %', leaks, fixes;`,
+    '  END IF;',
+    '  -- Default privileges last: they make objects created later readable until the next apply (A53).',
+    `  SELECT string_agg(format('%s created by %I%s', lower(${DEFAULT_ACL_KIND}), o.rolname, ${inSchema('in schema')}), ', ' ${defaultsOrder}),`,
+    `         string_agg(format('ALTER DEFAULT PRIVILEGES FOR ROLE %I%s REVOKE ALL ON %s FROM %s;', o.rolname, ${inSchema('IN SCHEMA')}, ${DEFAULT_ACL_KIND}, concat_ws(', ', CASE WHEN d.defaclobjtype IN ('r', 'S') AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = 0) THEN 'PUBLIC' END, CASE WHEN EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a WHERE a.grantee = r.oid) THEN quote_ident(r.rolname) END)), ' ' ${defaultsOrder})`,
+    '    INTO leaks, fixes',
+    '  FROM pg_default_acl d JOIN pg_roles o ON o.oid = d.defaclrole',
+    '    LEFT JOIN pg_namespace dn ON dn.oid = d.defaclnamespace CROSS JOIN pg_roles r',
+    `  WHERE r.rolname = ${role}`,
+    '    AND EXISTS (SELECT 1 FROM aclexplode(d.defaclacl) a',
+    "                WHERE a.grantee = r.oid OR (a.grantee = 0 AND d.defaclobjtype IN ('r', 'S')));",
+    '  IF leaks IS NOT NULL THEN',
+    `    RAISE EXCEPTION '${BRAND}: role ${config.role} gets privileges on objects created later (default privileges): %. Fix: %', leaks, fixes;`,
     '  END IF;',
     'END $$;',
   ]
@@ -203,7 +259,7 @@ export function renderApplySql({ config, views }: RenderInput): string {
 
   out.push(
     `-- Privileges: nothing but SELECT on the views in ${config.schema}. Privileges elsewhere are`,
-    '-- not revoked here: the final check refuses them and prints the REVOKE that removes them.',
+    '-- not revoked here: the final check refuses them and prints the statements that remove them.',
     `GRANT USAGE ON SCHEMA ${S} TO ${R};`,
     `GRANT SELECT ON ALL TABLES IN SCHEMA ${S} TO ${R};`,
     '',

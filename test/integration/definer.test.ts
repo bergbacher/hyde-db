@@ -65,15 +65,21 @@ describe('SECURITY DEFINER functions', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D13: a function the role owns names the role in the fix', async () => {
+  it('D71, D13: a function the role owns is refused as owned first, then as executable', async () => {
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `${PEEK}; ALTER FUNCTION public.peek(integer) OWNER TO "${db.role}"`)
-    const failed = apply(db)
-    expect(failed.status).toBe(3)
-    expect(suggestedFix(failed)).toBe(
-      `REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC, ${db.role};`,
+    const owned = apply(db)
+    expect(owned.status).toBe(3)
+    expect(owned.stderr).toContain(
+      `role ${db.role} owns objects it must not own: function public.peek(n integer). Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
     )
-    expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
+    expect(psql(db.name, suggestedFix(owned)).status).toBe(0)
+    const executable = apply(db)
+    expect(executable.status).toBe(3)
+    expect(suggestedFix(executable)).toBe(
+      'REVOKE EXECUTE ON ROUTINE public.peek(n integer) FROM PUBLIC;',
+    )
+    expect(psql(db.name, suggestedFix(executable)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })
 
@@ -115,7 +121,7 @@ describe('sequences', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D13: a sequence the role owns names the role in the fix', async () => {
+  it('D71: a sequence the role owns is refused as owned before it is checked as readable', async () => {
     expect(apply(db).status).toBe(0)
     // A serial's sequence is linked to its table and cannot change owner, so use a standalone one.
     await adminQuery(
@@ -124,7 +130,9 @@ describe('sequences', () => {
     )
     const failed = apply(db)
     expect(failed.status).toBe(3)
-    expect(suggestedFix(failed)).toBe(`REVOKE ALL ON SEQUENCE public.tickets_seq FROM ${db.role};`)
+    expect(failed.stderr).toContain(
+      `role ${db.role} owns objects it must not own: relation public.tickets_seq. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
+    )
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })

@@ -53,14 +53,15 @@ describe('CREATE privilege', () => {
     expect(apply(db).status).toBe(0)
   })
 
-  it('D24: a schema the role owns names the role in the fix', async () => {
+  it('D71: a schema the role owns is refused as owned before CREATE is checked', async () => {
     const db = await freshDb(true)
     expect(apply(db).status).toBe(0)
     await adminQuery(db.name, `CREATE SCHEMA scratch; ALTER SCHEMA scratch OWNER TO "${db.role}"`)
     const failed = apply(db)
     expect(failed.status).toBe(3)
-    expect(failed.stderr).toContain(`role ${db.role} can create objects in schemas: scratch. Fix: `)
-    expect(suggestedFix(failed)).toBe(`REVOKE CREATE ON SCHEMA scratch FROM ${db.role};`)
+    expect(failed.stderr).toContain(
+      `role ${db.role} owns objects it must not own: schema scratch. Fix: REASSIGN OWNED BY ${db.role} TO CURRENT_USER;`,
+    )
     expect(psql(db.name, suggestedFix(failed)).status).toBe(0)
     expect(apply(db).status).toBe(0)
   })

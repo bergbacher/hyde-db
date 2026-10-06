@@ -3,7 +3,7 @@
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import pg from 'pg'
-import { inject } from 'vitest'
+import { expect, inject } from 'vitest'
 import { build } from '../../../src/index.ts'
 import type { OutputFiles } from '../../../src/types.ts'
 import { readRepoFile } from '../../helpers/files.ts'
@@ -176,9 +176,23 @@ export async function connectAsReader(db: TestDb, database: string = db.name): P
   return client
 }
 
-/** The REVOKE statements an aborted apply suggests after "Fix: " (D13, D24). */
+/** The statements an aborted apply suggests after "Fix: " (D13, D24, D49, D70, D71, D72). */
 export function suggestedFix(result: PsqlResult): string {
   const match = /Fix: (.*)$/m.exec(result.stderr)
   if (match?.[1] === undefined) throw new Error(`no fix in: ${result.stderr}`)
   return match[1]
+}
+
+/** Pastes the fix an aborted apply printed, verbatim, then re-applies; both must succeed. */
+export function pasteFixAndReapply(db: TestDb, failed: PsqlResult): void {
+  const pasted = psql(db.name, suggestedFix(failed))
+  expect(pasted.status, pasted.stderr).toBe(0)
+  const reapplied = apply(db)
+  expect(reapplied.status, reapplied.stderr).toBe(0)
+}
+
+/** The server's `server_version_num`, e.g. 140024 or 180006. */
+export async function serverVersion(database: string): Promise<number> {
+  const [row] = await adminQuery(database, "SELECT current_setting('server_version_num') AS v")
+  return Number(row?.v)
 }
