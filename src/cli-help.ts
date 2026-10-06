@@ -10,21 +10,45 @@ export type CliCommand =
   | { readonly kind: 'help' }
   | { readonly kind: 'version' }
   | { readonly kind: 'unknown'; readonly argument: string }
+  | { readonly kind: 'prisma-arguments'; readonly arguments: readonly string[] }
 
 const HELP_ARGUMENTS: readonly string[] = ['--help', '-h', 'help']
 const VERSION_ARGUMENTS: readonly string[] = ['--version', '-v', 'version']
 
 /**
- * Arguments win over the environment: Prisma passes none (A34), so any argument means a person
- * or an agent is at the keyboard. Order does not matter: a help request anywhere wins, then a
- * version request; otherwise the first argument is the unknown one (D56).
+ * Under Prisma (PRISMA_GENERATOR_INVOCATION=true) any argument is a configuration mistake such as
+ * `provider = "hyde-db --help"`: Prisma would report a successful generate that wrote nothing,
+ * so it is refused (D66, A46). Outside Prisma a help request anywhere wins, then a version
+ * request; otherwise the first argument is the unknown one (D56).
  */
 export function selectCommand(args: readonly string[], underPrisma: boolean): CliCommand {
   const [first] = args
-  if (first === undefined) return underPrisma ? { kind: 'protocol' } : { kind: 'help' }
+  if (underPrisma) {
+    return first === undefined
+      ? { kind: 'protocol' }
+      : { kind: 'prisma-arguments', arguments: args }
+  }
+  if (first === undefined) return { kind: 'help' }
   if (args.some((arg) => HELP_ARGUMENTS.includes(arg))) return { kind: 'help' }
   if (args.some((arg) => VERSION_ARGUMENTS.includes(arg))) return { kind: 'version' }
   return { kind: 'unknown', argument: first }
+}
+
+export function prismaArgumentsMessage(args: readonly string[]): string {
+  return `${BRAND}: Prisma passed arguments (${args.join(' ')}); the generator block must read provider = "${BRAND}" with nothing after it.`
+}
+
+const plural = (count: number, noun: string): string => `${count} ${noun}${count === 1 ? '' : 's'}`
+
+/** The success line (D28), with each noun agreeing with its own count. */
+export function formatSummary(
+  counts: { readonly views: number; readonly visible: number; readonly hidden: number },
+  where: string,
+): string {
+  return (
+    `${BRAND}: ${plural(counts.views, 'view')}, ${plural(counts.visible, 'visible column')} ` +
+    `and ${plural(counts.hidden, 'hidden column')} → ${where}`
+  )
 }
 
 export function unknownArgumentMessage(argument: string): string {
@@ -60,6 +84,9 @@ function configLines(config: ResolvedConfig): string[] {
   })
 }
 
+/** The shell expansion that stops a command while DATABASE_URL is unset or empty, never falling back to libpq defaults (D68, A49). */
+const DB_URL = `\${DATABASE_URL:?export DATABASE_URL first}`
+
 /** The help text, without a trailing newline. `config` supplies the defaults it prints. */
 export function usage(config: ResolvedConfig, repository?: string): string {
   return [
@@ -90,15 +117,19 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '  redacted-views-drop.sql  drops the views schema so migrations can alter columns',
     '  redacted-schema.md       tables, columns and joins of the views, to give whoever queries them',
     '',
-    'Deploy in this order:',
-    `  # <output> = the generator's output directory, relative to schema.prisma (default ${DEFAULT_OUTPUT})`,
-    '  npx prisma generate  # writes the three files',
-    '  # psql does not read .env: export DATABASE_URL in your shell as a plain libpq URL, without Prisma-only parameters such as ?schema=public',
-    '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
+    `Deploy in this order. <output> = the generator's output directory, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
+    'Write the three files:',
+    '  npx prisma generate',
+    'psql does not read .env: export DATABASE_URL in your shell as a plain libpq URL, without Prisma-only parameters such as ?schema=public. Drop the views schema:',
+    `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql`,
+    'Migrate:',
     '  npx prisma migrate deploy',
-    '  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
+    'Create the views and the role:',
+    `  psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
+    'Give the reader role a login password, once. Run export READER_PASSWORD=... first; it must not contain a single quote. The password then appears in the psql command line (visible in `ps`); to avoid that, run \\password ' +
+      `${config.role} in an interactive psql instead:`,
     // The shell aborts, running nothing, when READER_PASSWORD is unset or empty: no placeholder to paste.
-    `  psql "$DATABASE_URL" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"  # once; the password must not contain a single quote`,
+    `  psql "${DB_URL}" -c "ALTER ROLE ${config.role} LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,
     '',
     'Problems are diagnostics with stable HYDE_* codes (for example HYDE_STRICT_UNANNOTATED).',
     'Each error carries a fix hint, and any error fails `prisma generate` before writing files.',

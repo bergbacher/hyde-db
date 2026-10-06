@@ -1,7 +1,14 @@
 import { spawnSync } from 'node:child_process'
 import { describe, expect, it } from 'vitest'
 import { DEFAULT_OUTPUT } from '../../src/brand.ts'
-import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from '../../src/cli-help.ts'
+import {
+  formatSummary,
+  prismaArgumentsMessage,
+  repositoryUrl,
+  selectCommand,
+  unknownArgumentMessage,
+  usage,
+} from '../../src/cli-help.ts'
 import { CONFIG_KEYS, DEFAULT_CONFIG } from '../../src/config.ts'
 import { DIAGNOSTIC_CODES } from '../../src/diagnostics.ts'
 import { build } from '../../src/index.ts'
@@ -16,10 +23,20 @@ describe('selectCommand', () => {
     expect(selectCommand([], false)).toEqual({ kind: 'help' })
   })
 
-  it('D56: arguments win over PRISMA_GENERATOR_INVOCATION', () => {
-    expect(selectCommand(['--help'], true)).toEqual({ kind: 'help' })
-    expect(selectCommand(['--version'], true)).toEqual({ kind: 'version' })
-    expect(selectCommand(['--nope'], true)).toEqual({ kind: 'unknown', argument: '--nope' })
+  it('D66: under Prisma any argument is refused, --help and --version included', () => {
+    for (const args of [
+      ['--help'],
+      ['--version'],
+      ['help'],
+      ['version'],
+      ['--nope'],
+      ['-h', 'x'],
+    ]) {
+      expect(selectCommand(args, true), args.join(' ')).toEqual({
+        kind: 'prisma-arguments',
+        arguments: args,
+      })
+    }
   })
 
   it('D56: --help and -h print the help, --version and -v the version', () => {
@@ -32,7 +49,6 @@ describe('selectCommand', () => {
   it('D56: help and version also work as plain words', () => {
     expect(selectCommand(['help'], false)).toEqual({ kind: 'help' })
     expect(selectCommand(['version'], false)).toEqual({ kind: 'version' })
-    expect(selectCommand(['help'], true)).toEqual({ kind: 'help' })
   })
 
   it('D56: order does not matter: a help request anywhere wins, then a version request', () => {
@@ -53,6 +69,36 @@ describe('selectCommand', () => {
       argument: '--first',
     })
     expect(selectCommand(['Help'], false)).toEqual({ kind: 'unknown', argument: 'Help' })
+  })
+})
+
+describe('prismaArgumentsMessage', () => {
+  it('D66: names the arguments and the provider rule', () => {
+    expect(prismaArgumentsMessage(['--help'])).toBe(
+      'hyde-db: Prisma passed arguments (--help); the generator block must read provider = "hyde-db" with nothing after it.',
+    )
+    expect(prismaArgumentsMessage(['a', 'b'])).toContain('arguments (a b);')
+  })
+})
+
+describe('formatSummary', () => {
+  const where = 'prisma/redacted'
+  it('D28: counts with singular and plural nouns', () => {
+    expect(formatSummary({ views: 2, visible: 8, hidden: 6 }, where)).toBe(
+      'hyde-db: 2 views, 8 visible columns and 6 hidden columns → prisma/redacted',
+    )
+    expect(formatSummary({ views: 1, visible: 1, hidden: 1 }, where)).toBe(
+      'hyde-db: 1 view, 1 visible column and 1 hidden column → prisma/redacted',
+    )
+  })
+
+  it('D28: zero is plural, and each noun follows its own count', () => {
+    expect(formatSummary({ views: 0, visible: 0, hidden: 0 }, where)).toBe(
+      'hyde-db: 0 views, 0 visible columns and 0 hidden columns → prisma/redacted',
+    )
+    expect(formatSummary({ views: 1, visible: 3, hidden: 1 }, where)).toBe(
+      'hyde-db: 1 view, 3 visible columns and 1 hidden column → prisma/redacted',
+    )
   })
 })
 
@@ -89,6 +135,7 @@ describe('repositoryUrl', () => {
 })
 
 /** The password argument of the login step: the shell aborts when READER_PASSWORD is unset or empty. */
+const DB_URL = `\${DATABASE_URL:?export DATABASE_URL first}`
 const LOGIN_PASSWORD = `'\${READER_PASSWORD:?set READER_PASSWORD first}'`
 
 describe('usage', () => {
@@ -172,29 +219,75 @@ describe('usage', () => {
     expect([...named].sort()).toEqual(Object.keys(files ?? {}).sort())
   })
 
-  /** The command lines of the deploy block, without their trailing `# …` comments. */
+  /** The command lines of the deploy block (D68: none carries a trailing comment, so each pastes as is). */
   const commandsIn = (usageText: string): string[] =>
     usageText
       .split('\n')
       .filter((line) => /^ {2}(psql|npx) /.test(line))
-      .map((line) => line.trim().replace(/ +#.*$/, ''))
+      .map((line) => line.trim())
 
   it('D56: gives the deploy order as copy-pasteable commands, starting with prisma generate', () => {
     expect(commandsIn(text)).toEqual([
       'npx prisma generate',
-      'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
+      `psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql`,
       'npx prisma migrate deploy',
-      'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
+      `psql "${DB_URL}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
+      `psql "${DB_URL}" -c "ALTER ROLE redacted_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
     ])
   })
 
+  it('D68: every command that uses the database URL stops while DATABASE_URL is unset', () => {
+    const withUrl = commandsIn(text).filter((c) => c.startsWith('psql '))
+    expect(withUrl).toHaveLength(3)
+    for (const command of withUrl) expect(command, command).toContain(`"${DB_URL}"`)
+    expect(text).not.toContain('"$DATABASE_URL"')
+  })
+
+  it('D68: an unset or empty DATABASE_URL aborts the command in a shell, running nothing', () => {
+    for (const command of commandsIn(text).filter((c) => c.startsWith('psql '))) {
+      const printed = command.replace(/^psql /, "printf '%s\\n' ")
+      for (const env of [{}, { DATABASE_URL: '' }]) {
+        const { status, stdout, stderr } = spawnSync('sh', ['-c', printed], {
+          env: { PATH: process.env.PATH ?? '', READER_PASSWORD: 'x', ...env },
+          encoding: 'utf8',
+        })
+        expect(status, command).not.toBe(0)
+        expect(stdout, command).toBe('')
+        expect(stderr, command).toContain('DATABASE_URL: export DATABASE_URL first')
+      }
+    }
+  })
+
+  it('A49: paste-safe: no command line carries a trailing comment, and no line starts with #', () => {
+    for (const line of lines) expect(line.trimStart(), line).not.toMatch(/^#/)
+    for (const command of commandsIn(text)) expect(command, command).not.toContain(' #')
+    expect(commandsIn(text)).toHaveLength(5)
+  })
+
+  it('A49: each note is plain prose on its own line before its command, ending with a colon', () => {
+    const commandIndexes = lines.flatMap((l, i) => (/^ {2}(psql|npx) /.test(l) ? [i] : []))
+    expect(commandIndexes).toHaveLength(5)
+    for (const index of commandIndexes) {
+      expect(lines[index - 1], lines[index]).toMatch(/^[A-Za-z].*:$/)
+    }
+  })
+
   it('D56: says prisma generate writes the three files and the login step runs once', () => {
-    expect(lines.find((l) => l.includes('npx prisma generate'))).toMatch(
-      /# writes the three files$/,
+    expect(lines[lines.findIndex((l) => l.includes('npx prisma generate')) - 1]).toContain(
+      'three files',
     )
-    expect(lines.find((l) => l.includes('ALTER ROLE'))).toMatch(
-      /# once; the password must not contain a single quote$/,
+    expect(text).toMatch(/password, once\./)
+  })
+
+  it('A49: the login note says to export READER_PASSWORD, that ps shows it, and the interactive alternative', () => {
+    const index = lines.findIndex((l) => l.includes('ALTER ROLE'))
+    const note = lines.slice(0, index).join('\n')
+    expect(note).toContain('export READER_PASSWORD=...')
+    expect(note).toContain('single quote')
+    expect(note).toContain('visible in `ps`')
+    expect(note).toContain('\\password redacted_reader')
+    expect(note.indexOf('export READER_PASSWORD=...')).toBeLessThan(
+      note.indexOf('\\password redacted_reader'),
     )
   })
 
@@ -246,6 +339,7 @@ describe('usage', () => {
     const definitions = lines.filter((l) => l.includes('<output> ='))
     expect(definitions).toHaveLength(1)
     expect(definitions[0]).toContain("the generator's output directory")
+    expect(definitions[0]).toMatch(/:$/)
     expect(definitions[0]).toContain('relative to schema.prisma')
     expect(definitions[0]).toContain(`(default ${DEFAULT_OUTPUT})`)
     expect(lines.indexOf(definitions[0] ?? '')).toBeLessThan(
@@ -265,7 +359,7 @@ describe('usage', () => {
   it('D56: names the role from the config it is given in the login step', () => {
     const custom = { ...DEFAULT_CONFIG, role: 'masked_reader' }
     expect(commandsIn(usage(custom)).at(-1)).toBe(
-      `psql "$DATABASE_URL" -c "ALTER ROLE masked_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
+      `psql "${DB_URL}" -c "ALTER ROLE masked_reader LOGIN PASSWORD ${LOGIN_PASSWORD}"`,
     )
   })
 

@@ -123,7 +123,7 @@ describe('generator protocol', () => {
       expect(readFileSync(join(output, file), 'utf8')).toBe(expected?.[file])
     }
     expect(stdout).toBe(
-      `hyde-db: 2 views, 8 visible and 6 hidden columns → ${relative(repoRoot, output)}\n`,
+      `hyde-db: 2 views, 8 visible columns and 6 hidden columns → ${relative(repoRoot, output)}\n`,
     )
   })
 

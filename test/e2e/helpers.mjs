@@ -53,15 +53,45 @@ export function databaseUrl() {
   return url
 }
 
-export function run(command, args, { cwd, env = {}, input, timeout } = {}) {
+/** Ten minutes: long enough for an npm install of Prisma, short enough that a hang fails the run. */
+const DEFAULT_TIMEOUT_MS = 600_000
+
+// An empty npm user config, so a developer's ~/.npmrc cannot change what the children print.
+const emptyNpmrc = join(mkdtempSync(join(tmpdir(), 'hyde-e2e-npmrc-')), 'npmrc')
+writeFileSync(emptyNpmrc, '')
+process.on('exit', () => rmSync(dirname(emptyNpmrc), { recursive: true, force: true }))
+
+/** Hermetic npm: no update notice, funding or audit lines, so `stderr === ''` assertions hold. */
+const NPM_ENV = {
+  npm_config_update_notifier: 'false',
+  npm_config_fund: 'false',
+  npm_config_audit: 'false',
+  npm_config_userconfig: emptyNpmrc,
+}
+
+export function run(command, args, { cwd, env = {}, input, timeout = DEFAULT_TIMEOUT_MS } = {}) {
   const result = spawnSync(command, args, {
     cwd,
     input,
     timeout,
     encoding: 'utf8',
-    env: { ...process.env, PRISMA_HIDE_UPDATE_MESSAGE: '1', CHECKPOINT_DISABLE: '1', ...env },
+    env: {
+      ...process.env,
+      PRISMA_HIDE_UPDATE_MESSAGE: '1',
+      CHECKPOINT_DISABLE: '1',
+      ...NPM_ENV,
+      ...env,
+    },
   })
+  if (result.error?.code === 'ETIMEDOUT')
+    throw new Error(
+      `${command} ${args.join(' ')} did not finish within ${timeout} ms and was killed (${result.signal ?? 'no signal'})`,
+    )
   if (result.error) throw result.error
+  if (result.status === null)
+    throw new Error(
+      `${command} ${args.join(' ')} ended without an exit status (signal ${result.signal ?? 'unknown'}):\n${result.stdout}\n${result.stderr}`,
+    )
   return {
     status: result.status,
     stdout: result.stdout,
@@ -130,7 +160,7 @@ export function prisma(dir, args, { input, env } = {}) {
 
 /**
  * Runs the installed hyde-db bin outside Prisma, as `npx hyde-db --help` does for a person or an
- * agent (D61). The flag is `--no-install`, not `--no`: npm's npx treats `--no` as an option that
+ * agent (D56). The flag is `--no-install`, not `--no`: npm's npx treats `--no` as an option that
  * takes a value and then answers `--help`/`--version` itself (observed on npm 10.9.4).
  */
 export function hydeDb(dir, args) {

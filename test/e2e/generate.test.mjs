@@ -1,7 +1,7 @@
 // The packed tarball under real `prisma generate`, `prisma db execute` and the bin outside Prisma
-// (D20, D30, D43, D61).
+// (D20, D30, D43, D56, D66).
 import assert from 'node:assert/strict'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { before, describe, it } from 'node:test'
 import {
@@ -68,7 +68,7 @@ for (const version of PRISMA_VERSIONS) {
       }
       assert.match(
         result.stdout,
-        /hyde-db: 2 views, 8 visible and 6 hidden columns → prisma[/\\]redacted/,
+        /hyde-db: 2 views, 8 visible columns and 6 hidden columns → prisma[/\\]redacted/,
       )
     })
 
@@ -92,7 +92,7 @@ for (const version of PRISMA_VERSIONS) {
       for (const invocation of seen) assert.deepEqual(invocation, { args: [], invocation: 'true' })
     })
 
-    it(`D33: a schema error fails prisma generate and names its code (Prisma ${version})`, () => {
+    it(`D51: a schema error fails prisma generate and names its code (Prisma ${version})`, () => {
       writeSchema(
         dir,
         version,
@@ -103,7 +103,7 @@ for (const version of PRISMA_VERSIONS) {
       assert.match(result.output, /HYDE_STRICT_UNANNOTATED at User\.phone/)
     })
 
-    it(`D33: warnings reach the terminal on success (Prisma ${version})`, () => {
+    it(`D51: warnings reach the terminal on success (Prisma ${version})`, () => {
       writeSchema(
         dir,
         version,
@@ -114,17 +114,44 @@ for (const version of PRISMA_VERSIONS) {
       assert.match(result.stdout, /warning HYDE_SENSITIVE_EXPLICIT at User\.email/)
     })
 
-    it(`D61: npx hyde-db --help prints the generator block and exits 0 (Prisma ${version})`, () => {
+    it(`D20: the installed hyde-db bin resolves into the project's node_modules/hyde-db (Prisma ${version})`, () => {
+      const bin = realpathSync(join(dir, 'node_modules', '.bin', 'hyde-db'))
+      assert.ok(
+        bin.startsWith(join(realpathSync(dir), 'node_modules', 'hyde-db', '')),
+        `bin resolves to ${bin}`,
+      )
+    })
+
+    it(`D56: npx hyde-db --help prints the generator block and exits 0 (Prisma ${version})`, () => {
       const result = hydeDb(dir, ['--help'])
       assert.equal(result.status, 0, result.output)
       assert.equal(result.stderr, '')
       assert.match(result.stdout, /generator redacted \{\n {4}provider = "hyde-db"\n/)
     })
 
-    it(`D61: npx hyde-db --version prints the tarball's version (Prisma ${version})`, () => {
+    it(`D56: npx hyde-db --version prints the tarball's version (Prisma ${version})`, () => {
       const result = hydeDb(dir, ['--version'])
       assert.equal(result.status, 0, result.output)
       assert.equal(result.stdout.trim(), packedVersion())
+    })
+
+    it(`D66: provider = "hyde-db --help" fails prisma generate with the provider rule and writes no files (Prisma ${version})`, () => {
+      writeSchema(dir, version, example)
+      const schemaPath = join(dir, 'prisma', 'schema.prisma')
+      const schema = readFileSync(schemaPath, 'utf8')
+      assert.ok(schema.includes('provider = "hyde-db"'), 'example schema has the generator block')
+      writeFileSync(
+        schemaPath,
+        schema.replace('provider = "hyde-db"', 'provider = "hyde-db --help"'),
+      )
+      rmSync(join(dir, 'prisma', 'redacted'), { recursive: true, force: true })
+      const result = prisma(dir, ['generate'])
+      assert.notEqual(result.status, 0, result.output)
+      assert.match(
+        result.output,
+        /hyde-db: Prisma passed arguments \(--help\); the generator block must read provider = "hyde-db" with nothing after it\./,
+      )
+      assert.equal(existsSync(join(dir, 'prisma', 'redacted')), false, 'files were written')
     })
 
     it(`A30: prisma db execute --file applies the drop and apply scripts unchanged (Prisma ${version})`, () => {
@@ -134,6 +161,7 @@ for (const version of PRISMA_VERSIONS) {
         stdin: "DO $$ BEGIN RAISE EXCEPTION 'control: db execute must report SQL errors'; END $$;",
       })
       assert.notEqual(failing.status, 0, 'db execute swallowed an SQL error')
+      assert.match(failing.output, /control: db execute must report SQL errors/)
       const dropped = dbExecute(dir, version, { file: DROP })
       assert.equal(dropped.status, 0, dropped.output)
       const applied = dbExecute(dir, version, { file: APPLY })

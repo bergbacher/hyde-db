@@ -85,10 +85,10 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
     for (const file of OUTPUT_FILES) expect(stdout).toContain(file)
     const deploy = [
       'npx prisma generate',
-      'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql',
+      `psql "\${DATABASE_URL:?export DATABASE_URL first}" -v ON_ERROR_STOP=1 -f <output>/redacted-views-drop.sql`,
       'npx prisma migrate deploy',
-      'psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql',
-      `psql "$DATABASE_URL" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,
+      `psql "\${DATABASE_URL:?export DATABASE_URL first}" -v ON_ERROR_STOP=1 -f <output>/redacted-views.sql`,
+      `psql "\${DATABASE_URL:?export DATABASE_URL first}" -c "ALTER ROLE redacted_reader LOGIN PASSWORD '\${READER_PASSWORD:?set READER_PASSWORD first}'"`,
     ]
     const positions = deploy.map((command) => stdout.indexOf(command))
     expect(positions).not.toContain(-1)
@@ -179,12 +179,15 @@ describe('command line outside Prisma', { timeout: 3 * TIME_LIMIT_MS }, () => {
     })
   })
 
-  it('D56: with PRISMA_GENERATOR_INVOCATION=true and --help it prints usage (arguments win)', async () => {
-    const help = await run(['--help'])
-    const underPrisma = await run(['--help'], { underPrisma: true })
-    expect(underPrisma.code).toBe(0)
-    expect(underPrisma.stderr).toBe('')
-    expect(underPrisma.stdout).toBe(help.stdout)
+  it('D66: under Prisma, --help fails with exit 2 and names the provider rule', async () => {
+    for (const args of [['--help'], ['--version'], ['--frobnicate'], ['help', 'x']]) {
+      const { code, stdout, stderr } = await run(args, { underPrisma: true })
+      expect(code, args.join(' ')).toBe(2)
+      expect(stdout, args.join(' ')).toBe('')
+      expect(stderr, args.join(' ')).toBe(
+        `hyde-db: Prisma passed arguments (${args.join(' ')}); the generator block must read provider = "hyde-db" with nothing after it.\n`,
+      )
+    }
   })
 
   it('D55: the help text names no AI-only concept', async () => {

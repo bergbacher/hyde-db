@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Generator entry: the only module with I/O (D5). Under Prisma (PRISMA_GENERATOR_INVOCATION=true,
-// no arguments, A34) it speaks the line-delimited JSON-RPC protocol itself (D32): requests arrive
+// no arguments, A34; any argument fails, D66) it speaks the line-delimited JSON-RPC protocol itself (D32): requests arrive
 // on stdin, responses go to stderr, one JSON object per line (A19). Warnings and the success line
 // go to stdout, which Prisma shows (D51, D28, A20). Anywhere else it prints help or the version
 // and exits without touching stdin (D56).
@@ -9,7 +9,14 @@ import { join, relative } from 'node:path'
 import { createInterface } from 'node:readline'
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import { build } from './build.ts'
-import { repositoryUrl, selectCommand, unknownArgumentMessage, usage } from './cli-help.ts'
+import {
+  formatSummary,
+  prismaArgumentsMessage,
+  repositoryUrl,
+  selectCommand,
+  unknownArgumentMessage,
+  usage,
+} from './cli-help.ts'
 import { DEFAULT_CONFIG } from './config.ts'
 import {
   formatDiagnostic,
@@ -68,8 +75,7 @@ function generate(params: GenerateParams): void {
     process.stdout.write(`${BRAND}: ${formatDiagnostic(warning)}\n`)
   const where = relative(process.cwd(), outDir) || '.'
   process.stdout.write(
-    `${BRAND}: ${result.views.length} views, ${result.counts.visible} visible and ` +
-      `${result.counts.hidden} hidden columns → ${where}\n`,
+    `${formatSummary({ views: result.views.length, ...result.counts }, where)}\n`,
   )
 }
 
@@ -127,6 +133,9 @@ if (command.kind === 'protocol') {
   process.stdout.write(`${text}\n`)
 } else if (command.kind === 'version') {
   process.stdout.write(`${String(readPackage().version)}\n`)
+} else if (command.kind === 'prisma-arguments') {
+  process.stderr.write(`${prismaArgumentsMessage(command.arguments)}\n`)
+  process.exitCode = 2
 } else {
   process.stderr.write(`${unknownArgumentMessage(command.argument)}\n`)
   process.exitCode = 2
