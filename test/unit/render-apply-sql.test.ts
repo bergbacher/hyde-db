@@ -87,9 +87,14 @@ describe('apply SQL', () => {
     "CASE WHEN fixes LIKE '%SET ROLE %' THEN ' -- run as a superuser' ELSE runner END",
   )
   /** Who must run a fix revoking as the owners `owner` of the objects found (D134). */
-  const runAs = (owner: string): string =>
-    `CASE WHEN bool_and(pg_has_role(${owner}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${owner}) = 1 ` +
-    `THEN format(' -- run as %s or a superuser', min(${owner})::regrole) ELSE ' -- run as a superuser' END`
+  const runAs = (owner: string): string => {
+    // pg_database_owner stands for the database's owner, which, unlike it, can log in.
+    const acting = `CASE WHEN ${owner} = to_regrole('pg_database_owner')::oid THEN (SELECT dbo.datdba FROM pg_database dbo WHERE dbo.datname = current_database()) ELSE ${owner} END`
+    return (
+      `CASE WHEN bool_and(pg_has_role(${acting}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${acting}) = 1 ` +
+      `THEN format(' -- run as %s or a superuser', min(${acting})::regrole) ELSE ' -- run as a superuser' END`
+    )
+  }
 
   /** The final safety check's DO block, from its header comment to the end of the script. */
   const finalCheckBlock = sql.slice(sql.indexOf('-- Safety check'))

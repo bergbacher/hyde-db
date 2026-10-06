@@ -197,15 +197,18 @@ function revokeFix(
 /**
  * SQL for the note naming who must run a fix whose statements outside `SET ROLE` act as the owners
  * `owner` of the objects a check found, aggregated over them (D134): NULL when the deploying role
- * acts as every one of them (it is the owner, a member of the owner role or a superuser);
- * ` -- run as <owner> or a superuser` when the objects have one owner and the role does not act as
- * it; otherwise, for several owners, ` -- run as a superuser`. A REVOKE by any other role changes
- * nothing (A95), without even a warning when that role holds the grant option.
+ * acts as every one of them (it is the owner, inherits the owner role's privileges or is a
+ * superuser); ` -- run as <owner> or a superuser` when the objects have one owner and the role does
+ * not act as it; otherwise, for several owners, ` -- run as a superuser`. A REVOKE by any other role
+ * changes nothing (A95), without even a warning when that role holds the grant option (A100). An
+ * owner `pg_database_owner` (schema public from PostgreSQL 15 on) counts as the database's owner,
+ * which acts as it and, unlike it, can log in.
  */
 function runAs(owner: string): string {
+  const acting = `CASE WHEN ${owner} = to_regrole('pg_database_owner')::oid THEN (SELECT dbo.datdba FROM pg_database dbo WHERE dbo.datname = current_database()) ELSE ${owner} END`
   return (
-    `CASE WHEN bool_and(pg_has_role(${owner}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${owner}) = 1 ` +
-    `THEN format(' -- run as %s or a superuser', min(${owner})::regrole) ELSE ' -- run as a superuser' END`
+    `CASE WHEN bool_and(pg_has_role(${acting}, 'USAGE')) IS NOT FALSE THEN NULL WHEN count(DISTINCT ${acting}) = 1 ` +
+    `THEN format(' -- run as %s or a superuser', min(${acting})::regrole) ELSE ' -- run as a superuser' END`
   )
 }
 

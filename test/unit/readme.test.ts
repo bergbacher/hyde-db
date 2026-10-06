@@ -615,9 +615,18 @@ describe('README (a view of LEDGER.md)', () => {
     expect(section('How a printed fix is built', '###')).toContain(
       "is not that owner, does not inherit the owner role's privileges, and is not a superuser",
     )
-    expect(applySql).toMatch(/bool_and\(pg_has_role\([\w.]+, 'USAGE'\)\)/)
-    expect(applySql).not.toMatch(/pg_has_role\([\w.]+, 'MEMBER'\)/)
+    expect(applySql).toMatch(/bool_and\(pg_has_role\(.+?, 'USAGE'\)\)/)
+    expect(applySql).not.toMatch(/pg_has_role\(.+?, 'MEMBER'\)/)
     expect(prose).not.toContain('member of the owner role')
+  })
+
+  it("D134: says that schema public's fix names the database's owner where pg_database_owner owns it", () => {
+    expect(applySql).toContain(
+      "= to_regrole('pg_database_owner')::oid THEN (SELECT dbo.datdba FROM pg_database dbo",
+    )
+    expect(section('How a printed fix is built', '###')).toContain(
+      "From PostgreSQL 15 on, schema `public` belongs to `pg_database_owner`, a role nobody can log in as that stands for the database's owner, so its fix names the database's owner instead.",
+    )
   })
 
   it('D134, D144: the managed-service row gives both marker forms, the owner and the several-owners one', () => {

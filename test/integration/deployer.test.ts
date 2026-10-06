@@ -33,20 +33,29 @@ async function extraRole(name: string, attributes = 'NOLOGIN'): Promise<string> 
 
 interface Deployment {
   readonly db: TestDb
-  /** A non-superuser LOGIN CREATEROLE role that owns the database and reads the source tables. */
+  /** A non-superuser LOGIN CREATEROLE role that reads the source tables and owns the database, or holds CREATE on it. */
   readonly deployer: string
   /** The apply script as the deployer runs it. */
   readonly script: string
 }
 
-/** A database owned by a non-superuser deployer, as on a managed service. */
-async function deployment(options: { hardenPublicSchema?: boolean } = {}): Promise<Deployment> {
+/**
+ * A database deployed by a non-superuser deployer, as on a managed service, which owns it unless
+ * `ownsDatabase` is false; then it holds CREATE on it.
+ */
+async function deployment(
+  options: { hardenPublicSchema?: boolean; ownsDatabase?: boolean } = {},
+): Promise<Deployment> {
   const db = await createTestDatabase(options)
   created.push(db)
   const deployer = await extraRole(`${db.name}_deployer`, 'LOGIN CREATEROLE')
+  const database =
+    (options.ownsDatabase ?? true)
+      ? `ALTER DATABASE ${db.name} OWNER TO "${deployer}"`
+      : `GRANT CREATE ON DATABASE ${db.name} TO "${deployer}"`
   await adminQuery(
     db.name,
-    `ALTER DATABASE ${db.name} OWNER TO "${deployer}"; GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${deployer}"`,
+    `${database}; GRANT SELECT ON ALL TABLES IN SCHEMA public TO "${deployer}"`,
   )
   return { db, deployer, script: `SET ROLE "${deployer}";\n${db.files['redacted-views.sql']}` }
 }
@@ -79,6 +88,22 @@ describe('fixes the deployer cannot run itself', () => {
       expect(suggestedFix(failed)).toBe(fix)
       await pasteFixAndReapply(db, failed, { script, role: deployer })
     }
+  })
+
+  it("D134: where schema public belongs to pg_database_owner (PostgreSQL 15 and later), the fix names the database's owner, a role one can log in as", async () => {
+    const { db, script } = await deployment({ hardenPublicSchema: false, ownsDatabase: false })
+    await adminQuery(db.name, 'GRANT CREATE ON SCHEMA public TO PUBLIC')
+    const failed = psql(db.name, script)
+    expect(failed.status).toBe(3)
+    // On PostgreSQL 14 the bootstrap superuser owns both public and, here, the database.
+    const owner = await roleName(
+      db,
+      'SELECT datdba FROM pg_database WHERE datname = current_database()',
+    )
+    expect(suggestedFix(failed)).toBe(
+      `REVOKE CREATE ON SCHEMA public FROM PUBLIC CASCADE; -- run as ${owner} or a superuser`,
+    )
+    await pasteFixAndReapply(db, failed, { script })
   })
 
   it('D134: a catalog fix is marked with the owner of the catalog', async () => {
