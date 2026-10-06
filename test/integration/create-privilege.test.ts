@@ -1,4 +1,5 @@
 // D24: the AI role must not be able to create objects in any schema (CVE-2018-1058).
+import pg from 'pg'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
@@ -8,6 +9,7 @@ import {
   psql,
   suggestedFix,
   type TestDb,
+  urlFor,
 } from './helpers/db.ts'
 
 const created: TestDb[] = []
@@ -84,5 +86,29 @@ describe('CREATE privilege', () => {
     // with TEMP on the database (PUBLIC by default) counts as holding CREATE.
     const result = psql(db.name, `CREATE TEMP TABLE scratch (id int);\n${db.files['ai-views.sql']}`)
     expect(result.status, result.stderr).toBe(0)
+  })
+
+  it("D24: a CREATE grant on another session's temporary schema aborts apply", async () => {
+    const db = await freshDb(true)
+    expect(apply(db).status).toBe(0)
+    // Another session creates a temp table and stays connected, so its pg_temp_N schema exists.
+    const other = new pg.Client({ connectionString: urlFor(db.name) })
+    await other.connect()
+    try {
+      await other.query('CREATE TEMP TABLE scratch (id int)')
+      const { rows } = await other.query<{ name: string }>(
+        'SELECT pg_my_temp_schema()::regnamespace::text AS name',
+      )
+      const temp = rows[0]?.name ?? ''
+      expect(temp).toMatch(/^pg_temp_\d+$/)
+      await adminQuery(db.name, `GRANT CREATE ON SCHEMA ${temp} TO "${db.role}"`)
+      const failed = apply(db)
+      expect(failed.status).toBe(3)
+      expect(failed.stderr).toContain(
+        `role ${db.role} can create objects in schemas: ${temp}. Fix: REVOKE CREATE ON SCHEMA ${temp} FROM ${db.role};`,
+      )
+    } finally {
+      await other.end()
+    }
   })
 })

@@ -122,10 +122,9 @@ describe('apply SQL', () => {
     )
   })
 
-  it("D24: ignores the applying session's own temporary schemas", () => {
-    expect(createCheck).toContain(
-      "AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'",
-    )
+  it("D24: ignores only the applying session's own temporary schema", () => {
+    expect(createCheck).toContain('    AND n.oid <> pg_my_temp_schema()\n')
+    expect(createCheck).not.toContain('temp\\_')
   })
 
   /** The final safety check's DO block. */

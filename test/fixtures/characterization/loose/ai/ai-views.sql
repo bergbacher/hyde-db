@@ -65,7 +65,7 @@ DECLARE
   leaks text;
   fixes text;
 BEGIN
-  -- Attributes first: a superuser would pass every privilege test below.
+  -- Attributes first: the privilege tests below cannot see them, and would misreport a superuser.
   SELECT concat_ws(', ', CASE WHEN r.rolsuper THEN 'SUPERUSER' END, CASE WHEN r.rolcreatedb THEN 'CREATEDB' END, CASE WHEN r.rolcreaterole THEN 'CREATEROLE' END, CASE WHEN r.rolreplication THEN 'REPLICATION' END, CASE WHEN r.rolbypassrls THEN 'BYPASSRLS' END),
          format('ALTER ROLE %I %s;', r.rolname, concat_ws(' ', CASE WHEN r.rolsuper THEN 'NOSUPERUSER' END, CASE WHEN r.rolcreatedb THEN 'NOCREATEDB' END, CASE WHEN r.rolcreaterole THEN 'NOCREATEROLE' END, CASE WHEN r.rolreplication THEN 'NOREPLICATION' END, CASE WHEN r.rolbypassrls THEN 'NOBYPASSRLS' END))
     INTO leaks, fixes
@@ -117,7 +117,7 @@ BEGIN
     INTO leaks, fixes
   FROM pg_namespace n CROSS JOIN pg_roles r
   WHERE r.rolname = 'ai_reader'
-    AND n.nspname NOT LIKE 'pg\_temp\_%' AND n.nspname NOT LIKE 'pg\_toast\_temp\_%'
+    AND n.oid <> pg_my_temp_schema()
     AND has_schema_privilege(r.oid, n.oid, 'CREATE');
   IF leaks IS NOT NULL THEN
     RAISE EXCEPTION 'hyde-db: role ai_reader can create objects in schemas: %. Fix: %', leaks, fixes;

@@ -64,7 +64,7 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  leaks text;',
     '  fixes text;',
     'BEGIN',
-    '  -- Attributes first: a superuser would pass every privilege test below.',
+    '  -- Attributes first: the privilege tests below cannot see them, and would misreport a superuser.',
     `  SELECT ${heldAttributes(', ', '')},`,
     `         format('ALTER ROLE %I %s;', r.rolname, ${heldAttributes(' ', 'NO')})`,
     '    INTO leaks, fixes',
@@ -117,8 +117,9 @@ function renderFinalCheck(config: ResolvedConfig): string[] {
     '  FROM pg_namespace n CROSS JOIN pg_roles r',
     `  WHERE r.rolname = ${role}`,
     // The applying session's own temp schema grants CREATE to every role with TEMP on the
-    // database; that is not a leak, and REVOKE on it would do nothing.
-    `    AND n.nspname NOT LIKE 'pg\\_temp\\_%' AND n.nspname NOT LIKE 'pg\\_toast\\_temp\\_%'`,
+    // database; that is not a leak, and REVOKE on it would do nothing. Other sessions' temp
+    // schemas are checked: a CREATE grant on one is real (0 when this session has none).
+    '    AND n.oid <> pg_my_temp_schema()',
     "    AND has_schema_privilege(r.oid, n.oid, 'CREATE');",
     '  IF leaks IS NOT NULL THEN',
     `    RAISE EXCEPTION '${BRAND}: role ${config.role} can create objects in schemas: %. Fix: %', leaks, fixes;`,

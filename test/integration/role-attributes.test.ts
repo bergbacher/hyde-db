@@ -63,6 +63,17 @@ describe('role attributes', () => {
     expect(apply(db).status).toBe(0)
   })
 
+  it('D49: an attribute given after a first apply is refused on re-apply', async () => {
+    const db = await freshDb()
+    expect(apply(db).status).toBe(0)
+    await adminQuery('postgres', `ALTER ROLE "${db.role}" BYPASSRLS`)
+    const result = apply(db)
+    expect(result.status).toBe(3)
+    expect(result.stderr).toContain(
+      `role ${db.role} has attributes it must not have: BYPASSRLS. Fix: ALTER ROLE ${db.role} NOBYPASSRLS;`,
+    )
+  })
+
   it('D49: a role created by the script passes', async () => {
     const db = await freshDb()
     expect(apply(db).status).toBe(0)
