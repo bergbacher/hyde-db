@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import {
   adminQuery,
   apply,
+  buildFiles,
   connectAsReader,
   createTestDatabase,
   dropTestDatabase,
@@ -158,6 +159,55 @@ describe('objects that depend on the views', () => {
       expect(dropped.status, dropped.stderr).toBe(0)
     } finally {
       await reader.end()
+    }
+  })
+
+  it('A97, D141: the check does not grow with the rest of the database: with 3000 more tables, apply and drop each finish within 3 seconds', async () => {
+    // Batches of 500 tables, each in a transaction of its own, so PostgreSQL 14 does not run out
+    // of lock slots.
+    await adminQuery(db.name, 'CREATE SCHEMA bulk')
+    for (let first = 1; first <= 3000; first += 500) {
+      await adminQuery(
+        db.name,
+        `DO $$ BEGIN FOR i IN ${first}..${first + 499} LOOP
+           EXECUTE format('CREATE TABLE bulk.t%s (id serial PRIMARY KEY, note text)', i);
+         END LOOP; END $$`,
+      )
+    }
+    expect(apply(db).status).toBe(0)
+    for (const file of SCRIPTS) {
+      const started = Date.now()
+      const result = psql(db.name, db.files[file])
+      const seconds = (Date.now() - started) / 1000
+      expect(result.status, result.stderr).toBe(0)
+      // A bound, not a benchmark: the quadratic guard took 5 to 8 seconds here on PostgreSQL 18.
+      expect(seconds, file).toBeLessThan(3)
+    }
+  })
+
+  it('D141: a views schema named with a reserved word counts as itself, so only objects outside it are refused', async () => {
+    // pg_identify_object writes such a schema quoted: "user".
+    const files = buildFiles(db.role, undefined, { schema: 'user' })
+    expect(psql(db.name, files['redacted-views.sql']).status).toBe(0)
+    const inside =
+      'CREATE FUNCTION "user".count_users(u "user".users) RETURNS int LANGUAGE sql AS \'SELECT 1\''
+    await adminQuery(db.name, inside)
+    const reapplied = psql(db.name, files['redacted-views.sql'])
+    expect(reapplied.status, reapplied.stderr).toBe(0)
+    await adminQuery(db.name, inside)
+    const dropped = psql(db.name, files['redacted-views-drop.sql'])
+    expect(dropped.status, dropped.stderr).toBe(0)
+    expect(psql(db.name, files['redacted-views.sql']).status).toBe(0)
+    await adminQuery(
+      db.name,
+      'CREATE SCHEMA analytics; CREATE VIEW analytics.report AS SELECT * FROM "user".users',
+    )
+    for (const sql of [files['redacted-views.sql'], files['redacted-views-drop.sql']]) {
+      const refused = psql(db.name, sql)
+      expect(refused.status).toBe(3)
+      expect(refused.stderr).toContain(
+        'objects outside schema user depend on its views: view analytics.report;',
+      )
     }
   })
 })

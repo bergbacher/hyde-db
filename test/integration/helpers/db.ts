@@ -141,12 +141,16 @@ export async function adminQuery(
   }
 }
 
-/** Builds the example schema (or a variant of it) for the given reader role. */
-export function buildFiles(role: string, schemaSource?: string): OutputFiles {
+/** Builds the example schema (or a variant of it) for the given reader role and config overrides. */
+export function buildFiles(
+  role: string,
+  schemaSource?: string,
+  overrides: Readonly<Record<string, string>> = {},
+): OutputFiles {
   const { datamodel, config } = parseSchema(
     schemaSource ?? readRepoFile('example', 'schema.prisma'),
   )
-  const result = build(datamodel, { ...config, role })
+  const result = build(datamodel, { ...config, ...overrides, role })
   if (result.files === null) throw new Error(JSON.stringify(result.diagnostics, null, 2))
   return result.files
 }

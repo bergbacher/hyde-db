@@ -797,15 +797,18 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D110, D129: gives the lock timeout the scripts set, and that their settings end with them', () => {
+  it('D110, D129, D131: gives the settings both scripts make, and that they end with them', () => {
     const seconds = /SET LOCAL lock_timeout = '(\d+)s';/.exec(applySql)?.[1]
     expect(seconds).toBeDefined()
     expect(readRepoFile('example', 'redacted', 'redacted-views-drop.sql')).toContain(
       `SET LOCAL lock_timeout = '${seconds}s';`,
     )
+    // Both scripts turn JIT off, the drop script for its dependents guard (A93).
     expect(applySql).toContain('SET LOCAL jit = off;')
-    expect(prose).toContain(`\`SET LOCAL lock_timeout = '${seconds}s'\``)
-    expect(prose).toContain('`SET LOCAL jit = off`')
+    expect(dropSql).toContain('SET LOCAL jit = off;')
+    expect(prose).toContain(
+      `Both scripts set \`SET LOCAL client_min_messages = warning\`, \`SET LOCAL lock_timeout = '${seconds}s'\` and \`SET LOCAL jit = off\`.`,
+    )
     expect(prose).toContain(`after ${seconds} seconds`)
     expect(prose).toContain('end with the script')
   })

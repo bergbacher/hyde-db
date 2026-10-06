@@ -677,13 +677,17 @@ describe('apply SQL', () => {
     expect(dependentsGuard).toMatch(/^-- Refuse to drop objects outside schema redacted/)
     expect(sql.indexOf('refusing to drop it')).toBeLessThan(sql.indexOf(dependentsGuard))
     // Dependents on any relation or type of the schema, by a normal or automatic dependency.
-    expect(dependentsGuard).toContain("\n    AND d.deptype IN ('n', 'a')\n")
+    expect(dependentsGuard).toContain("\n  WHERE d.deptype IN ('n', 'a')\n")
+  })
+
+  it("A97, D141: the dependents guard starts from the schema's relations and types and reaches pg_depend through its index, so its time does not grow with the rest of the database", () => {
     expect(dependentsGuard).toContain(
-      "d.refclassid = 'pg_class'::regclass AND d.refobjid IN (SELECT c.oid FROM pg_class c WHERE c.relnamespace = s.oid)",
+      "  FROM (SELECT 'pg_class'::regclass AS classid, c.oid FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = 'redacted'\n" +
+        "        UNION ALL SELECT 'pg_type'::regclass, t.oid FROM pg_type t JOIN pg_namespace s ON s.oid = t.typnamespace WHERE s.nspname = 'redacted') v\n" +
+        '    JOIN pg_depend d ON d.refclassid = v.classid AND d.refobjid = v.oid\n',
     )
-    expect(dependentsGuard).toContain(
-      "d.refclassid = 'pg_type'::regclass AND d.refobjid IN (SELECT t.oid FROM pg_type t WHERE t.typnamespace = s.oid)",
-    )
+    // A correlated IN inside the join condition ran once per pg_depend row.
+    expect(dependentsGuard).not.toContain('refobjid IN (')
     expect(dependentsGuard).toContain(
       `RAISE EXCEPTION '${BRAND}: objects outside schema redacted depend on its views: %; refusing to drop them with the schema. Drop them before the deploy, and create them again after it if you still need them.', dependents;`,
     )
@@ -707,7 +711,9 @@ describe('apply SQL', () => {
   })
 
   it("D141: temporary objects, and objects that depend on one, are left to the schema's drop, so a reader's own cannot block a deploy", () => {
-    expect(dependentsGuard).toContain("AND h.schema IS DISTINCT FROM 'redacted'")
+    // pg_identify_object writes schema names quoted as SQL needs them, such as "user".
+    expect(dependentsGuard).toContain("AND h.schema IS DISTINCT FROM quote_ident('redacted')")
+    expect(dependentsGuard).toContain('(SELECT quote_ident(n.nspname) FROM pg_class c')
     expect(dependentsGuard).toContain("AND coalesce(h.schema, '') !~ '^pg_(toast_)?temp_'")
     expect(dependentsGuard).toContain(
       "AND NOT EXISTS (SELECT 1 FROM pg_depend o CROSS JOIN LATERAL pg_identify_object(o.refclassid, o.refobjid, 0) oi WHERE o.classid = d.classid AND o.objid = d.objid AND oi.schema ~ '^pg_(toast_)?temp_')",

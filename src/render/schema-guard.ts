@@ -31,7 +31,11 @@ export function renderSchemaGuard(config: Pick<ResolvedConfig, 'schema'>): strin
  * or type in it: `DROP SCHEMA … CASCADE` would drop them silently (A97, D141). A view's rule is
  * named as the view; rules, triggers, policies and column defaults count in the schema of their
  * relation. Temporary objects, and objects that depend on one, go with the session anyway and are
- * left to the drop, so a reader's own cannot block a deploy.
+ * left to the drop, so a reader's own cannot block a deploy (D144).
+ *
+ * The query starts from the schema's relations and types and reaches pg_depend through its index
+ * on the referenced object, so its time does not grow with the rest of the database. Schema names
+ * are compared as pg_identify_object writes them, quoted where SQL needs it, such as "user".
  */
 export function renderDependentsGuard(config: Pick<ResolvedConfig, 'schema'>): string {
   const schema = quoteLiteral(config.schema)
@@ -47,20 +51,18 @@ export function renderDependentsGuard(config: Pick<ResolvedConfig, 'schema'>): s
     '  dependents text;',
     'BEGIN',
     `  SELECT string_agg(DISTINCT ${named}, ', ' ORDER BY ${named}) INTO dependents`,
-    '  FROM pg_namespace s',
-    '    JOIN pg_depend d',
-    "      ON d.refclassid = 'pg_class'::regclass AND d.refobjid IN (SELECT c.oid FROM pg_class c WHERE c.relnamespace = s.oid)",
-    "      OR d.refclassid = 'pg_type'::regclass AND d.refobjid IN (SELECT t.oid FROM pg_type t WHERE t.typnamespace = s.oid)",
+    `  FROM (SELECT 'pg_class'::regclass AS classid, c.oid FROM pg_class c JOIN pg_namespace s ON s.oid = c.relnamespace WHERE s.nspname = ${schema}`,
+    `        UNION ALL SELECT 'pg_type'::regclass, t.oid FROM pg_type t JOIN pg_namespace s ON s.oid = t.typnamespace WHERE s.nspname = ${schema}) v`,
+    '    JOIN pg_depend d ON d.refclassid = v.classid AND d.refobjid = v.oid',
     "    LEFT JOIN pg_rewrite w ON d.classid = 'pg_rewrite'::regclass AND w.oid = d.objid",
     "    LEFT JOIN pg_trigger tg ON d.classid = 'pg_trigger'::regclass AND tg.oid = d.objid",
     "    LEFT JOIN pg_policy po ON d.classid = 'pg_policy'::regclass AND po.oid = d.objid",
     "    LEFT JOIN pg_attrdef ad ON d.classid = 'pg_attrdef'::regclass AND ad.oid = d.objid",
     "    CROSS JOIN LATERAL pg_identify_object(CASE WHEN w.oid IS NULL THEN d.classid ELSE 'pg_class'::regclass END, coalesce(w.ev_class, d.objid), CASE WHEN w.oid IS NULL THEN d.objsubid ELSE 0 END) i",
-    '    CROSS JOIN LATERAL (SELECT coalesce((SELECT n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace',
+    '    CROSS JOIN LATERAL (SELECT coalesce((SELECT quote_ident(n.nspname) FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace',
     '      WHERE c.oid = coalesce(w.ev_class, tg.tgrelid, po.polrelid, ad.adrelid)), i.schema) AS schema) h',
-    `  WHERE s.nspname = ${schema}`,
-    "    AND d.deptype IN ('n', 'a')",
-    `    AND h.schema IS DISTINCT FROM ${schema}`,
+    `  WHERE d.deptype IN ('n', 'a')`,
+    `    AND h.schema IS DISTINCT FROM quote_ident(${schema})`,
     `    AND coalesce(h.schema, '') !~ ${temporary}`,
     `    AND NOT EXISTS (SELECT 1 FROM pg_depend o CROSS JOIN LATERAL pg_identify_object(o.refclassid, o.refobjid, 0) oi WHERE o.classid = d.classid AND o.objid = d.objid AND oi.schema ~ ${temporary});`,
     '  IF dependents IS NOT NULL THEN',

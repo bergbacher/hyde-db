@@ -46,6 +46,8 @@ describe('drop SQL', () => {
     expect(settings).toEqual([
       'SET LOCAL client_min_messages = warning;',
       "SET LOCAL lock_timeout = '60s';",
+      // Like the apply script (A93): the guard's catalog query must not be JIT-compiled.
+      'SET LOCAL jit = off;',
     ])
     expect(sql).toContain(`\nBEGIN;\n${settings.join('\n')}\n`)
   })
