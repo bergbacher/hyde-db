@@ -33,4 +33,18 @@ describe('characterization', () => {
     expect(result.files?.['ai-views.sql']).not.toContain('email')
     expect(result.files?.['ai-views.sql']).not.toContain('api_keys')
   })
+
+  it('D54: without strict = "false" the loose schema fails with strict diagnostics', () => {
+    const source = readRepoFile('test/fixtures/characterization/loose', 'schema.prisma').replace(
+      '  strict   = "false"\n',
+      '',
+    )
+    const { datamodel, config } = parseSchema(source)
+    const result = build(datamodel, config)
+    expect(result.files).toBeNull()
+    const errors = new Set(
+      result.diagnostics.filter((d) => d.severity === 'error').map((d) => d.code),
+    )
+    expect(errors).toEqual(new Set(['HYDE_STRICT_UNANNOTATED', 'HYDE_STRICT_MODEL_DEFAULT']))
+  })
 })

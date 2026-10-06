@@ -4,6 +4,7 @@
 generator ai {
   provider = "hyde-db"
   output   = "./ai"
+  strict   = "false"
 }
 
 datasource db {

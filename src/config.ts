@@ -17,7 +17,7 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   role: 'ai_reader',
   sourceSchema: 'public',
   default: 'hidden',
-  strict: false,
+  strict: true,
   statementTimeout: '15s',
 }
 

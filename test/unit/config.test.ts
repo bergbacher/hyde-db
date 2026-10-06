@@ -5,13 +5,13 @@ const codes = (raw: Record<string, unknown>): string[] =>
   validateConfig(raw).diagnostics.map((d) => d.code)
 
 describe('config validation', () => {
-  it('keeps the base defaults: schema ai, role ai_reader, source public, hidden, not strict, 15s', () => {
+  it('D54: defaults are schema ai, role ai_reader, source public, hidden, strict, 15s', () => {
     expect(DEFAULT_CONFIG).toEqual({
       schema: 'ai',
       role: 'ai_reader',
       sourceSchema: 'public',
       default: 'hidden',
-      strict: false,
+      strict: true,
       statementTimeout: '15s',
     })
     expect(validateConfig()).toEqual({ config: DEFAULT_CONFIG, diagnostics: [] })
