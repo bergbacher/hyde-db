@@ -42,6 +42,7 @@ const readme = readRepoFile('README.md')
 /** The README without HTML comments, which is where record IDs live. */
 const prose = withoutComments(readme)
 const applySql = readRepoFile('example', 'redacted', 'redacted-views.sql')
+const dropSql = readRepoFile('example', 'redacted', 'redacted-views-drop.sql')
 const help = usage(DEFAULT_CONFIG)
 const helpLines = help.split('\n')
 
@@ -88,6 +89,29 @@ const DB_URL = `"\${DATABASE_URL:?export DATABASE_URL first}"`
 const abortPrefixes = Array.from(applySql.matchAll(/RAISE EXCEPTION 'hyde-db: ([^%;]*)/g), (m) =>
   (m[1] ?? '').trim(),
 )
+
+/**
+ * Asserts that the README states `sentence` exactly when `stated` is true. These pins are two-way
+ * on purpose: a golden change that flips them names the README sentence to add or remove.
+ */
+function expectSentence(sentence: string, stated: boolean): void {
+  const action = stated ? 'add to' : 'remove from'
+  expect(prose.includes(sentence), `${action} README.md: "${sentence}"`).toBe(stated)
+}
+
+/** D134: fixes the deploy user cannot run itself are not marked yet. */
+const UNMARKED = "Today a fix that needs the object's owner carries no mark."
+/** D134: they carry the owner's name. */
+const MARKED = 'ends with `-- run as <owner> or a superuser`'
+/** D131: the scripts set client_min_messages for the session. */
+const OUTLIVES =
+  '`SET client_min_messages = warning` runs before `BEGIN` and stays with the connection'
+/** D131: they set it for their transaction only. */
+const ENDS = '`SET LOCAL client_min_messages = warning`'
+/** A92: a superuser can still lend a grant option. */
+const SUPERUSER_LENDER = '**A superuser as lender.**'
+/** D130: it cannot. */
+const NO_SUPERUSER_LENDER = 'that still holds it and is not a superuser'
 
 /** The rows of the refusal table, as cells. */
 const refusalRows = section('What the apply script refuses')
@@ -469,16 +493,18 @@ describe('README (a view of LEDGER.md)', () => {
   })
 
   it('D134: says, both ways, whether a fix that needs the owner is marked', () => {
-    const marked = /run as [^']*or a superuser/.test(applySql)
-    const unmarked = "Today a fix that needs the object's owner carries no mark"
-    expect(prose.includes(unmarked)).toBe(!marked)
+    // Any way of building the marker leaves this phrase in the golden script, also one that
+    // splits it around a quote_ident(…) call.
+    const marked = applySql.includes('or a superuser')
+    expectSentence(UNMARKED, !marked)
+    expectSentence(MARKED, marked)
   })
 
   it('D131: says, both ways, whether client_min_messages outlives the scripts', () => {
-    const sessionLevel = /^SET client_min_messages/m.test(applySql)
-    const outlives =
-      '`SET client_min_messages = warning` runs before `BEGIN` and stays with the connection'
-    expect(prose.includes(outlives)).toBe(sessionLevel)
+    const goldens = [applySql, dropSql]
+    const sessionLevel = goldens.some((sql) => /^SET client_min_messages/m.test(sql))
+    expectSentence(OUTLIVES, sessionLevel)
+    expectSentence(ENDS, !sessionLevel)
   })
 
   it('D11, D13, D24, D49, D108: the refusal table lists every abort the apply script raises, in order', () => {
@@ -567,7 +593,8 @@ describe('README (a view of LEDGER.md)', () => {
     )
     expect(lenderChoices.length).toBeGreaterThan(0)
     const superusersExcluded = lenderChoices.every((choice) => choice.includes('rolsuper'))
-    expect(prose.includes('**A superuser as lender.**')).toBe(!superusersExcluded)
+    expectSentence(SUPERUSER_LENDER, !superusersExcluded)
+    expectSentence(NO_SUPERUSER_LENDER, superusersExcluded)
   })
 
   it('D125, A94: says who can run each kind of fix where the deploy user is not a superuser, as probed', () => {
