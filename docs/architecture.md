@@ -39,7 +39,7 @@ The source splits into one I/O module and a pure core.
 | `src/render/mysql-drop-sql.ts` | Renders the MySQL `redacted-views-drop.sql`: marker guard, revoke, gated `DROP DATABASE IF EXISTS`. <!-- D100, D121 --> |
 | `src/render/mysql-markdown.ts` | Renders the MySQL `redacted-schema.md`. |
 
-**Dependency direction:** `src/generator.ts` → `src/build.ts` → `src/analyze.ts` and `src/dialects/index.ts` → `src/dialects/postgresql.ts` and `src/dialects/mysql.ts` → the renderers of each database → `src/sql.ts`, `src/brand.ts`, `src/diagnostics.ts`, `src/types.ts`. `src/build.ts` and `src/analyze.ts` reach a database only through `dialectFor`; renderers never import a dialect. The PostgreSQL renderers share `src/render/schema-guard.ts`, `src/render/acl-helpers.ts` and `src/render/final-checks.ts`; the MySQL renderers share `src/render/mysql-guards.ts` and `src/render/mysql-apply-checks.ts`. The core never imports from `src/generator.ts`. `src/datamodel.ts` and `src/config.ts` import no Prisma types. <!-- D7, D104, D114 -->
+**Dependency direction:** `src/generator.ts` → `src/build.ts` → `src/analyze.ts` and `src/dialects/index.ts` → `src/dialects/postgresql.ts` and `src/dialects/mysql.ts` → the renderers of each database → `src/sql.ts`, `src/brand.ts`, `src/diagnostics.ts`, `src/types.ts`. `src/build.ts` and `src/analyze.ts` reach a database only through `dialectFor`; renderers never import a dialect. On PostgreSQL both renderers share `src/render/schema-guard.ts`, and only `src/render/apply-sql.ts` uses `src/render/final-checks.ts` (which uses `src/render/acl-helpers.ts`). On MySQL both renderers share `src/render/mysql-guards.ts`, and only `src/render/mysql-apply-sql.ts` uses `src/render/mysql-apply-checks.ts`. The core never imports from `src/generator.ts`. `src/datamodel.ts` and `src/config.ts` import no Prisma types. <!-- D7, D104, D114 -->
 
 `build` and `analyze` take the provider as an optional third argument (`'postgresql'` by default) and resolve it to a `Dialect` through the registry; a provider with no entry becomes a diagnostic, never a throw. Each dialect's renderers are testable on their own. <!-- D107, D114, D142 -->
 
@@ -73,11 +73,13 @@ An abort is a failing insert of the message into a temporary table under strict 
 
 ### Adding a MySQL check
 
-1. Add a check record (`id` and `render(config)`) to `src/render/mysql-apply-checks.ts`, built on `abortWhenFound` or `abortIf` from `src/render/mysql-guards.ts`; a refusal source that must also hold after the grants goes into the sources that `renderRecheck` re-runs. <!-- D117 -->
-2. Keep the printed fix within the fix limit, with a shorter fallback when a computed fix can outgrow it. <!-- D151, D161 -->
-3. Add a unit test in `test/unit/render-mysql-apply-checks.test.ts` and an attack test in `test/integration-mysql/` that sets up the offending access, asserts the message and fix, pastes the fix and re-applies.
-4. Run `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql` and `MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`.
-5. The controller records the decision in `LEDGER.md`.
+1. A refusal that must hold both before the changes and after the grants is a new entry `{ id, source }` in the private `sources` array of `src/render/mysql-apply-checks.ts`, where `source` is a SELECT of `problem`, `fix` and `rank`. It then runs as a pre-check (`preChecks`) and again in `renderRecheck`. <!-- D117, D119 -->
+2. A refusal that runs once is a standalone `MysqlCheck` (`id` and `render(config)`), built on `abortWhenFound` or `abortIf` from `src/render/mysql-guards.ts`. Insert it, in the order of the apply pipeline above, into the render list in `renderMysqlApplySql` in `src/render/mysql-apply-sql.ts`. <!-- D117 -->
+3. Keep the printed fix within the fix limit, with a shorter fallback when a computed fix can outgrow it. <!-- D151, D161 -->
+4. Run `pnpm golden` and review the diff of `example-mysql/redacted`; golden files change only after a ledger-backed output change. <!-- D6 -->
+5. Add a unit test in `test/unit/render-mysql-apply-checks.test.ts` and an attack test in `test/integration-mysql/` that sets up the offending access, asserts the message and fix, pastes the fix and re-applies.
+6. Run `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql` and `MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`.
+7. The controller records the decision in `LEDGER.md`.
 
 ## Test layers
 
