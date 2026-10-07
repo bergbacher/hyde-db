@@ -92,7 +92,7 @@ export function leftoverGrants(config: MysqlConfig, allowed: readonly string[]):
   const expected =
     allowed.length === 0
       ? ''
-      : `\n    AND NOT (LOWER(Db) = LOWER(${ql(config.schema)}) AND Table_priv = 'Select' AND Table_name IN (${allowed.map(ql).join(', ')}))`
+      : `\n    AND NOT (LOWER(Db) = LOWER(${ql(config.schema)}) AND Table_priv = 'Select' AND LOWER(Table_name) IN (${allowed.map((name) => ql(name.toLowerCase())).join(', ')}))`
   const columnFix = `CONCAT('REVOKE ', REPLACE(Column_priv, ',', CONCAT(' (', ${bt('Column_name')}, '), ')), ' (', ${bt('Column_name')}, ') ON ', ${bt('Db')}, '.', ${bt('Table_name')}, ' FROM ', ${acct}, ';')`
   return [
     `SELECT 'the reader has a global privilege.' AS problem, ${leftoverFix(config, `CONCAT(IF(PRIVILEGE_TYPE = 'USAGE', 'REVOKE GRANT OPTION', CONCAT('REVOKE ', PRIVILEGE_TYPE)), ' ON *.* FROM ', ${acct}, ';')`, "revoke the reader's global privileges")} AS fix, 1 AS \`rank\``,

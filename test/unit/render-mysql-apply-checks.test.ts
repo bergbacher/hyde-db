@@ -100,9 +100,14 @@ describe('mysql apply checks A', () => {
     expect(leftoverGrants(config, [])).toContain("GRANTEE = '''redacted_reader''@''%'''")
   })
 
+  it('D152, A98: expected view grants match whatever case lower_case_table_names stores them in', () => {
+    // Prisma's default table names are PascalCase; servers with lower_case_table_names = 1 store the grant as `user`.
+    expect(leftoverGrants(config, ['User'])).toContain("LOWER(Table_name) IN ('user')")
+  })
+
   it('A77: the leftover query lets only the expected Select grants on the views database through', () => {
-    const sql = leftoverGrants(config, ['users', "o'rders"])
-    expect(sql).toContain("Table_name IN ('users', 'o''rders')")
+    const sql = leftoverGrants(config, ['Users', "o'rders"])
+    expect(sql).toContain("LOWER(Table_name) IN ('users', 'o''rders')")
     expect(sql).toContain("Table_priv = 'Select'")
     expect(leftoverGrants(config, [])).not.toContain('Table_name IN')
   })
@@ -212,7 +217,7 @@ describe('mysql apply checks A', () => {
       "'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%'' IGNORE UNKNOWN USER'",
     )
     expect(sql.indexOf('PREPARE')).toBeLessThan(sql.lastIndexOf('INSERT INTO'))
-    expect(sql).toContain("Table_name IN ('users')")
+    expect(sql).toContain("LOWER(Table_name) IN ('users')")
     for (const t of ['mysql.role_edges', 'mysql.proxies_priv', 'mandatory_roles', 'mysql.user'])
       expect(sql).toContain(t)
   })
