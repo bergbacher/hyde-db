@@ -55,6 +55,7 @@ jobs:
         with:
           name: hyde-db-tarball
           path: .e2e/*.tgz
+          include-hidden-files: true # .e2e/ is a hidden directory, which upload-artifact skips by default
           if-no-files-found: error
           retention-days: 7
 
