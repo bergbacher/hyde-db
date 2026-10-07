@@ -83,3 +83,10 @@ RDS and Aurora are supported per provider documentation. Cloud SQL is expected t
 | End-to-end | `prisma db execute` with `provider = "mysql"` on Prisma 6 and 7 |
 
 Implementation starts after 1.0.0 ships (D87); its plan passes the design review gate first (D103).
+
+## Validator Findings (deferred)
+
+| Severity | Lens | Location | Recommendation | Why deferred |
+|---|---|---|---|---|
+| P3 | drift | src/render/mysql-guards.ts `renderPrelude()` | The drop script shares the prelude, so it also refuses without a default database (D160); split the prelude if a drop without a selected database is ever needed | Conservative and consistent with D160; no deployment needs it |
+| P3 | SOLID (OCP) | src/dialects/index.ts `DIALECTS` | Self-registering dialects instead of a hardcoded registry | A third dialect changes the public `Provider` union anyway (D112); hardcoding is the intended design |
