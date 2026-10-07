@@ -331,7 +331,7 @@ git commit -m "feat(sql): MySQL identifier quoting (D104)"
   ```
   `analyze` and `build` each delegate to one generic function over `Dialect<C>`, so the per-dialect narrowing is written once. `analyzeModel` takes `dialect.sourceSchemaOf(model, config)` instead of `model.schema ?? config.sourceSchema`. PostgreSQL: `sourceSchemaOf = model.schema ?? config.sourceSchema`, `viewRules = []`.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // test/unit/dialects.test.ts
@@ -353,13 +353,13 @@ describe('D104, D114: dialect registry', () => {
 ```
 In `test/unit/public-types.test.ts` replace the two 1.0 pins: `ResolvedConfig` is `PostgresqlConfig | MysqlConfig`; `ResolvedConfig['dialect']` is `'postgresql' | 'mysql'`; `View['sourceSchema']` stays `string | null`; `analyze(datamodel(), { dialect: 'mysql' })` still resolves to `postgresql` with an unknown-key diagnostic (the key `dialect` is never a generator key, D112).
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/dialects.test.ts test/unit/public-types.test.ts`
+- [x] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/dialects.test.ts test/unit/public-types.test.ts`
 
-- [ ] **Step 3: Implement** as in Interfaces. The unknown-provider path: `analyze` pushes `unsupportedProvider(provider)` first, then analyses as PostgreSQL defaults so counts stay meaningful; `build` returns `files: null` because a diagnostic is an error. The generator (`src/generator.ts`) is not touched here (Task 11).
+- [x] **Step 3: Implement** as in Interfaces. The unknown-provider path: `analyze` pushes `unsupportedProvider(provider)` first, then analyses as PostgreSQL defaults so counts stay meaningful; `build` returns `files: null` because a diagnostic is an error. The generator (`src/generator.ts`) is not touched here (Task 11).
 
-- [ ] **Step 4: Run all gates:** `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS; characterization goldens unchanged.
+- [x] **Step 4: Run all gates:** `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS; characterization goldens unchanged.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src test
