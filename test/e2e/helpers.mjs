@@ -53,6 +53,16 @@ export function databaseUrl() {
   return url
 }
 
+/** Fails, never skips, without a MySQL database (the same rule as D22). */
+export function mysqlDatabaseUrl() {
+  const url = process.env.E2E_MYSQL_DATABASE_URL
+  if (!url)
+    throw new Error(
+      'E2E_MYSQL_DATABASE_URL is not set; start MySQL and export its URL, with the source database in the path (see README "Development").',
+    )
+  return url
+}
+
 /** Ten minutes: long enough for an npm install of Prisma, short enough that a hang fails the run. */
 const DEFAULT_TIMEOUT_MS = 600_000
 
@@ -132,11 +142,12 @@ export function createProject(prefix, packages) {
  * users to: Prisma 6 reads the URL from the schema, Prisma 7 from prisma.config.ts.
  */
 export function writeSchema(dir, prismaVersion, source) {
+  // The datasource provider decides which URL line Prisma 6 needs; the example schemas carry it.
   const major = Number(prismaVersion.split('.')[0])
   let schema = source.replace(/generator client \{[^}]*\}\n*/, '')
   if (major === 6)
     schema = schema.replace(
-      /(datasource db \{\n\s*provider = "postgresql")/,
+      /(datasource db \{\n\s*provider = "(?:postgresql|mysql)")/,
       '$1\n  url      = env("DATABASE_URL")',
     )
   mkdirSync(join(dir, 'prisma'), { recursive: true })
@@ -150,11 +161,11 @@ export function writeSchema(dir, prismaVersion, source) {
 }
 
 /** Runs the Prisma CLI through npx, as the README does; npx puts node_modules/.bin on PATH, where Prisma finds the hyde-db provider. */
-export function prisma(dir, args, { input, env } = {}) {
+export function prisma(dir, args, { input, env, url } = {}) {
   return run('npx', ['--no', 'prisma', ...args], {
     cwd: dir,
     input,
-    env: { ...env, DATABASE_URL: databaseUrl() },
+    env: { ...env, DATABASE_URL: url ?? databaseUrl() },
   })
 }
 
@@ -167,9 +178,9 @@ export function hydeDb(dir, args) {
   return run('npx', ['--no-install', 'hyde-db', ...args], { cwd: dir, timeout: 60_000 })
 }
 
-/** The deploy command from the README: `prisma db execute --file` (D43). */
-export function dbExecute(dir, prismaVersion, { file, stdin }) {
+/** The deploy command from the README: `prisma db execute --file` (D43). `url` overrides DATABASE_URL (MySQL). */
+export function dbExecute(dir, prismaVersion, { file, stdin, url }) {
   const source = file === undefined ? ['--stdin'] : ['--file', file]
   const datasource = prismaVersion.startsWith('6.') ? ['--schema', 'prisma/schema.prisma'] : []
-  return prisma(dir, ['db', 'execute', ...source, ...datasource], { input: stdin })
+  return prisma(dir, ['db', 'execute', ...source, ...datasource], { input: stdin, url })
 }
