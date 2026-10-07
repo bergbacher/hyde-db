@@ -3,6 +3,8 @@ import {
   defaultDatabaseCheck,
   grantTableAccessCheck,
   leftoverGrants,
+  preChecks,
+  renderRecheck,
   resetReader,
 } from '../../src/render/mysql-apply-checks.ts'
 import { FIX_LIMIT } from '../../src/render/mysql-guards.ts'
@@ -146,5 +148,81 @@ describe('mysql apply checks A', () => {
 
   it('D152: the allowed-grant exclusion compares the database name case-insensitively', () => {
     expect(leftoverGrants(config, ['users'])).toContain("LOWER(Db) = LOWER('redacted')")
+  })
+
+  it('A77: the pre-checks run in the order roles, mandatory roles, proxies, other accounts', () => {
+    expect(preChecks.map((c) => c.id)).toEqual([
+      'roles',
+      'mandatory-roles',
+      'proxies',
+      'other-accounts',
+    ])
+  })
+
+  it('A77: roles looks at role_edges and default_roles for the account and prints REVOKE and ALTER USER fixes', () => {
+    const sql = preChecks[0]?.render(config).join('\n') ?? ''
+    expect(sql).toContain('mysql.role_edges')
+    expect(sql).toContain('mysql.default_roles')
+    expect(sql).toContain("TO_USER = 'redacted_reader' AND TO_HOST = '%'")
+    expect(sql).toContain("USER = 'redacted_reader' AND HOST = '%'")
+    expect(sql).toContain('QUOTE(FROM_USER)')
+    expect(sql).toContain('DEFAULT ROLE NONE;')
+  })
+
+  it('D120: mandatory_roles refuses a non-empty setting and says it is unsupported', () => {
+    const sql = preChecks[1]?.render(config).join('\n') ?? ''
+    expect(sql).toContain("@@GLOBAL.mandatory_roles <> ''")
+    expect(sql).toContain('unsupported')
+    expect(sql).toContain("SET PERSIST mandatory_roles = '''';")
+  })
+
+  it('A77: proxies covers the account as holder and as proxied user', () => {
+    const sql = preChecks[2]?.render(config).join('\n') ?? ''
+    expect(sql).toContain('mysql.proxies_priv')
+    expect(sql).toContain('Proxied_user')
+    expect(sql).toContain("(User = 'redacted_reader' AND Host = '%')")
+    expect(sql).toContain("(Proxied_user = 'redacted_reader' AND Proxied_host = '%')")
+    expect(sql).toContain('REVOKE PROXY ON ')
+  })
+
+  it('A77: other accounts are the same user name on another host and anonymous accounts', () => {
+    const sql = preChecks[3]?.render(config).join('\n') ?? ''
+    expect(sql).toContain("User = ''")
+    expect(sql).toContain('DROP USER')
+    expect(sql).toContain("NOT (User = 'redacted_reader' AND Host = '%')")
+  })
+
+  it('A77, D161, D99, D149: every computed pre-check fix is length-guarded and its fallback prose fits FIX_LIMIT', () => {
+    for (const check of preChecks) {
+      const sql = check.render(maxConfig).join('\n')
+      const guarded = [...sql.matchAll(new RegExp(`> ${FIX_LIMIT}, '((?:[^']|'')*)'`, 'g'))]
+      if (check.id === 'mandatory-roles') {
+        expect(guarded).toHaveLength(0)
+        continue
+      }
+      expect(guarded.length).toBeGreaterThan(0)
+      for (const m of guarded) expect((m[1] ?? '').length).toBeLessThanOrEqual(FIX_LIMIT)
+    }
+  })
+
+  it('D117 step 9: the re-check revokes through a prepared REVOKE … IGNORE UNKNOWN USER before aborting, and allows only the view grants', () => {
+    const sql = renderRecheck(config, ['users']).join('\n')
+    expect(sql).toContain('PREPARE')
+    expect(sql).toContain(
+      "'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%'' IGNORE UNKNOWN USER'",
+    )
+    expect(sql.indexOf('PREPARE')).toBeLessThan(sql.lastIndexOf('INSERT INTO'))
+    expect(sql).toContain("Table_name IN ('users')")
+    for (const t of ['mysql.role_edges', 'mysql.proxies_priv', 'mandatory_roles', 'mysql.user'])
+      expect(sql).toContain(t)
+  })
+
+  it('D155, D117: the re-check sets the sticky refusal flag from the message', () => {
+    const sql = renderRecheck(config, ['users']).join('\n')
+    expect(sql).toContain('SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);')
+  })
+
+  it('Review Focus 5: with no views, the re-check allows no table grant at all', () => {
+    expect(renderRecheck(config, []).join('\n')).not.toContain('Table_name IN (')
   })
 })

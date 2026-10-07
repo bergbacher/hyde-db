@@ -3,9 +3,17 @@
 // Printed fixes are pasted by an administrator in the default sql_mode, so computed fixes use
 // QUOTE() and backtick doubling inside the SQL, not the script's own literal rule (D99). A computed
 // fix can outgrow FIX_LIMIT with long names, so each one falls back to a short literal (D142, D151).
-import { quoteLiteral as ql } from '../sql.ts'
+import { BRAND } from '../brand.ts'
+import { quoteMysqlIdent as qi, quoteLiteral as ql } from '../sql.ts'
 import type { MysqlConfig } from '../types.ts'
-import { abortIf, abortWhenFound, account, FIX_LIMIT, type MysqlCheck } from './mysql-guards.ts'
+import {
+  ABORT_TABLE,
+  abortIf,
+  abortWhenFound,
+  account,
+  FIX_LIMIT,
+  type MysqlCheck,
+} from './mysql-guards.ts'
 
 const GRANT_TABLES = [
   'user',
@@ -116,4 +124,88 @@ export const resetReader: MysqlCheck = {
       ...abortWhenFound(`${leftoverGrants(config, [])}\nORDER BY \`rank\` LIMIT 1`),
     ]
   },
+}
+
+/** A `<QUOTE(user)>@<QUOTE(host)>` SQL expression over two grant-table columns. */
+function quotedAccount(userCol: string, hostCol: string): string {
+  return `CONCAT(QUOTE(${userCol}), '@', QUOTE(${hostCol}))`
+}
+
+/** A computed fix of the pre-checks: the statement when it fits FIX_LIMIT, else `prose` (D161). */
+function preFix(full: string, prose: string): string {
+  return fitted(full, ql(prose))
+}
+
+// The sources of the pre-checks (D117 step 6, A77, D120): SELECTs of (problem, fix, `rank`), ranks
+// continuing after leftoverGrants' 1-6 so the re-check can union all of them in one stable order.
+function rolesSource(config: MysqlConfig): string {
+  const u = ql(config.role)
+  const h = ql(config.readerHost)
+  const acct = accountFix(config)
+  return [
+    `SELECT 'the reader has a role.' AS problem, ${preFix(`CONCAT('REVOKE ', ${quotedAccount('FROM_USER', 'FROM_HOST')}, ' FROM ', ${acct}, ';')`, 'revoke the roles granted to the reader')} AS fix, 7 AS \`rank\``,
+    `  FROM mysql.role_edges WHERE TO_USER = ${u} AND TO_HOST = ${h}`,
+    'UNION ALL',
+    `SELECT 'the reader has a default role.', ${preFix(`CONCAT('ALTER USER ', ${acct}, ' DEFAULT ROLE NONE;')`, "set the reader's default role to NONE")}, 8`,
+    `  FROM mysql.default_roles WHERE USER = ${u} AND HOST = ${h}`,
+  ].join('\n')
+}
+
+function mandatoryRolesSource(): string {
+  return [
+    `SELECT ${ql('mandatory_roles is set; that is unsupported.')} AS problem, ${ql("SET PERSIST mandatory_roles = '';")} AS fix, 9 AS \`rank\``,
+    "  FROM DUAL WHERE @@GLOBAL.mandatory_roles <> ''",
+  ].join('\n')
+}
+
+function proxiesSource(config: MysqlConfig): string {
+  const u = ql(config.role)
+  const h = ql(config.readerHost)
+  return [
+    `SELECT 'the reader takes part in a proxy grant.' AS problem, ${preFix(`CONCAT('REVOKE PROXY ON ', ${quotedAccount('Proxied_user', 'Proxied_host')}, ' FROM ', ${quotedAccount('User', 'Host')}, ';')`, 'revoke the proxy grants of the reader')} AS fix, 10 AS \`rank\``,
+    `  FROM mysql.proxies_priv WHERE (User = ${u} AND Host = ${h}) OR (Proxied_user = ${u} AND Proxied_host = ${h})`,
+  ].join('\n')
+}
+
+function otherAccountsSource(config: MysqlConfig): string {
+  const u = ql(config.role)
+  const h = ql(config.readerHost)
+  return [
+    `SELECT 'another account could match a reader login.' AS problem, ${preFix(`CONCAT('DROP USER ', ${quotedAccount('User', 'Host')}, ';')`, 'drop the other accounts of that user name')} AS fix, 11 AS \`rank\``,
+    `  FROM mysql.user WHERE (User = ${u} OR User = '') AND NOT (User = ${u} AND Host = ${h})`,
+  ].join('\n')
+}
+
+const sources: readonly { id: string; source: (config: MysqlConfig) => string }[] = [
+  { id: 'roles', source: rolesSource },
+  { id: 'mandatory-roles', source: mandatoryRolesSource },
+  { id: 'proxies', source: proxiesSource },
+  { id: 'other-accounts', source: otherAccountsSource },
+]
+
+/** D117 step 6 (A77, D120): roles, mandatory_roles, proxies, other accounts; each reports its first offender. */
+export const preChecks: readonly MysqlCheck[] = sources.map(({ id, source }) => ({
+  id,
+  render: (config) => abortWhenFound(`${source(config)}\nORDER BY \`rank\` LIMIT 1`),
+}))
+
+/**
+ * D117 step 9: after the view grants, re-runs every refusal source; when one finds a row the reader's
+ * grants are revoked through a prepared statement before the script aborts (D119, D155). The three
+ * statements of the abort are composed here because Task 5 exports only `abortWhenFound`.
+ */
+export function renderRecheck(config: MysqlConfig, views: readonly string[]): string[] {
+  const union = [leftoverGrants(config, views), ...sources.map((s) => s.source(config))].join(
+    '\nUNION ALL\n',
+  )
+  const revoke = `REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${account(config)} IGNORE UNKNOWN USER`
+  return [
+    `SET @hyde_message = (SELECT CONCAT('${BRAND}: ', LEFT(f.problem, GREATEST(0, ${FIX_LIMIT} - CHAR_LENGTH(f.fix))), ' Fix: ', f.fix) FROM (${union}\nORDER BY \`rank\` LIMIT 1) f);`,
+    `SET @hyde_sql = IF(@hyde_message IS NULL, 'DO 0', ${ql(revoke)});`,
+    'PREPARE hyde_stmt FROM @hyde_sql;',
+    'EXECUTE hyde_stmt;',
+    'DEALLOCATE PREPARE hyde_stmt;',
+    'SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);',
+    `INSERT INTO ${qi(ABORT_TABLE)} (${qi('problem')}) SELECT @hyde_message FROM DUAL WHERE @hyde_message IS NOT NULL;`,
+  ]
 }
