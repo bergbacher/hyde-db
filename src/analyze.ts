@@ -190,7 +190,7 @@ export function analyze(
   rawConfig?: GeneratorConfig,
   options: BuildOptions = {},
 ): Analysis {
-  const provider = options.provider ?? 'postgresql'
+  const provider = options?.provider ?? 'postgresql'
   const dialect = dialectFor(provider)
   if (dialect !== undefined) return analyzeWith(dialect, datamodel, rawConfig, [])
   // 'postgresql' is always registered, so the fallback is defined.

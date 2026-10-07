@@ -42,6 +42,12 @@ describe('D104, D114: dialect registry', () => {
     expect(analyze(dm)).toEqual(analyze(dm, {}, {}))
   })
 
+  it('D142: a JavaScript caller passing null options gets the postgresql result, never a throw', () => {
+    const dm = datamodel(model('User', [scalar('id', '@hyde.visible', { isId: true })]))
+    expect(analyze(dm, {}, null as never)).toEqual(analyze(dm))
+    expect(build(dm, {}, null as never)).toEqual(build(dm))
+  })
+
   it('D142: an unknown provider never throws; it is one diagnostic and no files', () => {
     const r = build(datamodel(), {}, { provider: 'oracle' as never })
     expect(r.diagnostics.map((d) => d.code)).toEqual(['HYDE_UNSUPPORTED_PROVIDER'])
