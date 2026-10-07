@@ -944,7 +944,7 @@ Regenerating golden files is a barrier: this task runs alone in its wave.
 - Consumes: `build(datamodel, config, { provider })`.
 - Produces: `parseSchema(source, major?)` additionally returns `provider: 'postgresql' | 'mysql'` (from `get_config`'s `datasources[0].activeProvider`); `example-mysql` is the golden case later tasks (end to end) compare against.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 `example-mysql/schema.prisma` is `example/schema.prisma` with `provider = "mysql"` in the datasource, no `@@schema`, `@db.*` PostgreSQL native types removed, `output = "./redacted"`. In the characterization test:
 
@@ -964,15 +964,15 @@ it('D103: the MySQL example hides what the PostgreSQL example hides', () => {
 ```
 Contract test for `test/fixtures/contract/mysql-features.prisma` (A80: `@map`/`@@map` arrive as `dbName`, a `view` block arrives in `models`, enums are inline types, no schema on models): the same fixture under Prisma 6 and 7 yields identical views and identical diagnostics with `{ provider: 'mysql' }`, and `activeProvider` is `mysql` under both.
 
-- [ ] **Step 2: Run, expect FAIL** (missing files and `provider` not returned): `pnpm vitest run --project unit test/characterization test/contract`
+- [x] **Step 2: Run, expect FAIL** (missing files and `provider` not returned): `pnpm vitest run --project unit test/characterization test/contract`
 
-- [ ] **Step 3: Implement** the helper and script changes, create the fixtures, then generate the goldens and verify nothing existing moved:
+- [x] **Step 3: Implement** the helper and script changes, create the fixtures, then generate the goldens and verify nothing existing moved:
 
 Run: `pnpm golden`
 Run: `git diff --stat -- example test/fixtures/characterization && git status --short example-mysql`
 Expected: no change to `example/redacted` or the `loose` goldens; `example-mysql/redacted` shows three new files. Review the three files by eye: the SQL starts with the pinned `sql_mode`, contains the marker view, no `DELIMITER`.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
