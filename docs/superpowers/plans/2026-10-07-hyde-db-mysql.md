@@ -1065,7 +1065,7 @@ git commit -m "test(mysql): attack-suite harness on MySQL 8.4 and 9.7 (D1, D22, 
 - Consumes: the Task 13 helpers.
 - Produces: nothing later tasks use. Any defect found here is fixed in the owning `src/render/mysql-*.ts` file, with the failing test written first.
 
-- [ ] **Step 1: Write the tests** (one `it` per claim, id in the title; each applies the real script)
+- [x] **Step 1: Write the tests** (one `it` per claim, id in the title; each applies the real script)
 
 ```ts
 // lifecycle.test.ts
@@ -1097,16 +1097,16 @@ it('D119: drop succeeds when the reader account does not exist', ...)
 ```
 Every refusal test asserts: non-zero status, stderr contains `hyde-db:` and `Fix:`, the message is at most 128 characters, and that the database state is unchanged.
 
-- [ ] **Step 2: Run on both servers, expect failures where the renderers are wrong**
+- [x] **Step 2: Run on both servers, expect failures where the renderers are wrong**
 
 Run: `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql -- test/integration-mysql/lifecycle.test.ts test/integration-mysql/preconditions.test.ts test/integration-mysql/drop.test.ts`
 
-- [ ] **Step 3: Fix each defect in `src/render/mysql-*.ts`**, red test first, adding a unit assertion for the corrected text. Re-run until green on both images.
+- [x] **Step 3: Fix each defect in `src/render/mysql-*.ts`**, red test first, adding a unit assertion for the corrected text. Re-run until green on both images.
 
 Run: `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql && MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`
 Expected: PASS on both. If a renderer file changed: `pnpm lint && pnpm typecheck && pnpm test:coverage` PASS and `pnpm golden` is run, with the diff limited to `example-mysql/redacted`.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add test/integration-mysql src example-mysql
@@ -1129,7 +1129,7 @@ git commit -m "test(mysql): attack suite for the deploy lifecycle, preconditions
 
 The matrix is table-driven, one row per path in A77. Each row sets up the path as the administrator, applies the script, then asserts one of two outcomes recorded in the row (D154): `neutralised`, where step 5's reset removes the path and the post-apply `readerGrants(db)` equals the view grants only; or `refused`, where the apply exits non-zero with `hyde-db:` and `Fix:` (message at most 128 characters), nothing about the views database changed beyond what D101 allows, pasting the printed fix as an administrator and applying again passes, and `readerGrants(db)` afterwards equals the view grants only. Before writing expected outcomes, probe each row once on both servers and record the observed class in the table; a path whose direct grant survives the reset must be `refused`.
 
-- [ ] **Step 1: Write the matrix test**
+- [x] **Step 1: Write the matrix test**
 
 ```ts
 const PATHS: readonly PathCase[] = [
@@ -1154,14 +1154,14 @@ describe.each(PATHS)('A77: $id', (path) => { /* neutralised / refused assertions
 ```
 Rows that change server-wide state (`mandatory_roles`, anonymous account) restore it in `afterEach` and run serially (`describe.sequential`). Add a test per `refused` row that the printed fix works when pasted, and one that the fix text, executed in a default-`sql_mode` session, is a single valid statement (or a `;`-separated list that works as pasted).
 
-- [ ] **Step 2: Run on both servers**
+- [x] **Step 2: Run on both servers**
 
 Run: `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql -- test/integration-mysql/paths.test.ts && MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql -- test/integration-mysql/paths.test.ts`
 Expected: initially some rows fail; each failure is either a wrong expected `outcome` (correct it to the probed class, with a comment citing the observed behaviour) or a defect in the renderer.
 
-- [ ] **Step 3: Fix defects in `src/render/mysql-apply-checks.ts`**, red test first, with a matching unit assertion. Re-run until green on both images. If a fix changes generated output: `pnpm golden` and confirm the diff is limited to `example-mysql/redacted`.
+- [x] **Step 3: Fix defects in `src/render/mysql-apply-checks.ts`**, red test first, with a matching unit assertion. Re-run until green on both images. If a fix changes generated output: `pnpm golden` and confirm the diff is limited to `example-mysql/redacted`.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
@@ -1291,7 +1291,7 @@ git commit -m "test(e2e): prisma db execute with provider mysql on Prisma 6 and 
 - Consumes: `pnpm test:integration:mysql` and `MYSQL_IMAGE` (Task 13); `E2E_MYSQL_DATABASE_URL` (Task 17).
 - Produces: jobs `attack-mysql` and the MySQL service on `e2e`; `ci-ok.needs` lists every job.
 
-- [ ] **Step 1: Write the failing tests** in `test/unit/workflows.test.ts`
+- [x] **Step 1: Write the failing tests** in `test/unit/workflows.test.ts`
 
 ```ts
 it('D103: the MySQL attack suite runs on MySQL 8.4 and 9.7 on a runner with Docker', () => {
@@ -1312,9 +1312,9 @@ it('D38, D126: ci-ok needs every job', () => {
 ```
 Also update the existing `needs: [lint, typecheck, build, test, attack, e2e]` assertion (it is replaced, not duplicated). Keep the assertion that every job listed in `needs` exists and that every defined job is in `ci-ok.needs` (add it if the file lacks it).
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/workflows.test.ts`
+- [x] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/workflows.test.ts`
 
-- [ ] **Step 3: Implement.** Add the job after `attack`:
+- [x] **Step 3: Implement.** Add the job after `attack`:
 
 ```yaml
   attack-mysql:
@@ -1338,7 +1338,7 @@ Also update the existing `needs: [lint, typecheck, build, test, attack, e2e]` as
 ```
 Add a `mysql` service to `e2e` (`image: mysql:8.4`, `MYSQL_ROOT_PASSWORD: root`, `MYSQL_DATABASE: app`, port 3306, `--health-cmd "mysqladmin ping -proot"` with interval, timeout and retries like the PostgreSQL service) and `E2E_MYSQL_DATABASE_URL: mysql://root:root@localhost:3306/app` in the step's `env`. Add `attack-mysql` to `ci-ok.needs`. Match the file's existing quoting style, which the earlier CI fixes (quoting inside flow mappings) care about.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm vitest run --project unit test/unit/workflows.test.ts` — PASS.
 
