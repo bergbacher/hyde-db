@@ -4,10 +4,12 @@ import {
   abortIf,
   abortWhenFound,
   account,
+  FIX_LIMIT,
   gated,
   MARKER_VIEW,
   MESSAGE_LIMIT,
   markerGuard,
+  NO_DATABASE_MESSAGE,
   renderPrelude,
   renderTeardown,
 } from '../../src/render/mysql-guards.ts'
@@ -22,16 +24,23 @@ const config = {
 } as const
 
 describe('mysql script guards', () => {
-  it('D117: the prelude pins sql_mode and lock_wait_timeout first, then creates the abort table and clears the flag', () => {
-    expect(renderPrelude().join('\n')).toBe(
-      [
-        "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';",
-        'SET SESSION lock_wait_timeout = 60;',
-        'DROP TEMPORARY TABLE IF EXISTS `hyde_db_abort`;',
-        'CREATE TEMPORARY TABLE `hyde_db_abort` (`problem` INT NOT NULL);',
-        'SET @hyde_refused = NULL;',
-      ].join('\n'),
+  it('D117, D160: the prelude pins the session, reports a missing default database before the abort table exists, then creates the table', () => {
+    expect(renderPrelude()).toEqual([
+      "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';",
+      'SET SESSION lock_wait_timeout = 60;',
+      'SET @hyde_refused = NULL;',
+      `SET @hyde_refused = IF(DATABASE() IS NULL, '${NO_DATABASE_MESSAGE}', @hyde_refused);`,
+      "SET SESSION sql_warnings = IF(@hyde_refused IS NULL, IF(@@SESSION.sql_warnings, 'ON', 'OFF'), @hyde_refused);",
+      'DROP TEMPORARY TABLE IF EXISTS `hyde_db_abort`;',
+      'CREATE TEMPORARY TABLE `hyde_db_abort` (`problem` INT NOT NULL);',
+    ])
+  })
+
+  it('D160, D151: the missing-database message has the hyde-db shape and fits 128 characters', () => {
+    expect(NO_DATABASE_MESSAGE).toMatch(
+      /^hyde-db: .+ Fix: add the database name to the connection URL$/,
     )
+    expect(NO_DATABASE_MESSAGE.length).toBeLessThanOrEqual(MESSAGE_LIMIT)
   })
 
   it('D99: an abort is a failing insert into the temporary table, with no routine and no DELIMITER', () => {
@@ -86,14 +95,29 @@ describe('mysql script guards', () => {
     expect(markerGuard.id).toBe('marker-guard')
   })
 
-  it('D99: the marker guard renders at the maximum schema length and its fixed text fits the limit', () => {
+  it('D99: the marker guard renders the longest schema name into the check', () => {
     const longer = { ...config, schema: 'a'.repeat(64) }
-    expect(markerGuard.render(longer).join('\n')).toContain('a'.repeat(64))
-    const fixed =
-      'hyde-db: ' +
-      ' Fix: ' +
-      'rename or drop it yourself, or set the config "schema" to an unused name'
-    expect(fixed.length).toBeLessThanOrEqual(MESSAGE_LIMIT)
+    expect(markerGuard.render(longer).join('\n')).toContain(`SCHEMA_NAME = '${'a'.repeat(64)}'`)
+  })
+
+  it('D155: abortWhenFound emits the message SET, then the flag SET, then the INSERT, in that order', () => {
+    // Cut-to-fit and gating at runtime are proven by the MySQL attack suite (Task 13+).
+    const lines = abortWhenFound('SELECT 1 AS problem, 2 AS fix')
+    expect(lines).toHaveLength(3)
+    expect(lines[0]).toMatch(/^SET @hyde_message = /)
+    expect(lines[1]).toBe('SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);')
+    expect(lines[2]).toMatch(/^INSERT INTO `hyde_db_abort`/)
+    expect(lines[0]).toContain(`${FIX_LIMIT} - CHAR_LENGTH(f.fix)`)
+    expect(FIX_LIMIT).toBe(113)
+  })
+
+  it('Review Focus 1: gated emits SET, PREPARE, EXECUTE, DEALLOCATE in that order', () => {
+    expect(gated('DO 1;').map((l) => l.split(' ')[0])).toEqual([
+      'SET',
+      'PREPARE',
+      'EXECUTE',
+      'DEALLOCATE',
+    ])
   })
 
   it('D104: account is the quoted user and host, doubling single quotes', () => {

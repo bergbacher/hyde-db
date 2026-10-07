@@ -10,6 +10,15 @@ import type { MysqlConfig } from '../types.ts'
 export const ABORT_TABLE = 'hyde_db_abort'
 export const MARKER_VIEW = 'hyde_db_marker'
 export const MESSAGE_LIMIT = 128
+/**
+ * The longest fix that keeps a message within MESSAGE_LIMIT with at least an empty problem (113).
+ * Callers' fixes must fit it; fixes can embed config values, so this never throws (D142) and the
+ * runtime cut in `abortWhenFound` is the backstop. Later tasks test it with max-length names.
+ */
+export const FIX_LIMIT: number = MESSAGE_LIMIT - `${BRAND}: `.length - ' Fix: '.length
+
+/** Reported before the abort table exists when the connection selected no database (D160, D151). */
+export const NO_DATABASE_MESSAGE: string = `${BRAND}: no default database; the connection must select the source database. Fix: add the database name to the connection URL`
 
 /** A check that renders the statements of one refusal for a MySQL config. */
 export interface MysqlCheck {
@@ -22,22 +31,27 @@ export function account(config: Pick<MysqlConfig, 'role' | 'readerHost'>): strin
   return `${ql(config.role)}@${ql(config.readerHost)}`
 }
 
-/** Session settings, the abort table and the cleared refusal flag (D117 step 1). */
+/**
+ * Session settings, the refusal flag, the missing-default-database report and the abort table
+ * (D117 step 1, D160). The report is a failing SET of `sql_warnings` to the message, so it needs
+ * no abort table; when a database is selected the SET restores the current value.
+ */
 export function renderPrelude(): string[] {
   return [
     "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';",
     'SET SESSION lock_wait_timeout = 60;',
+    'SET @hyde_refused = NULL;',
+    `SET @hyde_refused = IF(DATABASE() IS NULL, ${ql(NO_DATABASE_MESSAGE)}, @hyde_refused);`,
+    "SET SESSION sql_warnings = IF(@hyde_refused IS NULL, IF(@@SESSION.sql_warnings, 'ON', 'OFF'), @hyde_refused);",
     `DROP TEMPORARY TABLE IF EXISTS ${qi(ABORT_TABLE)};`,
     `CREATE TEMPORARY TABLE ${qi(ABORT_TABLE)} (${qi('problem')} INT NOT NULL);`,
-    'SET @hyde_refused = NULL;',
   ]
 }
 
 /** `source` is a SELECT returning `problem` and `fix`; the first row, if any, aborts the script (D99). */
 export function abortWhenFound(source: string): string[] {
-  const keep = MESSAGE_LIMIT - `${BRAND}: `.length - ' Fix: '.length
   return [
-    `SET @hyde_message = (SELECT CONCAT('${BRAND}: ', LEFT(f.problem, GREATEST(0, ${keep} - CHAR_LENGTH(f.fix))), ' Fix: ', f.fix) FROM (${source}) f LIMIT 1);`,
+    `SET @hyde_message = (SELECT CONCAT('${BRAND}: ', LEFT(f.problem, GREATEST(0, ${FIX_LIMIT} - CHAR_LENGTH(f.fix))), ' Fix: ', f.fix) FROM (${source}) f LIMIT 1);`,
     'SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);',
     `INSERT INTO ${qi(ABORT_TABLE)} (${qi('problem')}) SELECT @hyde_message FROM DUAL WHERE @hyde_message IS NOT NULL;`,
   ]
