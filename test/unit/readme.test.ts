@@ -6,7 +6,8 @@
 // and the view conventions (IDs in comments, footer, only live records cited). Statements about
 // behaviour the final fix wave changes are pinned both ways, so that change forces an update here.
 import { spawnSync } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { build } from '../../src/build.ts'
@@ -16,7 +17,13 @@ import {
   unknownArgumentMessage,
   usage,
 } from '../../src/cli-help.ts'
-import { CONFIG_KEYS, DEFAULT_CONFIG, validateConfig } from '../../src/config.ts'
+import {
+  CONFIG_KEYS,
+  DEFAULT_CONFIG,
+  DEFAULT_MYSQL_CONFIG,
+  MYSQL_CONFIG_KEYS,
+  validateConfig,
+} from '../../src/config.ts'
 import {
   DIAGNOSTIC_CODES,
   formatDiagnostic,
@@ -70,6 +77,9 @@ const MAJORS: readonly PrismaMajor[] = [6, 7]
 const generatorBlocks = codeBlocks(readme, 'prisma').filter((block) =>
   block.startsWith('generator redacted {'),
 )
+/** The dialect a generator block is written for: only the MySQL one names `readerHost` (D97). */
+const dialectOf = (block: string): 'postgresql' | 'mysql' =>
+  block.includes('readerHost') ? 'mysql' : 'postgresql'
 /** Every line of every `sh` block, without the ` &&` that chains it to the next one (D136). */
 const shellLines = codeBlocks(readme, 'sh').flatMap((block) =>
   block
@@ -81,6 +91,9 @@ const shellLines = codeBlocks(readme, 'sh').flatMap((block) =>
 const deployBlocks = codeBlocks(readme, 'sh').filter((block) => block.includes('migrate deploy'))
 /** The shell expansion that stops a command while DATABASE_URL is unset or empty (D68). */
 const DB_URL = `"\${DATABASE_URL:?export DATABASE_URL first}"`
+/** The same guards for the `mysql` client's connection (D68, D160). */
+const MYSQL_CONNECTION = `-h "\${MYSQL_HOST:?export MYSQL_HOST first}" -u "\${MYSQL_USER:?export MYSQL_USER first}"`
+const MYSQL_DATABASE = `"\${MYSQL_DATABASE:?export MYSQL_DATABASE first}"`
 
 /**
  * The message of every RAISE EXCEPTION in the golden apply script, after `hyde-db: ` and up to its
@@ -331,10 +344,11 @@ describe('README (a view of LEDGER.md)', () => {
     for (const block of generatorBlocks) {
       for (const major of MAJORS) {
         const { config } = parseSchema(`${DATASOURCE}\n${block}`, major)
-        expect(
-          validateConfig(config, 'postgresql').diagnostics,
-          `Prisma ${major}:\n${block}`,
-        ).toEqual([])
+        const { diagnostics } =
+          dialectOf(block) === 'mysql'
+            ? validateConfig(config, 'mysql')
+            : validateConfig(config, 'postgresql')
+        expect(diagnostics, `Prisma ${major}:\n${block}`).toEqual([])
       }
     }
   })
@@ -435,12 +449,13 @@ describe('README (a view of LEDGER.md)', () => {
     )
   })
 
-  it('D43: gives the psql and prisma db execute commands the tests run, as drop, migrate, apply', () => {
+  it('D43: gives the psql, prisma db execute and mysql commands the tests run, as drop, migrate, apply', () => {
     const variants = [
       (file: string) => `psql ${DB_URL} -v ON_ERROR_STOP=1 -f prisma/redacted/${file}`,
       (file: string) => `npx prisma db execute --file prisma/redacted/${file}`,
       (file: string) =>
         `npx prisma db execute --file prisma/redacted/${file} --schema prisma/schema.prisma`,
+      (file: string) => `mysql ${MYSQL_CONNECTION} -D ${MYSQL_DATABASE} < prisma/redacted/${file}`,
     ]
     expect(
       deployBlocks.map((block) =>
@@ -459,21 +474,37 @@ describe('README (a view of LEDGER.md)', () => {
   })
 
   it('D136: chains each deploy block with &&, so a refused step stops the rest', () => {
-    expect(deployBlocks).toHaveLength(3)
-    for (const block of deployBlocks) {
-      const lines = block.trimEnd().split('\n')
-      expect(
-        lines.slice(0, -1).every((line) => line.endsWith(' &&')),
-        block,
-      ).toBe(true)
-      expect(lines.at(-1)?.endsWith('&&'), block).toBe(false)
-      // A first step that fails, as a refused drop script does, must stop the block.
-      const stubs = 'psql() { echo psql; return 3; }; npx() { echo npx; return 1; }'
-      const { stdout } = spawnSync('sh', ['-c', `${stubs}\n${block}`], {
-        env: { PATH: process.env.PATH ?? '', DATABASE_URL: 'postgresql://db' },
-        encoding: 'utf8',
-      })
-      expect(stdout.trim().split('\n'), block).toHaveLength(1)
+    expect(deployBlocks).toHaveLength(4)
+    const dir = mkdtempSync(join(tmpdir(), 'hyde-readme-'))
+    mkdirSync(join(dir, 'prisma', 'redacted'), { recursive: true })
+    for (const file of ['redacted-views-drop.sql', 'redacted-views.sql'])
+      writeFileSync(join(dir, 'prisma', 'redacted', file), '')
+    try {
+      for (const block of deployBlocks) {
+        const lines = block.trimEnd().split('\n')
+        expect(
+          lines.slice(0, -1).every((line) => line.endsWith(' &&')),
+          block,
+        ).toBe(true)
+        expect(lines.at(-1)?.endsWith('&&'), block).toBe(false)
+        // A first step that fails, as a refused drop script does, must stop the block.
+        const stubs =
+          'psql() { echo first; return 3; }; mysql() { echo first; return 3; }; npx() { echo npx; return 1; }'
+        const { stdout } = spawnSync('sh', ['-c', `${stubs}\n${block}`], {
+          cwd: dir,
+          env: {
+            PATH: process.env.PATH ?? '',
+            DATABASE_URL: 'postgresql://db',
+            MYSQL_HOST: 'h',
+            MYSQL_USER: 'u',
+            MYSQL_DATABASE: 'app',
+          },
+          encoding: 'utf8',
+        })
+        expect(stdout.trim().split('\n'), block).toHaveLength(1)
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
     }
   })
 
@@ -885,11 +916,21 @@ describe('README (a view of LEDGER.md)', () => {
     expect(prose).toContain('exits with status 2')
   })
 
+  it('D159: the diagnostics reference says the provider must be postgresql or mysql, and nothing says 1.0 is PostgreSQL only', () => {
+    const row =
+      readme.split('\n').find((line) => line.startsWith('| `HYDE_UNSUPPORTED_PROVIDER` |')) ?? ''
+    expect(row).toContain('not `postgresql` or `mysql`')
+    expect(row).toContain('only with a datasource whose provider is `postgresql` or `mysql`')
+    expect(prose).not.toContain('Use hyde-db 1.0 only with PostgreSQL')
+    expect(prose).not.toContain('The datasource provider is not `postgresql`, for example')
+  })
+
   it('D9, D142, D47, D112: programmatic use: never throws on config, the dialect union and a nullable sourceSchema', () => {
     const api = section('Programmatic use')
     expect(api).toContain('never throw on config input')
     expect(citedRecords(api)).toContain('D142')
     expect(api).toContain(`\`dialect: '${DEFAULT_CONFIG.dialect}'\``)
+    expect(api).toContain(`\`dialect: '${DEFAULT_MYSQL_CONFIG.dialect}'\``)
     expect(api).toContain('`View.sourceSchema` is `string | null`')
     expect(api).toContain('may gain members in minor releases')
   })
@@ -908,10 +949,20 @@ describe('README (a view of LEDGER.md)', () => {
     expect(versions).not.toMatch(/\b1[5-7]\b/)
   })
 
-  it('D87, D94: MySQL is planned for 1.1.0 and refused in 1.0', () => {
+  it('D94, D159: MySQL 8.4 and 9.7 are supported, 8.0, innovation releases and MariaDB are not, and other providers are refused', () => {
     const versions = section('Supported versions')
-    expect(versions).toContain('MySQL 8.4 and 9.7 are planned for 1.1.0')
+    const mysql = versions.split('\n').find((line) => line.startsWith('- **MySQL:**')) ?? ''
+    expect(mysql).toContain('8.4 and 9.7')
+    expect(mysql).toContain('The attack suite runs on both.')
+    for (const out of ['MySQL 8.0', 'innovation releases', 'MariaDB']) expect(mysql).toContain(out)
+    expect(versions).not.toContain('planned for 1.1.0')
     expect(versions).toContain('`HYDE_UNSUPPORTED_PROVIDER`')
+    expect(versions).toContain('other than `postgresql` or `mysql`')
+    const ci = readRepoFile('.github', 'workflows', 'ci.yml')
+    expect(/attack-mysql:[\s\S]*?mysql: \['(\d\.\d)', '(\d\.\d)'\]/.exec(ci)?.slice(1, 3)).toEqual([
+      '8.4',
+      '9.7',
+    ])
   })
 
   it('D63, D126: links RELEASING.md and says a release publishes only a commit CI passed', () => {
@@ -946,5 +997,316 @@ describe('README (a view of LEDGER.md)', () => {
       expect(['active', 'verified', 'open', 'answered'], id).toContain(states.get(id))
     }
     expect(readme.trimEnd()).toMatch(/\n---\n\nView on LEDGER\.md, \d{4}-\d{2}-\d{2}$/)
+  })
+})
+
+// The MySQL section (D86 to D161): every statement is one a ledger record holds, pinned to the
+// records and to the generated MySQL scripts it describes.
+describe('README, MySQL section (a view of LEDGER.md)', () => {
+  const mysql = section('MySQL')
+  const mysqlProse = withoutComments(mysql)
+  const refuses = section('What the MySQL apply script refuses', '###')
+  const guarantee = section('What it guarantees on MySQL', '###')
+  const mysqlApply = readRepoFile('example-mysql', 'redacted', 'redacted-views.sql')
+  const mysqlShell = codeBlocks(mysql, 'sh').flatMap((block) =>
+    block
+      .trimEnd()
+      .split('\n')
+      .map((line) => line.replace(/ &&$/, '')),
+  )
+
+  it('D107: the generator block is the same and the datasource provider selects the dialect', () => {
+    expect(mysqlProse).toContain(
+      'The generator block is the one above, with `provider = "hyde-db"`',
+    )
+    expect(mysqlProse).toContain(
+      'the datasource `provider`, `postgresql` or `mysql`, selects the dialect',
+    )
+    expect(mysqlProse).toContain('`prisma generate` passes it on')
+  })
+
+  it('D97, D149, D156: the config table gives schema, role and readerHost with the defaults and limits from the code, and refuses sourceSchema and statementTimeout', () => {
+    const rows = mysql.split('\n').filter((line) => line.startsWith('| `'))
+    const keys = rows.map((row) => /^\| `([^`]+)`/.exec(row)?.[1])
+    expect(keys.filter((key) => MYSQL_CONFIG_KEYS.includes(key ?? ''))).toEqual(
+      ['schema', 'role', 'readerHost', 'default', 'strict'].filter((key) =>
+        MYSQL_CONFIG_KEYS.includes(key),
+      ),
+    )
+    for (const key of ['schema', 'role', 'readerHost'] as const) {
+      const row = rows.find((r) => r.startsWith(`| \`${key}\` |`)) ?? ''
+      expect(row, key).toContain(`| \`"${DEFAULT_MYSQL_CONFIG[key]}"\` |`)
+    }
+    expect(rows.find((r) => r.startsWith('| `schema` |'))).toContain('at most 64 characters')
+    expect(rows.find((r) => r.startsWith('| `role` |'))).toContain('at most 32 characters')
+    const host = rows.find((r) => r.startsWith('| `readerHost` |')) ?? ''
+    expect(host).toContain('`[A-Za-z0-9._%:/-]`')
+    expect(host).toContain('1 to 60 characters')
+    // The limits are the validator's own.
+    const longRole = validateConfig({ role: 'r'.repeat(33) }, 'mysql').diagnostics
+    expect(longRole.map((d) => d.code)).toEqual(['HYDE_CONFIG_INVALID_VALUE'])
+    expect(validateConfig({ schema: 's'.repeat(64) }, 'mysql').diagnostics).toEqual([])
+    expect(validateConfig({ readerHost: 'h'.repeat(61) }, 'mysql').diagnostics).toHaveLength(1)
+    for (const key of ['sourceSchema', 'statementTimeout']) {
+      const codes = validateConfig({ [key]: 'x' }, 'mysql').diagnostics.map((d) => d.code)
+      expect(codes, key).toEqual(['HYDE_CONFIG_KEY_UNSUPPORTED'])
+      expect(mysqlProse).toContain(`\`${key}\``)
+    }
+    expect(mysqlProse).toContain('`HYDE_CONFIG_KEY_UNSUPPORTED`')
+  })
+
+  it('D97: the MySQL generator block parses under Prisma 6 and 7 and validates on MySQL to its defaults', () => {
+    const block = codeBlocks(mysql, 'prisma').find((b) => b.startsWith('generator redacted {'))
+    expect(block).toBeDefined()
+    for (const major of MAJORS) {
+      const { config } = parseSchema(`${DATASOURCE}\n${block}`, major)
+      expect(Object.keys(config).sort()).toEqual([...MYSQL_CONFIG_KEYS].sort())
+      const resolved = validateConfig(config, 'mysql')
+      expect(resolved.diagnostics).toEqual([])
+      expect(resolved.config).toEqual(DEFAULT_MYSQL_CONFIG)
+    }
+  })
+
+  it('D120, D153: role names the account user name, not a MySQL ROLE, and a non-empty mandatory_roles is unsupported and refused', () => {
+    expect(mysqlProse).toContain(
+      "`role` names the reader account's user name, and `readerHost` its host. It is not a MySQL `ROLE`",
+    )
+    expect(mysqlProse).toContain('A server with a non-empty `mandatory_roles` is unsupported')
+    expect(mysqlProse).toContain("SET PERSIST mandatory_roles = '';")
+    expect(mysqlApply).toContain('mandatory_roles is set; that is unsupported.')
+    expect(mysqlApply).toContain("SET PERSIST mandatory_roles = ''''")
+  })
+
+  it('D160, A102, A75: deploys connect to the source database as default database, and the deployer privileges are listed', () => {
+    expect(mysqlProse).toContain('connected to the source database as the default database')
+    expect(mysqlProse).toContain('Without a default database the apply script refuses')
+    expect(mysqlProse).toContain('`prisma db execute`, the database name belongs in the URL')
+    for (const privilege of [
+      '`CREATE`, `DROP` and `CREATE VIEW` on the views database',
+      '`SELECT` on the source tables',
+      '`GRANT OPTION` on the views',
+      '`CREATE USER`',
+      '`SELECT` on `mysql.*`',
+      '`CREATE TEMPORARY TABLES` on the source database',
+    ]) {
+      expect(mysqlProse, privilege).toContain(privilege)
+    }
+  })
+
+  it('D43, D68, D95: the mysql deploy block chains drop, migrate and apply, and the prisma db execute blocks are the PostgreSQL ones', () => {
+    const block = deployBlocks.find((b) => b.startsWith('mysql ')) ?? ''
+    expect(mysql).toContain(block)
+    expect(mysqlProse).toContain(
+      '`prisma db execute` blocks under [every deploy](#every-deploy) work unchanged',
+    )
+  })
+
+  it('D68: every mysql command stops, running nothing, while a variable it needs is unset or empty', () => {
+    const commands = mysqlShell.filter((line) => line.startsWith('mysql '))
+    expect(commands).toHaveLength(3)
+    const env = { MYSQL_HOST: 'h', MYSQL_USER: 'u', MYSQL_DATABASE: 'app', READER_PASSWORD: 'x' }
+    for (const line of commands) {
+      const names = Array.from(line.matchAll(/\$\{([A-Z_]+):\?/g), (m) => m[1] ?? '')
+      expect(names, line).toContain('MYSQL_HOST')
+      expect(names, line).toContain('MYSQL_USER')
+      expect(line).not.toMatch(/\$[A-Z_]/)
+      const printed = line.replace(/^mysql /, "printf '%s\n' ").replace(/ < \S+$/, '')
+      for (const name of names) {
+        for (const value of [undefined, '']) {
+          const unset: Record<string, string> = { PATH: process.env.PATH ?? '', ...env }
+          if (value === undefined) delete unset[name]
+          else unset[name] = value
+          const { status, stdout, stderr } = spawnSync('sh', ['-c', printed], {
+            env: unset,
+            encoding: 'utf8',
+          })
+          expect(status, `${line} without ${name}`).not.toBe(0)
+          expect(stdout, line).toBe('')
+          expect(stderr, line).toContain(`${name}:`)
+        }
+      }
+    }
+    expect(commands.filter((line) => line.includes('-D '))).toHaveLength(2)
+  })
+
+  it('D116, A85, D104: the reader login is one ALTER USER … IDENTIFIED BY … ACCOUNT UNLOCK with a guarded password variable, once, surviving re-applies', () => {
+    const login = mysqlShell.find((line) => line.includes('ACCOUNT UNLOCK')) ?? ''
+    expect(login).toContain(
+      `ALTER USER 'redacted_reader'@'%' IDENTIFIED BY '\${READER_PASSWORD:?set READER_PASSWORD first}' ACCOUNT UNLOCK;`,
+    )
+    expect(login).toContain(`\${MYSQL_HOST:?export MYSQL_HOST first}`)
+    for (const phrase of [
+      'The apply script creates the account locked and without a password',
+      "never changes an existing account's lock state or password",
+      'survives every re-apply',
+      'single quote or a backslash',
+      '`ps` output',
+      'shell history',
+    ]) {
+      expect(mysqlProse, phrase).toContain(phrase)
+    }
+    expect(mysqlApply).toContain(
+      "CREATE USER IF NOT EXISTS ''redacted_reader''@''%'' ACCOUNT LOCK;",
+    )
+    expect(mysqlApply).not.toMatch(/IDENTIFIED BY/)
+  })
+
+  it('D117, D115, D119, D155, D99: lists the apply steps in the order the script runs them', () => {
+    const steps = section('What the MySQL apply script does', '###')
+    const order = [
+      "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';",
+      'DATABASE() IS NULL',
+      'LOWER(DATABASE())',
+      'hyde_db_marker',
+      "TABLE_SCHEMA = 'mysql'",
+      'REVOKE ALL PRIVILEGES, GRANT OPTION FROM',
+      'mandatory_roles',
+      'DROP DATABASE IF EXISTS',
+      'CREATE USER IF NOT EXISTS',
+      'GRANT SELECT ON `redacted`',
+    ]
+    let last = -1
+    for (const sql of order) {
+      const at = mysqlApply.indexOf(sql)
+      expect(at, sql).toBeGreaterThan(last)
+      last = at
+    }
+    const words = [
+      'pins `sql_mode`',
+      'default database',
+      'marker view',
+      '`mysql.*`',
+      'resets the reader',
+      'roles',
+      'drops and recreates',
+      'creates the account',
+      'grants `SELECT` on each view last',
+      'revokes the view grants and aborts',
+    ]
+    let at = -1
+    for (const word of words) {
+      const next = steps.indexOf(word)
+      expect(next, word).toBeGreaterThan(at)
+      at = next
+    }
+    for (const phrase of [
+      'a failing insert into a temporary table',
+      'no routine and nothing left behind',
+      '`mysql --force`',
+      '`DEFINER = CURRENT_USER`',
+      '`IGNORE UNKNOWN USER`',
+    ]) {
+      expect(steps, phrase).toContain(phrase)
+    }
+    expect(mysqlApply).toContain('DEFINER = CURRENT_USER')
+    expect(mysqlApply).toContain('IGNORE UNKNOWN USER')
+  })
+
+  it('D100, D121, D119: the drop script checks the marker, revokes the reader and drops the views database, also when it is gone', () => {
+    const drop = readRepoFile('example-mysql', 'redacted', 'redacted-views-drop.sql')
+    expect(drop).toContain('hyde_db_marker')
+    expect(drop).toContain('IGNORE UNKNOWN USER')
+    expect(drop).toContain('DROP DATABASE IF EXISTS')
+    const text = section('What the MySQL drop script does', '###')
+    for (const phrase of ['marker', 'revokes', 'already gone', 'IGNORE UNKNOWN USER']) {
+      expect(text, phrase).toContain(phrase)
+    }
+  })
+
+  it('D93, D151, D161: the refusal table lists exactly the problems the MySQL scripts can print, in script order, and says how they are built', () => {
+    const problems: string[] = []
+    const found =
+      /hyde-db: (no default database[^']*?\.) Fix:|SELECT CONCAT\('database ', '([^']*)', '([^']*)'\) AS problem|SELECT '([^']+\.)'(?: AS problem|,)/g
+    for (const m of mysqlApply.matchAll(found)) {
+      const problem = m[1] ?? (m[2] === undefined ? m[4] : `database ${m[2]}${m[3]}`)
+      if (problem !== undefined && !problems.includes(problem)) problems.push(problem)
+    }
+    expect(problems).toHaveLength(15)
+    const rows = refuses
+      .split('\n')
+      .filter((line) => /^\| [^|]+ \| `[^`]+` \|/.test(line))
+      .map(cells)
+    expect(rows.map((row) => /`([^`]*)`/.exec(row[1] ?? '')?.[1])).toEqual(problems)
+    for (const row of rows) expect(row[2]?.length, row[1]).toBeGreaterThan(0)
+    for (const phrase of [
+      '`hyde-db: <problem> Fix: <fix>`',
+      'at most 128 characters',
+      'shortened and the fix kept whole',
+      '`REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>;`',
+      'a short instruction',
+      'pasted',
+    ]) {
+      expect(refuses, phrase).toContain(phrase)
+    }
+    expect(refuses).toContain('GRANT SELECT ON mysql.* TO')
+    expect(refuses).toContain('add the database name to the connection URL')
+  })
+
+  it('D101, A104, A103, A78, A74, D155: states the guarantee, what a refused deploy leaves, what the reader sees, and that MySQL cannot be rolled back', () => {
+    for (const phrase of [
+      '`redacted_reader` can read no table data outside the generated views',
+      'A refused deploy never grants the reader more than it had before',
+      'may leave the views rebuilt without the reader grant',
+      'roles, default roles, `mandatory_roles`',
+      'an account with its user name on a more specific host',
+      'an anonymous account',
+      'until the printed fix is applied',
+      'The reader sees no other database names or columns',
+      'stricter than PostgreSQL',
+      '`SHOW DATABASES`',
+      '`information_schema` and `performance_schema`',
+      'server status and variables',
+      'its own session',
+      'no statement history',
+      'Only per-account resource limits stick',
+      'cannot be rolled back',
+      'a wildcard database grant is read literally and grants nothing',
+      'Rows, the content of visible columns and load are not covered',
+    ]) {
+      expect(guarantee, phrase).toContain(phrase)
+    }
+    expect(guarantee).toContain(
+      '[what the MySQL apply script refuses](#what-the-mysql-apply-script-refuses)',
+    )
+    expect(guarantee).not.toMatch(/ROLLBACK/)
+  })
+
+  it('D118: gives the supported services and says none is tested end to end', () => {
+    const services = section('Supported services', '###')
+    for (const phrase of [
+      'RDS and Aurora are supported',
+      'Cloud SQL is expected to work',
+      'read access to the `mysql.*` grant tables is unconfirmed',
+      'refuses before any change with the `GRANT SELECT ON mysql.*` fix',
+      'Azure Flexible works because the deployer is always the view definer',
+      'PlanetScale is unsupported',
+      'None is tested end to end by hyde-db',
+    ]) {
+      expect(services, phrase).toContain(phrase)
+    }
+  })
+
+  it('D148, D20, D103: Development gives the MySQL attack suite with MYSQL_IMAGE and the two end-to-end URLs', () => {
+    const development = section('Development')
+    const row =
+      development.split('\n').find((l) => l.startsWith('| `pnpm test:integration:mysql` |')) ?? ''
+    expect(row).toContain('`MYSQL_IMAGE`')
+    expect(row).toContain('mysql:9.7')
+    expect(row).toContain('Fails, never skips, without Docker.')
+    expect(development).toContain('MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql')
+    const e2e = development.split('\n').find((l) => l.startsWith('| `pnpm test:e2e` |')) ?? ''
+    expect(e2e).toContain('`E2E_DATABASE_URL` and `E2E_MYSQL_DATABASE_URL`')
+    expect(development).toContain(
+      'E2E_MYSQL_DATABASE_URL=mysql://root:root@localhost:53306/app pnpm test:e2e',
+    )
+    expect(development).toContain('drops the tables `users`, `orders` and `api_keys`')
+    expect(readRepoFile('package.json')).toContain('"test:integration:mysql"')
+  })
+
+  it('D162, D107: the intro and the output-file table name both databases, and link the MySQL section', () => {
+    const intro = prose.slice(0, prose.indexOf('\n## '))
+    expect(intro).toContain('PostgreSQL or MySQL database')
+    expect(intro).toContain('[MySQL](#mysql)')
+    expect(intro).not.toContain('Prisma-managed PostgreSQL database')
   })
 })

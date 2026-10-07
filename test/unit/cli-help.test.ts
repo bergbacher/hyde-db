@@ -150,9 +150,10 @@ describe('usage', () => {
     expect(line).toContain('PostgreSQL only')
   })
 
-  it('D56: starts with one line saying what hyde-db is', () => {
+  it('D56, D107: starts with one dialect-neutral line saying what hyde-db is', () => {
     expect(lines[0]).toMatch(/^hyde-db: a Prisma generator that turns \/\/\/ @hyde\.\* annotations/)
-    expect(lines[0]).toContain('read-only PostgreSQL views')
+    expect(lines[0]).toContain('read-only views of a PostgreSQL or MySQL database')
+    expect(lines[0]).not.toContain('read-only PostgreSQL views')
     expect(lines[0]).toContain('sensitive columns removed')
     expect(lines[0]).toContain('locked-down reader role')
   })

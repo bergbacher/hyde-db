@@ -93,7 +93,7 @@ const DB_URL = `\${DATABASE_URL:?export DATABASE_URL first}`
 /** The help text, without a trailing newline. `config` supplies the defaults it prints. */
 export function usage(config: PostgresqlConfig, repository?: string): string {
   return [
-    `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role.`,
+    `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only views of a PostgreSQL or MySQL database with sensitive columns removed, plus a locked-down reader role.`,
     '',
     `During prisma generate, Prisma runs it. Running ${BRAND} directly only prints this help.`,
     '',
