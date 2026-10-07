@@ -310,6 +310,16 @@ describe('usage', () => {
     }
   })
 
+  it('D107, D162: labels the psql deploy as PostgreSQL and points MySQL users to the README section MySQL', () => {
+    const pointer = lines.filter((l) => l.startsWith('On MySQL, see the README section MySQL'))
+    expect(pointer).toHaveLength(1)
+    expect(pointer[0]).toContain('mysql client or prisma db execute')
+    expect(pointer[0]).toContain('The rest of this help is for PostgreSQL.')
+    expect(lines.indexOf(pointer[0] ?? '')).toBeLessThan(
+      lines.findIndex((l) => l.includes('<output>/redacted-views-drop.sql')),
+    )
+  })
+
   it('D56: says prisma generate writes the three files and the login step runs once, after the first deploy', () => {
     expect(lines[lines.findIndex((l) => l.includes('npx prisma generate')) - 1]).toContain(
       'three files',
@@ -507,7 +517,7 @@ describe('usage', () => {
   })
 
   it('D56: points to the package README, or the repository when it is known', () => {
-    expect(text).toContain('Full documentation: the README in the hyde-db npm package.')
+    expect(text).toContain('Full documentation: the README in the @hyde/db npm package.')
     expect(usage(DEFAULT_CONFIG, 'https://github.com/acme/hyde-db')).toContain(
       'Full documentation: https://github.com/acme/hyde-db#readme',
     )

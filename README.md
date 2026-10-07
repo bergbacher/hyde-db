@@ -429,6 +429,22 @@ npx prisma migrate deploy &&
 mysql -h "${MYSQL_HOST:?export MYSQL_HOST first}" -u "${MYSQL_USER:?export MYSQL_USER first}" -D "${MYSQL_DATABASE:?export MYSQL_DATABASE first}" < prisma/redacted/redacted-views.sql
 ```
 
+With `prisma db execute`, the source database is in the URL Prisma uses (the `prisma/schema.prisma` datasource on Prisma 6, `prisma.config.ts` on Prisma 7). With Prisma 7: <!-- D160, D43 -->
+
+```sh
+npx prisma db execute --file prisma/redacted/redacted-views-drop.sql &&
+npx prisma migrate deploy &&
+npx prisma db execute --file prisma/redacted/redacted-views.sql
+```
+
+With Prisma 6:
+
+```sh
+npx prisma db execute --file prisma/redacted/redacted-views-drop.sql --schema prisma/schema.prisma &&
+npx prisma migrate deploy &&
+npx prisma db execute --file prisma/redacted/redacted-views.sql --schema prisma/schema.prisma
+```
+
 The deploying user needs these privileges, and no others are used to create the views: <!-- A75, A77, A102, D160 -->
 
 - `CREATE`, `DROP` and `CREATE VIEW` on the views database, `SELECT` on the source tables, `GRANT OPTION` on the views and `CREATE USER`. <!-- A75 -->
@@ -485,7 +501,7 @@ RDS and Aurora are supported, per the providers' documentation. Cloud SQL is exp
 
 ### What the MySQL apply script refuses
 
-Every refusal is `hyde-db: <problem> Fix: <fix>`, at most 128 characters. When a name makes it longer, the problem is shortened and the fix kept whole. When a fix would not fit, it falls back to the reader-wide `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>;` where revoking the reader's grants resolves the refusal, and to a short instruction only when even that does not fit, which happens only with near-maximum `role` and `readerHost` lengths. With the default `role` and `readerHost`, every printed fix is a statement that works when pasted. An administrator pastes it, then you run the apply script again; repeat until it passes. The table lists the problems in the order the script checks them; the examples use the default names. <!-- D151, D161, D99, D108 -->
+Every refusal is `hyde-db: <problem> Fix: <fix>`, at most 128 characters. When a name makes it longer, the problem is shortened and the fix kept whole. When a fix would not fit, it falls back to the reader-wide `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>;` where revoking the reader's grants resolves the refusal, and to a short instruction only when even that does not fit, which happens only with near-maximum `role` and `readerHost` lengths, or with a long deploying account in the `mysql.*` fix. With the default `role` and `readerHost`, and a deploying account short enough for its `GRANT`, every printed fix is a statement that works when pasted. An administrator pastes it, then you run the apply script again; repeat until it passes. The table lists the problems in the order the script checks them; the examples use the default names. <!-- D151, D161, D99, D108 -->
 
 | Refused when | Problem after `hyde-db: ` | Printed fix |
 |---|---|---|

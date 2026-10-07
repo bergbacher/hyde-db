@@ -128,6 +128,7 @@ export function usage(config: PostgresqlConfig, repository?: string): string {
     `Deploy in this order. In the paths below, replace the placeholder with the output directory of the generator, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
     'First, write the three files:',
     '  npx prisma generate',
+    'On MySQL, see the README section MySQL for the mysql client or prisma db execute. The rest of this help is for PostgreSQL.',
     'Note: psql does not read .env. Export DATABASE_URL in your shell first, as a plain libpq URL without Prisma-only parameters such as ?schema=public.',
     'If the URL Prisma uses carries such parameters, deploy with npx prisma db execute --file instead, as the README shows, and set sourceSchema to its ?schema= name.',
     'Do not strip the parameters for psql: prisma migrate deploy would then run against the stripped URL, which can point at another schema.',
@@ -148,7 +149,7 @@ export function usage(config: PostgresqlConfig, repository?: string): string {
     'Each error carries a fix hint, and any error fails prisma generate before writing files.',
     '',
     repository === undefined
-      ? `Full documentation: the README in the ${BRAND} npm package.`
+      ? `Full documentation: the README in the @hyde/db npm package.`
       : `Full documentation: ${repository}#readme`,
   ].join('\n')
 }

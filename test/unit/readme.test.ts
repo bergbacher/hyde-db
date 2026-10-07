@@ -450,12 +450,16 @@ describe('README (a view of LEDGER.md)', () => {
   })
 
   it('D43: gives the psql, prisma db execute and mysql commands the tests run, as drop, migrate, apply', () => {
+    const prisma7 = (file: string) => `npx prisma db execute --file prisma/redacted/${file}`
+    const prisma6 = (file: string) =>
+      `npx prisma db execute --file prisma/redacted/${file} --schema prisma/schema.prisma`
     const variants = [
       (file: string) => `psql ${DB_URL} -v ON_ERROR_STOP=1 -f prisma/redacted/${file}`,
-      (file: string) => `npx prisma db execute --file prisma/redacted/${file}`,
-      (file: string) =>
-        `npx prisma db execute --file prisma/redacted/${file} --schema prisma/schema.prisma`,
+      prisma7,
+      prisma6,
       (file: string) => `mysql ${MYSQL_CONNECTION} -D ${MYSQL_DATABASE} < prisma/redacted/${file}`,
+      prisma7,
+      prisma6,
     ]
     expect(
       deployBlocks.map((block) =>
@@ -474,7 +478,7 @@ describe('README (a view of LEDGER.md)', () => {
   })
 
   it('D136: chains each deploy block with &&, so a refused step stops the rest', () => {
-    expect(deployBlocks).toHaveLength(4)
+    expect(deployBlocks).toHaveLength(6)
     const dir = mkdtempSync(join(tmpdir(), 'hyde-readme-'))
     mkdirSync(join(dir, 'prisma', 'redacted'), { recursive: true })
     for (const file of ['redacted-views-drop.sql', 'redacted-views.sql'])
@@ -1099,6 +1103,18 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     expect(mysqlProse).toContain(
       '`prisma db execute` blocks under [every deploy](#every-deploy) work unchanged',
     )
+  })
+
+  it('D160, D43: the MySQL section shows the prisma db execute blocks for Prisma 7 and Prisma 6, with the source database in the URL', () => {
+    const blocks = codeBlocks(mysql, 'sh').filter((b) => b.includes('migrate deploy'))
+    expect(blocks).toHaveLength(3)
+    expect(blocks.slice(1)).toEqual(deployBlocks.slice(1, 3))
+    expect(mysqlProse).toContain('the source database is in the URL Prisma uses')
+  })
+
+  it('D161: the refusal intro also names the long deploying account as a short-instruction case and qualifies the pasted-fix claim', () => {
+    expect(refuses).toContain('or with a long deploying account in the `mysql.*` fix')
+    expect(refuses).toContain('and a deploying account short enough for its `GRANT`')
   })
 
   it('D68: every mysql command stops, running nothing, while a variable it needs is unset or empty', () => {
