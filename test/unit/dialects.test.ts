@@ -56,3 +56,71 @@ describe('D104, D114: dialect registry', () => {
     expect(r.files).toBeNull()
   })
 })
+
+describe('the MySQL dialect (Task 11)', () => {
+  const user = () => model('User', [scalar('id', '@hyde.visible', { isId: true })])
+
+  it('D113: on MySQL, views carry sourceSchema null and the config is the mysql member', () => {
+    const r = analyze(datamodel(user()), {}, { provider: 'mysql' })
+    expect(r.config.dialect).toBe('mysql')
+    expect(r.views[0]?.sourceSchema).toBeNull()
+  })
+
+  it('D114, D117: MySQL has no generate-time schema-equals-source rule', () => {
+    expect(analyze(datamodel(), { schema: 'redacted' }, { provider: 'mysql' }).diagnostics).toEqual(
+      [],
+    )
+  })
+
+  it('D115, D157: a model whose table is hyde_db_marker collides with the marker view, which holds the name first', () => {
+    const dm = datamodel(
+      model('Marker', [scalar('id', '@hyde.visible', { isId: true })], {
+        dbName: 'hyde_db_marker',
+      }),
+    )
+    const found = analyze(dm, {}, { provider: 'mysql' }).diagnostics.filter(
+      (d) => d.code === 'HYDE_VIEW_NAME_COLLISION',
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.message).toContain('the hyde-db marker view and hyde_db_marker')
+  })
+
+  it('D115: the marker-name rule is MySQL only; PostgreSQL accepts that table name', () => {
+    const dm = datamodel(
+      model('Marker', [scalar('id', '@hyde.visible', { isId: true })], {
+        dbName: 'hyde_db_marker',
+      }),
+    )
+    expect(analyze(dm).diagnostics).toEqual([])
+  })
+
+  it('A80: @@map and @map give views over the mapped table and column names on MySQL', () => {
+    const dm = datamodel(
+      model('User', [scalar('id', '@hyde.visible', { isId: true, dbName: 'user_id' })], {
+        dbName: 'users',
+      }),
+    )
+    const r = build(dm, {}, { provider: 'mysql' })
+    expect(r.views[0]?.name).toBe('users')
+    expect(r.views[0]?.columns[0]?.column).toBe('user_id')
+    expect(r.files?.['redacted-views.sql']).toContain('`users`')
+    expect(r.files?.['redacted-views.sql']).toContain('`user_id`')
+  })
+
+  it('D107: build with provider mysql renders the three MySQL files', () => {
+    const r = build(datamodel(user()), {}, { provider: 'mysql' })
+    expect(r.files?.['redacted-views.sql']).toContain('hyde_db_marker')
+    expect(r.files?.['redacted-views-drop.sql']).toContain('DROP DATABASE IF EXISTS')
+    expect(r.files?.['redacted-schema.md']).toContain('MySQL')
+  })
+
+  it('D97: sourceSchema on MySQL makes build return no files', () => {
+    expect(build(datamodel(), { sourceSchema: 'app' }, { provider: 'mysql' }).files).toBeNull()
+  })
+
+  it('D104: mysql is registered, sourceSchemaOf is null and configRules is empty (D113, D114)', () => {
+    const d = dialectFor('mysql')
+    expect(d?.provider).toBe('mysql')
+    expect(Object.keys(DIALECTS)).toContain('mysql')
+  })
+})

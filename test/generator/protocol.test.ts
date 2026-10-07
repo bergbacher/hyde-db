@@ -171,10 +171,20 @@ describe('generator protocol', () => {
     expect(stdout).toBe('')
   })
 
-  it('a non-PostgreSQL datasource fails with HYDE_UNSUPPORTED_PROVIDER', async () => {
-    const { request } = generateRequest(example, { provider: 'mysql' })
+  it('D159: a provider that is neither postgresql nor mysql fails with HYDE_UNSUPPORTED_PROVIDER', async () => {
+    const { request } = generateRequest(example, { provider: 'sqlite' })
     const { responses } = await runGenerator([request])
-    expect(responses[0]?.error?.message).toContain('error HYDE_UNSUPPORTED_PROVIDER at datasource')
+    const message = responses[0]?.error?.message
+    expect(message).toContain('error HYDE_UNSUPPORTED_PROVIDER at datasource')
+    expect(message).toContain('only postgresql and mysql are supported')
+  })
+
+  it('D107: a mysql datasource writes the MySQL files and prints the success line', async () => {
+    const { request, output } = generateRequest(example, { provider: 'mysql', config: {} })
+    const { responses, stdout } = await runGenerator([request])
+    expect(responses[0]?.error).toBeUndefined()
+    expect(readFileSync(join(output, 'redacted-views.sql'), 'utf8')).toContain('hyde_db_marker')
+    expect(stdout).toMatch(/^hyde-db: \d+ views?, /)
   })
 
   it('A20: never writes JSON-RPC messages to stdout and ignores malformed lines', async () => {
@@ -214,7 +224,7 @@ describe('generator protocol', () => {
 
   it('A20: stderr carries only JSON-RPC lines, one per request that has an id', async () => {
     const { request } = generateRequest(example)
-    const failing = generateRequest(example, { provider: 'mysql' }).request
+    const failing = generateRequest(example, { provider: 'sqlite' }).request
     const { responses, stderr, stdout } = await runGenerator([
       { jsonrpc: '2.0', id: 1, method: 'getManifest', params: {} },
       'not json',

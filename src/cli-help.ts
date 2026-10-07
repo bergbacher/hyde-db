@@ -108,6 +108,7 @@ export function usage(config: PostgresqlConfig, repository?: string): string {
     '',
     'Optional keys, all strings, where an unset key uses the default shown:',
     ...configLines(config),
+    'On MySQL (provider mysql in the datasource), the keys are schema (the views database), role (the account user name) and readerHost (default %). The keys sourceSchema and statementTimeout are PostgreSQL only.',
     'Roles belong to the whole cluster, not to one database: give each database, and each generator block, its own role.',
     '',
     'To annotate fields and models, use /// comments in schema.prisma:',

@@ -1,5 +1,5 @@
 // The internal dialect registry (D104, D114): one Dialect per database, looked up by the datasource
-// provider. Only postgresql is registered here; a provider with no entry is a diagnostic, not a throw (D142).
+// provider. postgresql and mysql are registered here; a provider with no entry is a diagnostic, not a throw (D142).
 import type { ConfigResult } from '../config.ts'
 import type { Model } from '../datamodel.ts'
 import type {
@@ -10,6 +10,7 @@ import type {
   ResolvedConfig,
   View,
 } from '../types.ts'
+import { mysqlDialect } from './mysql.ts'
 import { postgresqlDialect } from './postgresql.ts'
 
 export interface Dialect<C extends ResolvedConfig = ResolvedConfig> {
@@ -33,6 +34,7 @@ export const DIALECTS: {
   readonly [P in Provider]?: Dialect<Extract<ResolvedConfig, { dialect: P }>>
 } = {
   postgresql: postgresqlDialect,
+  mysql: mysqlDialect,
 }
 
 export function dialectFor(provider: string): Dialect | undefined {

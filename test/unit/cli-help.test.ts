@@ -142,6 +142,14 @@ describe('usage', () => {
   const text = usage(DEFAULT_CONFIG)
   const lines = text.split('\n')
 
+  it('D112, D120: mentions MySQL, readerHost, and that sourceSchema and statementTimeout are PostgreSQL only', () => {
+    const line = lines.find((l) => l.includes('MySQL') && l.includes('readerHost'))
+    expect(line).toBeDefined()
+    expect(line).toContain('sourceSchema')
+    expect(line).toContain('statementTimeout')
+    expect(line).toContain('PostgreSQL only')
+  })
+
   it('D56: starts with one line saying what hyde-db is', () => {
     expect(lines[0]).toMatch(/^hyde-db: a Prisma generator that turns \/\/\/ @hyde\.\* annotations/)
     expect(lines[0]).toContain('read-only PostgreSQL views')
