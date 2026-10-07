@@ -37,7 +37,9 @@ describe('CI workflow', () => {
       'node scripts/pack-e2e.mjs',
       'pnpm test:coverage',
       'pnpm test:integration',
-      'node --test --test-timeout=600000 test/e2e/*.test.mjs',
+      'pnpm test:integration:mysql',
+      'node --test --test-timeout=600000 test/e2e/generate.test.mjs test/e2e/require.test.mjs',
+      'node --test --test-timeout=600000 test/e2e/mysql.test.mjs',
     ]) {
       expect(ci).toContain(command)
     }
@@ -61,6 +63,38 @@ describe('CI workflow', () => {
     expect(e2e).toContain('image: postgres:18-alpine')
     expect(e2e).toContain('E2E_DATABASE_URL: postgresql://')
     expect(e2e).toContain('E2E_TARBALL=')
+    expect(e2e).toContain('timeout-minutes:')
+  })
+
+  it('D103: the PostgreSQL end-to-end job runs only the PostgreSQL files, never mysql.test.mjs', () => {
+    const e2e = job(ci, 'e2e')
+    expect(e2e).not.toContain('mysql')
+    expect(e2e).not.toContain('*.test.mjs')
+    expect(e2e).toContain('test/e2e/generate.test.mjs test/e2e/require.test.mjs')
+  })
+
+  it('D103: the MySQL attack suite runs on MySQL 8.4 and 9.7 on a runner with Docker', () => {
+    const attack = job(ci, 'attack-mysql')
+    expect(attack).toContain("mysql: ['8.4', '9.7']")
+    expect(attack).toMatch(/MYSQL_IMAGE: mysql:\$\{\{ matrix\.mysql \}\}/)
+    expect(attack).toContain('runs-on: ubuntu-latest')
+    expect(attack).toContain('pnpm test:integration:mysql')
+    expect(attack).toContain('node-version: 24')
+  })
+
+  it('D103: MySQL end-to-end runs on MySQL 8.4 and 9.7 x Prisma 6 and 7 x Node 20 and 24 with a health-checked service', () => {
+    const e2e = job(ci, 'e2e-mysql')
+    expect(e2e).toContain("mysql: ['8.4', '9.7']")
+    expect(e2e).toContain("prisma: ['6.19.3', '7.10.0']")
+    expect(e2e).toContain('node: [20, 24]')
+    expect(e2e).toContain('needs: build')
+    expect(e2e).toMatch(/image: mysql:\$\{\{ matrix\.mysql \}\}/)
+    expect(e2e).toContain('MYSQL_ROOT_PASSWORD: root')
+    expect(e2e).toContain('mysqladmin ping')
+    expect(e2e).toContain('E2E_MYSQL_DATABASE_URL: mysql://root:root@127.0.0.1:3306/app')
+    expect(e2e).toContain('test/e2e/mysql.test.mjs')
+    expect(e2e).toContain('actions/download-artifact@')
+    expect(e2e).not.toMatch(/pnpm |pack-e2e|node-version: 24/)
     expect(e2e).toContain('timeout-minutes:')
   })
 
@@ -91,7 +125,9 @@ describe('CI workflow', () => {
   })
 
   it('D38: one aggregate job fails unless every other job succeeded', () => {
-    expect(ci).toContain('needs: [lint, typecheck, build, test, attack, e2e]')
+    expect(ci).toContain(
+      'needs: [lint, typecheck, build, test, attack, attack-mysql, e2e, e2e-mysql]',
+    )
     expect(ci).toContain("contains(needs.*.result, 'failure')")
     expect(ci).toContain("contains(needs.*.result, 'skipped')")
     const declared = [...ci.slice(ci.indexOf('\njobs:\n')).matchAll(/^ {2}([a-z0-9-]+):\n/gm)].map(
@@ -99,8 +135,10 @@ describe('CI workflow', () => {
     )
     expect(declared.filter((n) => n !== 'ci-ok').sort()).toEqual([
       'attack',
+      'attack-mysql',
       'build',
       'e2e',
+      'e2e-mysql',
       'lint',
       'test',
       'typecheck',
