@@ -16,7 +16,13 @@ import {
 
 const OUTPUT_FILES = ['redacted-views.sql', 'redacted-views-drop.sql', 'redacted-schema.md']
 const example = readRepoFile('example-mysql', 'schema.prisma')
-const CONFIG_LINE = '// role = "redacted_reader"   schema = "redacted"   statementTimeout = "15s"'
+const CONFIG_LINE = '// role = "redacted_reader"   schema = "redacted"   readerHost = "%"'
+/** The example schema with its commented config line replaced; throws when the line is gone, so a stale constant cannot pass silently. */
+const withConfig = (replacement) => {
+  if (!example.includes(CONFIG_LINE))
+    throw new Error(`example-mysql/schema.prisma no longer contains: ${CONFIG_LINE}`)
+  return example.replace(CONFIG_LINE, replacement)
+}
 
 /** The example tables, as `prisma migrate deploy` would leave them on MySQL, plus one row each. */
 const TABLES = `DROP TABLE IF EXISTS orders;
@@ -104,7 +110,7 @@ for (const version of PRISMA_VERSIONS) {
       writeSchema(dir, version, source)
       return prisma(dir, ['generate'], { url: url(), ...extra })
     }
-    const named = () => example.replace(CONFIG_LINE, `schema = "${views}"\n  role   = "${reader}"`)
+    const named = () => withConfig(`schema = "${views}"\n  role   = "${reader}"`)
     const apply = () => join('prisma', 'redacted', 'redacted-views.sql')
     const drop = () => join('prisma', 'redacted', 'redacted-views-drop.sql')
 
@@ -215,7 +221,7 @@ for (const version of PRISMA_VERSIONS) {
     })
 
     it(`D97: a MySQL generator block with sourceSchema fails prisma generate naming HYDE_CONFIG_KEY_UNSUPPORTED (Prisma ${version})`, () => {
-      const result = generate(example.replace(CONFIG_LINE, 'sourceSchema = "public"'))
+      const result = generate(withConfig('sourceSchema = "public"'))
       assert.notEqual(result.status, 0, result.output)
       assert.match(result.output, /HYDE_CONFIG_KEY_UNSUPPORTED/)
     })
