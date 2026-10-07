@@ -94,7 +94,7 @@ describe('renderMysqlApplySql', () => {
           ...users,
           name: "we`i'rd",
           source: 'we`ird',
-          columns: [{ ...users.columns[0]!, column: "a'b\\c" }],
+          columns: [{ ...(users.columns[0] as (typeof users.columns)[number]), column: "a'b\\c" }],
         },
       ],
     })
