@@ -19,7 +19,7 @@ describe('MySQL Markdown', () => {
     const md = renderMysqlMarkdown({ config, views: [mysqlUsers] })
     expect(md).toContain('MySQL, read-only')
     expect(md).toContain('`redacted`')
-    expect(md).toMatch(/USE `redacted`/)
+    expect(md).toContain('run `` USE `redacted` `` or')
   })
 
   it('A78: does not claim a statement timeout or a read-only session default', () => {
@@ -48,10 +48,10 @@ describe('MySQL Markdown', () => {
   it('D146 parity: the type column is labelled as Prisma types; joins appear with quoted names', () => {
     const md = renderMysqlMarkdown({ config, views: [mysqlUsers, mysqlOrders] })
     expect(md).toContain('| column | Prisma type | notes |')
-    expect(md).toContain('| `country` | String | nullable; ISO \\| code |')
-    expect(md).toContain('| `id` | Int | primary key |')
+    expect(md).toContain('| `` `country` `` | String | nullable; ISO \\| code |')
+    expect(md).toContain('| `` `id` `` | Int | primary key |')
     expect(md).toContain("A customer's account.")
-    expect(md).toContain('Joins:\n- `orders`.`user_id` = `users`.`id`')
+    expect(md).toContain('Joins:\n- `` `orders` ``.`` `user_id` `` = `` `users` ``.`` `id` ``')
   })
 
   it('D146 parity: a join target column the view does not show renders as ?', () => {
@@ -60,8 +60,25 @@ describe('MySQL Markdown', () => {
       relations: [{ fromCols: ['user_id'], target: 'users', targetModel: 'User', toCols: [] }],
     }
     expect(renderMysqlMarkdown({ config, views: [odd] })).toContain(
-      '`orders`.`user_id` = `users`.?',
+      '`` `orders` ``.`` `user_id` `` = `` `users` ``.?',
     )
+  })
+
+  it('D104: a name that starts and ends with a backtick renders as a valid code span, and | is escaped in cells', () => {
+    const md = renderMysqlMarkdown({
+      config,
+      views: [
+        {
+          ...mysqlUsers,
+          columns: [
+            { column: '`x`', field: 'id', type: 'Int', nullable: false, isId: true, doc: '' },
+            { column: 'a|b', field: 'a', type: 'Int', nullable: false, isId: false, doc: '' },
+          ],
+        },
+      ],
+    })
+    expect(md).toContain('| ```` ```x``` ```` | Int | primary key |')
+    expect(md).toContain('| `` `a\\|b` `` | Int |')
   })
 
   it('D3: the generated header names the product and says do not edit', () => {
