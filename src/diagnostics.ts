@@ -268,11 +268,14 @@ export function viewNameCollision(name: string, first: string, second: string): 
   )
 }
 
-export function unsupportedProvider(provider: string): Diagnostic {
+/** `provider` comes from JavaScript callers: only a string is quoted, anything else is named by `typeof` (D142, D159). */
+export function unsupportedProvider(provider: unknown): Diagnostic {
+  const described =
+    typeof provider === 'string' ? `is "${provider}"` : `is not a string (${typeof provider})`
   return make(
     'HYDE_UNSUPPORTED_PROVIDER',
     'datasource',
-    `only postgresql and mysql are supported (datasource provider is "${provider}")`,
+    `only postgresql and mysql are supported (datasource provider ${described})`,
     `Use ${BRAND} only with a datasource whose provider is "postgresql" or "mysql".`,
   )
 }

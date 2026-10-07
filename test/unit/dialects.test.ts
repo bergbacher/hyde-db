@@ -57,6 +57,63 @@ describe('D104, D114: dialect registry', () => {
   })
 })
 
+describe('D142, D159: build and analyze never throw on any options or provider value', () => {
+  const dm = () => datamodel(model('User', [scalar('id', '@hyde.visible', { isId: true })]))
+  const revoked = (() => {
+    const { proxy, revoke } = Proxy.revocable({}, {})
+    revoke()
+    return proxy
+  })()
+  const throwingToString = {
+    toString() {
+      throw new Error('toString')
+    },
+  }
+  const providers: [string, unknown][] = [
+    ['a Symbol', Symbol('x')],
+    ['a null-prototype object', Object.create(null)],
+    ['an object whose toString throws', throwingToString],
+    ['a revoked Proxy', revoked],
+    ['a number', 7],
+    ['a function', () => 'mysql'],
+  ]
+
+  it.each(providers)(
+    '%s as provider is one diagnostic and no files, never a throw',
+    (_n, provider) => {
+      const r = build(dm(), {}, { provider } as never)
+      expect(r.diagnostics.map((d) => d.code)).toEqual(['HYDE_UNSUPPORTED_PROVIDER'])
+      expect(r.diagnostics[0]?.message).toContain('only postgresql and mysql are supported')
+      expect(r.diagnostics[0]?.message).toContain(`not a string (${typeof provider})`)
+      expect(r.files).toBeNull()
+      expect(analyze(dm(), {}, { provider } as never).diagnostics).toHaveLength(1)
+    },
+  )
+
+  const options: [string, unknown][] = [
+    ['a Symbol', Symbol('x')],
+    ['a null-prototype object', Object.create(null)],
+    ['an object whose toString throws', throwingToString],
+    ['a revoked Proxy', revoked],
+  ]
+
+  it.each(options)('%s as options never throws', (_n, opts) => {
+    expect(() => build(dm(), {}, opts as never)).not.toThrow()
+    expect(() => analyze(dm(), {}, opts as never)).not.toThrow()
+  })
+
+  it('a revoked Proxy as options is an unreadable provider: the diagnostic, no files', () => {
+    const r = build(dm(), {}, revoked as never)
+    expect(r.diagnostics.map((d) => d.code)).toEqual(['HYDE_UNSUPPORTED_PROVIDER'])
+    expect(r.files).toBeNull()
+  })
+
+  it('a string provider is still quoted in the message', () => {
+    const r = build(dm(), {}, { provider: 'oracle' } as never)
+    expect(r.diagnostics[0]?.message).toContain('(datasource provider is "oracle")')
+  })
+})
+
 describe('the MySQL dialect (Task 11)', () => {
   const user = () => model('User', [scalar('id', '@hyde.visible', { isId: true })])
 
@@ -70,6 +127,18 @@ describe('the MySQL dialect (Task 11)', () => {
     expect(analyze(datamodel(), { schema: 'redacted' }, { provider: 'mysql' }).diagnostics).toEqual(
       [],
     )
+  })
+
+  it('D167: a model whose table is hyde_db_abort, in any case, collides with the abort table, which holds the name first', () => {
+    for (const dbName of ['hyde_db_abort', 'Hyde_DB_Abort']) {
+      const found = analyze(
+        datamodel({ ...user(), dbName }),
+        {},
+        { provider: 'mysql' },
+      ).diagnostics.filter((d) => d.code === 'HYDE_VIEW_NAME_COLLISION')
+      expect(found).toHaveLength(1)
+      expect(found[0]?.message).toContain('the hyde-db abort table and ')
+    }
   })
 
   it('D115, D157: a model whose table is hyde_db_marker collides with the marker view, which holds the name first', () => {

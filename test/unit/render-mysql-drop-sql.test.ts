@@ -50,7 +50,7 @@ describe('renderMysqlDropSql', () => {
     expect(sql).toContain(MARKER_FIX)
     const insert = sql.indexOf('INSERT INTO `hyde_db_abort`')
     const revoke = sql.indexOf('REVOKE ALL PRIVILEGES')
-    const drop = sql.indexOf('SET @hyde_sql')
+    const drop = sql.indexOf('DROP DATABASE IF EXISTS')
     expect(insert).toBeGreaterThan(-1)
     expect(insert).toBeLessThan(revoke)
     expect(revoke).toBeLessThan(drop)

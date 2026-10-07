@@ -190,8 +190,14 @@ export function analyze(
   rawConfig?: GeneratorConfig,
   options: BuildOptions = {},
 ): Analysis {
-  const provider = options?.provider ?? 'postgresql'
-  const dialect = dialectFor(provider)
+  // The provider is read defensively: options and provider come from JavaScript callers (D142, D159).
+  let provider: unknown
+  try {
+    provider = options?.provider ?? 'postgresql'
+  } catch {
+    provider = undefined
+  }
+  const dialect = typeof provider === 'string' ? dialectFor(provider) : undefined
   if (dialect !== undefined) return analyzeWith(dialect, datamodel, rawConfig, [])
   // 'postgresql' is always registered, so the fallback is defined.
   return analyzeWith(dialectFor('postgresql') as Dialect, datamodel, rawConfig, [

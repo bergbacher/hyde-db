@@ -7,7 +7,7 @@ import {
   renderRecheck,
   resetReader,
 } from '../../src/render/mysql-apply-checks.ts'
-import { FIX_LIMIT } from '../../src/render/mysql-guards.ts'
+import { couldNotRunMessage, FIX_LIMIT, raiseRefusal } from '../../src/render/mysql-guards.ts'
 
 const config = {
   dialect: 'mysql',
@@ -85,7 +85,7 @@ describe('mysql apply checks A', () => {
   it('D117: the verify covers static and dynamic global privileges and the db, tables_priv, columns_priv and procs_priv tables', () => {
     const sql = resetReader.render(config).join('\n')
     for (const t of [
-      'information_schema.USER_PRIVILEGES',
+      'mysql.user',
       'mysql.global_grants',
       'mysql.db',
       'mysql.tables_priv',
@@ -96,17 +96,37 @@ describe('mysql apply checks A', () => {
     expect(sql).toContain('ORDER BY `rank` LIMIT 1')
   })
 
-  it('D117: the global-privilege query compares GRANTEE with the whole quoted account as one string literal', () => {
-    expect(leftoverGrants(config, [])).toContain("GRANTEE = '''redacted_reader''@''%'''")
+  it('D168: the global-privilege row reads the static privileges from the mysql.user *_priv columns, never information_schema.USER_PRIVILEGES', () => {
+    const sql = leftoverGrants(config, [])
+    expect(sql).not.toContain('USER_PRIVILEGES')
+    expect(sql).toContain("FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'")
+    for (const col of [
+      'Select_priv',
+      'Super_priv',
+      'File_priv',
+      'Create_role_priv',
+      'Drop_role_priv',
+    ])
+      expect(sql).toContain(`IF(${col} = 'Y'`)
+    expect(sql).toContain("'REVOKE ', privs, ' ON *.* FROM '")
   })
 
-  it('D152, A98: expected view grants match whatever case lower_case_table_names stores them in', () => {
+  it('D168: every *_priv column of mysql.user is listed explicitly, once', () => {
+    const cols = [...leftoverGrants(config, []).matchAll(/IF\((\w+_priv) = 'Y'/g)].map((m) => m[1])
+    expect(cols).toHaveLength(31)
+    expect(new Set(cols).size).toBe(31)
+  })
+
+  it('D168, D152, A98: expected view grants match the exact name, or the lower-cased one only when lower_case_table_names is not 0', () => {
     // Prisma's default table names are PascalCase; servers with lower_case_table_names = 1 store the grant as `user`.
-    expect(leftoverGrants(config, ['User'])).toContain("LOWER(Table_name) IN ('user')")
+    expect(leftoverGrants(config, ['User'])).toContain(
+      "(Table_name IN ('User') OR (@@lower_case_table_names <> 0 AND LOWER(Table_name) IN ('user')))",
+    )
   })
 
   it('A77: the leftover query lets only the expected Select grants on the views database through', () => {
     const sql = leftoverGrants(config, ['Users', "o'rders"])
+    expect(sql).toContain("Table_name IN ('Users', 'o''rders')")
     expect(sql).toContain("LOWER(Table_name) IN ('users', 'o''rders')")
     expect(sql).toContain("Table_priv = 'Select'")
     expect(leftoverGrants(config, [])).not.toContain('Table_name IN')
@@ -147,12 +167,13 @@ describe('mysql apply checks A', () => {
 
   it('D119, A86: an account holding only GRANT OPTION (USAGE with IS_GRANTABLE) is a leftover and prints REVOKE GRANT OPTION', () => {
     const sql = leftoverGrants(config, [])
-    expect(sql).toContain("(PRIVILEGE_TYPE <> 'USAGE' OR IS_GRANTABLE = 'YES')")
-    expect(sql).toContain("'REVOKE GRANT OPTION'")
+    expect(sql).toContain("IF(Grant_priv = 'Y', 'GRANT OPTION', NULL)")
   })
 
-  it('D152: the allowed-grant exclusion compares the database name case-insensitively', () => {
-    expect(leftoverGrants(config, ['users'])).toContain("LOWER(Db) = LOWER('redacted')")
+  it('D168: the allowed-grant exclusion compares the database name exactly', () => {
+    const sql = leftoverGrants(config, ['users'])
+    expect(sql).toContain("Db = 'redacted' AND Table_priv = 'Select'")
+    expect(sql).not.toContain('LOWER(Db)')
   })
 
   it('A77: the pre-checks run in the order roles, mandatory roles, proxies, other accounts', () => {
@@ -217,9 +238,22 @@ describe('mysql apply checks A', () => {
       "'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%'' IGNORE UNKNOWN USER'",
     )
     expect(sql.indexOf('PREPARE')).toBeLessThan(sql.lastIndexOf('INSERT INTO'))
-    expect(sql).toContain("LOWER(Table_name) IN ('users')")
+    expect(sql).toContain("Table_name IN ('users')")
     for (const t of ['mysql.role_edges', 'mysql.proxies_priv', 'mandatory_roles', 'mysql.user'])
       expect(sql).toContain(t)
+  })
+
+  it('D166: the re-check starts from the could-not-run refusal, then the query, then the gated revoke, the flag and the insert', () => {
+    const lines = renderRecheck(config, ['users'])
+    expect(lines[0]).toBe(`SET @hyde_message = '${couldNotRunMessage('recheck')}';`)
+    expect(lines[1]).toMatch(/^SET @hyde_message = \(SELECT CONCAT\(/)
+    expect(lines[2]).toMatch(/^SET @hyde_sql = IF\(@hyde_message IS NULL, 'DO 0'/)
+    expect(lines.slice(-2)).toEqual(raiseRefusal())
+  })
+
+  it('D166: every apply check names itself in its could-not-run refusal', () => {
+    for (const c of [defaultDatabaseCheck, grantTableAccessCheck, resetReader, ...preChecks])
+      expect(c.render(config)).toContain(`SET @hyde_message = '${couldNotRunMessage(c.id)}';`)
   })
 
   it('D155, D117: the re-check sets the sticky refusal flag from the message', () => {

@@ -4,15 +4,20 @@ import {
   abortIf,
   abortWhenFound,
   account,
+  couldNotRunMessage,
   FIX_LIMIT,
   gated,
   MARKER_FIX,
   MARKER_VIEW,
   MESSAGE_LIMIT,
   markerGuard,
+  markerViewSql,
   NO_DATABASE_MESSAGE,
+  raiseRefusal,
+  refusalMessage,
   renderPrelude,
   renderTeardown,
+  SOURCE_FIX,
 } from '../../src/render/mysql-guards.ts'
 
 const config = {
@@ -45,7 +50,7 @@ describe('mysql script guards', () => {
   })
 
   it('D99: an abort is a failing insert into the temporary table, with no routine and no DELIMITER', () => {
-    const sql = abortIf('1 = 1', 'x.', 'y;').join('\n')
+    const sql = abortIf('t', '1 = 1', 'x.', 'y;').join('\n')
     expect(sql).toContain('INSERT INTO `hyde_db_abort`')
     expect(sql).not.toMatch(/DELIMITER|CREATE (PROCEDURE|FUNCTION)|SIGNAL/i)
     expect(ABORT_TABLE).toBe('hyde_db_abort')
@@ -54,7 +59,7 @@ describe('mysql script guards', () => {
 
   it('D99, D151: the abort message starts with hyde-db: and the limit is rendered from MESSAGE_LIMIT, the fix kept whole', () => {
     expect(MESSAGE_LIMIT).toBe(128)
-    const sql = abortIf('1 = 1', 'p', 'f').join('\n')
+    const sql = abortIf('t', '1 = 1', 'p', 'f').join('\n')
     expect(sql).toContain("CONCAT('hyde-db: '")
     expect(sql).toContain(
       `GREATEST(0, ${MESSAGE_LIMIT - 'hyde-db: '.length - ' Fix: '.length} - CHAR_LENGTH(f.fix))`,
@@ -63,14 +68,14 @@ describe('mysql script guards', () => {
   })
 
   it('D99: abortWhenFound records the first message in the refusal flag and aborts only when a row exists', () => {
-    const sql = abortWhenFound('SELECT 1 AS problem, 2 AS fix').join('\n')
+    const sql = abortWhenFound('t', 'SELECT 1 AS problem, 2 AS fix').join('\n')
     expect(sql).toContain('FROM (SELECT 1 AS problem, 2 AS fix) f LIMIT 1')
     expect(sql).toContain('SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);')
     expect(sql).toContain('WHERE @hyde_message IS NOT NULL')
   })
 
   it('D99: abortIf quotes the problem and the fix as literals and fires on the condition', () => {
-    const sql = abortIf('a = 1', "it's", "do 'x'").join('\n')
+    const sql = abortIf('t', 'a = 1', "it's", "do 'x'").join('\n')
     expect(sql).toContain("'it''s' AS problem")
     expect(sql).toContain("'do ''x''' AS fix")
     expect(sql).toContain('WHERE a = 1')
@@ -109,15 +114,77 @@ describe('mysql script guards', () => {
     expect(markerGuard.render(longer).join('\n')).toContain(`SCHEMA_NAME = '${'a'.repeat(64)}'`)
   })
 
-  it('D155: abortWhenFound emits the message SET, then the flag SET, then the INSERT, in that order', () => {
+  it('D155, D166: abortWhenFound emits the could-not-run message, the message query, the flag SET, then the INSERT, in that order', () => {
     // Cut-to-fit and gating at runtime are proven by the MySQL attack suite (Task 13+).
-    const lines = abortWhenFound('SELECT 1 AS problem, 2 AS fix')
-    expect(lines).toHaveLength(3)
-    expect(lines[0]).toMatch(/^SET @hyde_message = /)
-    expect(lines[1]).toBe('SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);')
-    expect(lines[2]).toMatch(/^INSERT INTO `hyde_db_abort`/)
-    expect(lines[0]).toContain(`${FIX_LIMIT} - CHAR_LENGTH(f.fix)`)
+    const lines = abortWhenFound('some-check', 'SELECT 1 AS problem, 2 AS fix')
+    expect(lines).toHaveLength(4)
+    expect(lines[0]).toBe(`SET @hyde_message = '${couldNotRunMessage('some-check')}';`)
+    expect(lines[1]).toMatch(/^SET @hyde_message = \(SELECT CONCAT\(/)
+    expect(lines[2]).toBe('SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);')
+    expect(lines[3]).toMatch(/^INSERT INTO `hyde_db_abort`/)
+    expect(lines[1]).toContain(`${FIX_LIMIT} - CHAR_LENGTH(f.fix)`)
     expect(FIX_LIMIT).toBe(113)
+  })
+
+  it('D166: the could-not-run refusal is a hyde-db message that names the check and fits 128 characters for every check id', () => {
+    expect(couldNotRunMessage('marker-guard')).toBe(
+      'hyde-db: check marker-guard could not run. Fix: run without --force and read the first error',
+    )
+    for (const id of [
+      'default-database',
+      'marker-guard',
+      'grant-table-access',
+      'reset-reader',
+      'roles',
+      'mandatory-roles',
+      'proxies',
+      'other-accounts',
+      'recheck',
+    ])
+      expect(couldNotRunMessage(id).length).toBeLessThanOrEqual(MESSAGE_LIMIT)
+  })
+
+  it('D166: refusalMessage is the SET of the first problem-and-fix row and raiseRefusal the flag and insert', () => {
+    expect(refusalMessage('SELECT 1 AS problem, 2 AS fix')).toMatch(
+      /^SET @hyde_message = \(SELECT CONCAT\(.*FROM \(SELECT 1 AS problem, 2 AS fix\) f LIMIT 1\);$/,
+    )
+    expect(raiseRefusal()).toHaveLength(2)
+  })
+
+  it('D165: the marker guard reads marker and source through the view itself, only after finding the view and both columns', () => {
+    const sql = markerGuard.render(config).join('\n')
+    expect(sql).toContain(
+      'SELECT `marker`, `source` INTO @hyde_marker, @hyde_source FROM `redacted`.`hyde_db_marker`',
+    )
+    expect(sql).toContain("c.COLUMN_NAME = 'source'")
+    expect(sql).not.toContain('VIEW_DEFINITION')
+  })
+
+  it('D165: the marker guard refuses a marker that names another source database, fix whole', () => {
+    const sql = markerGuard.render(config).join('\n')
+    expect(sql).toContain('BINARY @hyde_source <> BINARY DATABASE()')
+    expect(sql).toContain(
+      "CONCAT('database ', 'redacted', ' belongs to source database ', @hyde_source, '.')",
+    )
+    expect(sql).toContain(SOURCE_FIX)
+    expect(SOURCE_FIX).toBe('set "schema" to an unused name')
+    expect(SOURCE_FIX.length).toBeLessThanOrEqual(FIX_LIMIT)
+  })
+
+  it('D165: a marker without a source value is treated like a missing marker', () => {
+    const sql = markerGuard.render(config).join('\n')
+    expect(sql).toContain('@hyde_marker IS NULL OR @hyde_marker <> ')
+    expect(sql).toContain('@hyde_source IS NULL')
+  })
+
+  it('D165, D155: the marker DDL is built inside the gate from DATABASE(), quoted without backslash escapes', () => {
+    const lines = markerViewSql(config)
+    expect(lines[0]).toMatch(
+      /^SET @hyde_sql = IF\(@hyde_refused IS NULL, CONCAT\('CREATE DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW `redacted`\.`hyde_db_marker` AS SELECT ''Generated by hyde-db'' AS `marker`, ', /,
+    )
+    expect(lines[0]).toContain("REPLACE(DATABASE(), '''', '''''')")
+    expect(lines[0]).toContain("' AS `source`;'), 'DO 0');")
+    expect(lines.slice(1).map((l) => l.split(' ')[0])).toEqual(['PREPARE', 'EXECUTE', 'DEALLOCATE'])
   })
 
   it('Review Focus 1: gated emits SET, PREPARE, EXECUTE, DEALLOCATE in that order', () => {

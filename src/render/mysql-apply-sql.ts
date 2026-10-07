@@ -1,8 +1,8 @@
 // Renders the MySQL apply script in the order of D117 (D95): checks first, the views database
 // rebuilt behind the refusal flag (D155), the reader granted SELECT last, a final re-check that
 // revokes and aborts (D119). MySQL commits DDL and grants as it runs (A74), so ordering is the safety.
-import { BRAND, SCHEMA_MARKER } from '../brand.ts'
-import { quoteMysqlIdent as qi, quoteLiteral as ql } from '../sql.ts'
+import { BRAND } from '../brand.ts'
+import { quoteMysqlIdent as qi } from '../sql.ts'
 import type { MysqlConfig, View } from '../types.ts'
 import {
   defaultDatabaseCheck,
@@ -14,8 +14,8 @@ import {
 import {
   account,
   gated,
-  MARKER_VIEW,
   markerGuard,
+  markerViewSql,
   renderPrelude,
   renderTeardown,
 } from './mysql-guards.ts'
@@ -50,9 +50,7 @@ export function renderMysqlApplySql({ config, views }: Input): string {
     ...preChecks.flatMap((c) => c.render(config)),
     ...gated(`DROP DATABASE IF EXISTS ${S};`),
     ...gated(`CREATE DATABASE ${S};`),
-    ...gated(
-      `${DEFINER} ${S}.${qi(MARKER_VIEW)} AS SELECT ${ql(SCHEMA_MARKER)} AS ${qi('marker')};`,
-    ),
+    ...markerViewSql(config),
     ...views.flatMap((v) => gated(viewSql(config, v))),
     ...gated(`CREATE USER IF NOT EXISTS ${A} ACCOUNT LOCK;`),
     ...views.flatMap((v) => gated(`GRANT SELECT ON ${S}.${qi(v.name)} TO ${A};`)),
