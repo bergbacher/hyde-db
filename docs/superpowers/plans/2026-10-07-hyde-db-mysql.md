@@ -1012,7 +1012,7 @@ Mutates `package.json` and the lockfile (shared resources): serialized after Tas
   export function deploy(db: TestDb): ClientResult                        // runScript(db, db.files['redacted-views.sql'])
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // test/integration-mysql/harness.test.ts
@@ -1030,21 +1030,21 @@ it('A76: splitStatements keeps a ; inside a literal and a backtick name in one s
 ```
 `test/unit/integration-policy.test.ts`: the no-skip, no-`.start()` and no-`try`-around-container rules now iterate over `test/integration` and `test/integration-mysql`, and `test/integration-mysql/global-setup.ts` must call `await startServer(`.
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm test:integration:mysql` (script missing) and `pnpm vitest run --project unit test/unit/integration-policy.test.ts`.
+- [x] **Step 2: Run, expect FAIL:** `pnpm test:integration:mysql` (script missing) and `pnpm vitest run --project unit test/unit/integration-policy.test.ts`.
 
-- [ ] **Step 3: Implement.**
+- [x] **Step 3: Implement.**
   - `pnpm add -D @testcontainers/mysql@<same range as @testcontainers/postgresql>`.
   - `vitest.config.ts`: add `{ test: { name: 'integration-mysql', include: ['test/integration-mysql/**/*.test.ts'], globalSetup: ['test/integration-mysql/global-setup.ts'], testTimeout: 120_000, hookTimeout: 180_000 } }`.
   - `global-setup.ts`: `const image = process.env.MYSQL_IMAGE ?? 'mysql:9.7'`; `container = await startServer(() => new MySqlContainer(image).withRootPassword('hyde-root'))`; `project.provide('mysql', { containerId, rootPassword: 'hyde-root', image })`; no `try`/`catch`; teardown stops it (as the PostgreSQL one does, D22).
   - `db.ts`: `runScript` and `query` run `docker exec -i -e MYSQL_PWD=<pw> <id> mysql -u<user> [--force] -D<database> -N -B` with the script on stdin (as D43 does for psql); docker daemon failures (status 125 to 127) throw, like the PostgreSQL helper. Names: `app_<8 hex>` source database, `v_<8 hex>` views database, `r_<8 hex>` reader, because databases and accounts are server-wide; `createTestDb` loads a MySQL variant of the example tables, and `config` is passed as `{ schema: views, role: reader, ...options.config }`.
   - Add `README.md` "Development" mention later (Task 19).
 
-- [ ] **Step 4: Run on both servers**
+- [x] **Step 4: Run on both servers**
 
 Run: `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql && MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`
 Expected: PASS on both; `pnpm lint && pnpm typecheck && pnpm test:coverage` PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add package.json pnpm-lock.yaml vitest.config.ts test/integration-mysql test/unit/integration-policy.test.ts
@@ -1242,7 +1242,7 @@ git commit -m "test(mysql): stopping after each statement and running past error
 - Consumes: the packed tarball (`scripts/pack-e2e.mjs`), `example-mysql/` goldens (Task 12), the existing e2e helpers (`createProject`, `writeSchema`, `prisma`, `dbExecute`, `PRISMA_VERSIONS`). Read `test/e2e/helpers.mjs` and `test/e2e/generate.test.mjs` first and mirror their structure.
 - Produces: env var `E2E_MYSQL_DATABASE_URL` (Task 18 wires it in CI).
 
-- [ ] **Step 1: Write the failing tests** (per `PRISMA_VERSIONS`, as the PostgreSQL file does)
+- [x] **Step 1: Write the failing tests** (per `PRISMA_VERSIONS`, as the PostgreSQL file does)
 
 ```js
 it(`D103: prisma generate with provider "mysql" writes files identical to example-mysql/redacted (Prisma ${version})`, ...)
@@ -1257,18 +1257,18 @@ it(`D97: a MySQL generator block with sourceSchema fails prisma generate naming 
 ```
 Use a unique views database name per version run (`v6_e2e`, `v7_e2e`) so the two Prisma jobs on one server do not collide.
 
-- [ ] **Step 2: Run to see it fail**
+- [x] **Step 2: Run to see it fail**
 
 Run: `docker run --rm -d --name hyde-e2e-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=app -p 3306:3306 mysql:8.4`, wait until `docker exec hyde-e2e-mysql mysqladmin ping -proot` succeeds, then
 `E2E_PRISMA_VERSIONS=6.19.3 E2E_MYSQL_DATABASE_URL=mysql://root:root@127.0.0.1:3306/app pnpm test:e2e`
 Expected: FAIL until the helper and test exist.
 
-- [ ] **Step 3: Implement** the helper and test file, then run for both Prisma versions:
+- [x] **Step 3: Implement** the helper and test file, then run for both Prisma versions:
 
 Run: `E2E_PRISMA_VERSIONS=6.19.3,7.10.0 E2E_DATABASE_URL=<postgres url> E2E_MYSQL_DATABASE_URL=mysql://root:root@127.0.0.1:3306/app pnpm test:e2e`
 Expected: PASS (the PostgreSQL tests need their own server; start `postgres:18-alpine` the same way). Stop and remove the probe containers afterwards.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint` — PASS.
 
