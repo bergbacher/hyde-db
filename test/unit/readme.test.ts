@@ -1232,7 +1232,7 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
   it('D93, D151, D161, D165, D166: the refusal table lists exactly the problems the MySQL scripts can print, in script order, and says how they are built', () => {
     const problems: string[] = []
     const found =
-      /hyde-db: (no default database[^']*?\.) Fix:|SELECT CONCAT\('database ', '([^']*)', '([^']*)'\) AS problem|SELECT CONCAT\('database ', '([^']*)', ' belongs to source database ', @hyde_source, '\.'\)|SELECT '([^']+\.)'(?: AS problem|,)/g
+      /hyde-db: (no default database[^']*?\.) Fix:|SELECT CONCAT\('database ', '([^']*)', '([^']*)'\) AS problem|SELECT CONCAT\('database ', '([^']*)', ' belongs to source database ', @hyde_source, '\.'\)|SELECT CONCAT\('the marker view of ', '([^']*)', ' cannot be read\.'\)|SELECT '([^']+\.)'(?: AS problem|,)/g
     for (const m of mysqlApply.matchAll(found)) {
       // D165's problem names the marker's source database: the table's example uses `app`.
       const problem =
@@ -1241,10 +1241,12 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
           ? `database ${m[2]}${m[3]}`
           : m[4] !== undefined
             ? `database ${m[4]} belongs to source database app.`
-            : m[5])
+            : m[5] !== undefined
+              ? `the marker view of ${m[5]} cannot be read.`
+              : m[6])
       if (problem !== undefined && !problems.includes(problem)) problems.push(problem)
     }
-    expect(problems).toHaveLength(16)
+    expect(problems).toHaveLength(17)
     expect(problems).toContain('database redacted belongs to source database app.')
     const rows = refuses
       .split('\n')
@@ -1344,6 +1346,17 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
       expect(steps, phrase).toContain(phrase)
     }
     expect(mysqlApply).toContain('FROM mysql.user')
+  })
+
+  it('D169: the marker is read only from a DEFINER view, an unreadable marker is refused naming its definer, and the marker swap is a stated limit', () => {
+    expect(mysqlProse).toContain('only from a view created `SQL SECURITY DEFINER`')
+    expect(mysqlProse).toContain('swap the marker view between the marker check and its read')
+    expect(mysqlProse).toContain('`the marker view of redacted cannot be read.`')
+    expect(mysqlApply).toContain("SECURITY_TYPE = 'DEFINER'")
+    expect(mysqlApply).toContain('cannot be read.')
+    expect(readRepoFile('SECURITY.md')).toContain(
+      'swap the marker view between the marker check and its read',
+    )
   })
 
   it('D101, A104, A103, A78, A74, D155: states the guarantee, what a refused deploy leaves, what the reader sees, and that MySQL cannot be rolled back', () => {

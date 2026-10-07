@@ -107,6 +107,9 @@ export function gated(statement: string): string[] {
 export const MARKER_FIX: string = 'drop or rename it, or set "schema" to an unused name'
 
 /** The refusal for a marker that names another source database; the fix is kept whole (D165, D151). */
+/** The unreadable-marker fix when it would not fit with a long definer (D169, D161). */
+export const UNREADABLE_FIX = 're-create the marker definer or drop the database'
+
 export const SOURCE_FIX = 'set "schema" to an unused name'
 
 /**
@@ -143,11 +146,20 @@ export const markerGuard: MysqlCheck = {
     const read = `SELECT ${qi('marker')}, ${qi('source')} INTO @hyde_marker, @hyde_source FROM ${qi(config.schema)}.${qi(MARKER_VIEW)}`
     const columns = (name: string): string =>
       `EXISTS (SELECT 1 FROM information_schema.COLUMNS c WHERE c.TABLE_SCHEMA = ${v} AND c.TABLE_NAME = ${m} AND c.COLUMN_NAME = '${name}')`
+    // D169: only a DEFINER view is read; an INVOKER view, or one calling an INVOKER function, would
+    // run with the deployer's rights. SECURITY_TYPE and DEFINER are visible without SHOW VIEW (A106).
+    const viewRow = `FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ${v} AND TABLE_NAME = ${m} AND SECURITY_TYPE = 'DEFINER'`
+    const readable = `EXISTS (SELECT 1 ${viewRow}) AND ${columns('marker')} AND ${columns('source')}`
     const notOurs = `(@hyde_marker IS NULL OR @hyde_marker <> ${ql(SCHEMA_MARKER)} OR @hyde_source IS NULL)`
+    const unreadable = `(${readable} AND @hyde_marker IS NULL AND @hyde_source IS NULL)`
+    const definer = `(SELECT DEFINER ${viewRow})`
+    const named = `CONCAT('re-create its definer ', ${definer}, ' or drop database ', ${v})`
+    const same = (a: string, b: string): string =>
+      `CONVERT(${a} USING utf8mb4) COLLATE utf8mb4_bin <> CONVERT(${b} USING utf8mb4) COLLATE utf8mb4_bin`
     return [
       'SET @hyde_marker = NULL;',
       'SET @hyde_source = NULL;',
-      `SET @hyde_sql = IF(EXISTS (SELECT 1 FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ${v} AND TABLE_NAME = ${m}) AND ${columns('marker')} AND ${columns('source')}, ${ql(read)}, 'DO 0');`,
+      `SET @hyde_sql = IF(${readable}, ${ql(read)}, 'DO 0');`,
       'PREPARE hyde_stmt FROM @hyde_sql;',
       'EXECUTE hyde_stmt;',
       'DEALLOCATE PREPARE hyde_stmt;',
@@ -158,12 +170,17 @@ export const markerGuard: MysqlCheck = {
           `       ${ql(MARKER_FIX)} AS fix`,
           'FROM DUAL',
           `WHERE EXISTS (SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ${v})`,
-          `  AND ${notOurs}`,
+          `  AND ${notOurs} AND NOT ${unreadable}`,
+          'UNION ALL',
+          `SELECT CONCAT('the marker view of ', ${v}, ' cannot be read.'),`,
+          `       IF(CHAR_LENGTH(${named}) > ${FIX_LIMIT}, ${ql(UNREADABLE_FIX)}, ${named})`,
+          'FROM DUAL',
+          `WHERE ${unreadable}`,
           'UNION ALL',
           `SELECT CONCAT('database ', ${v}, ' belongs to source database ', @hyde_source, '.'),`,
           `       ${ql(SOURCE_FIX)}`,
           'FROM DUAL',
-          `WHERE NOT ${notOurs} AND BINARY @hyde_source <> BINARY DATABASE()`,
+          `WHERE NOT ${notOurs} AND ${same('@hyde_source', 'DATABASE()')}`,
         ].join('\n'),
       ),
     ]

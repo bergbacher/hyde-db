@@ -18,6 +18,7 @@ import {
   renderPrelude,
   renderTeardown,
   SOURCE_FIX,
+  UNREADABLE_FIX,
 } from '../../src/render/mysql-guards.ts'
 
 const config = {
@@ -162,13 +163,33 @@ describe('mysql script guards', () => {
 
   it('D165: the marker guard refuses a marker that names another source database, fix whole', () => {
     const sql = markerGuard.render(config).join('\n')
-    expect(sql).toContain('BINARY @hyde_source <> BINARY DATABASE()')
+    expect(sql).toContain(
+      'CONVERT(@hyde_source USING utf8mb4) COLLATE utf8mb4_bin <> CONVERT(DATABASE() USING utf8mb4) COLLATE utf8mb4_bin',
+    )
+    expect(sql).not.toMatch(/\bBINARY\b/)
     expect(sql).toContain(
       "CONCAT('database ', 'redacted', ' belongs to source database ', @hyde_source, '.')",
     )
     expect(sql).toContain(SOURCE_FIX)
     expect(SOURCE_FIX).toBe('set "schema" to an unused name')
     expect(SOURCE_FIX.length).toBeLessThanOrEqual(FIX_LIMIT)
+  })
+
+  it('D169: the marker is read only from a view that information_schema shows as SQL SECURITY DEFINER, so the deployer never runs a view body', () => {
+    const sql = markerGuard.render(config).join('\n')
+    const set = sql.split('\n').find((l) => l.startsWith('SET @hyde_sql')) ?? ''
+    expect(set).toContain("AND SECURITY_TYPE = 'DEFINER'")
+    expect(set.indexOf("SECURITY_TYPE = 'DEFINER'")).toBeLessThan(set.indexOf('INTO @hyde_marker'))
+  })
+
+  it('D169: a definer-view marker whose read left NULLs is reported as unreadable with a fix naming its definer, within the limits', () => {
+    const sql = markerGuard.render(config).join('\n')
+    expect(sql).toContain("' cannot be read.'")
+    expect(sql).toContain('re-create its definer ')
+    expect(sql).toContain(' or drop database ')
+    expect(sql).toContain('SELECT DEFINER FROM information_schema.VIEWS')
+    expect(sql).toContain(`> ${FIX_LIMIT}, '${UNREADABLE_FIX}'`)
+    expect(UNREADABLE_FIX.length).toBeLessThanOrEqual(FIX_LIMIT)
   })
 
   it('D165: a marker without a source value is treated like a missing marker', () => {

@@ -426,7 +426,7 @@ Run the drop, migrate and apply steps in this order, as under [every deploy](#ev
 
 The reader account must serve only as the hyde-db reader, because every apply and drop first revokes all its privileges, and MySQL cannot roll that back. <!-- D164, D119, A74 -->
 
-Run the scripts without `--force`: the gate on the statements from the database drop on protects only after a refusal. Since a check that fails to run refuses, only a statement that changes state can slip through: a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted. Likewise, an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached to it. <!-- D164, D155, D166, A74 -->
+Run the scripts without `--force`: the gate on the statements from the database drop on protects only after a refusal. Since a check that fails to run refuses, only a statement that changes state can slip through: a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted. Likewise, an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached to it. The same account can also swap the marker view between the marker check and its read. <!-- D164, D155, D166, A74, D169 -->
 
 With the `mysql` client, export `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_DATABASE` (the source database) and `MYSQL_PWD` from your secret store (never commit it). While one of the first three is unset or empty, the shell stops each `mysql` line and runs nothing. Each block chains its lines with `&&`, so a refused step stops the rest: <!-- D43, D68, D136, D163 -->
 
@@ -467,7 +467,7 @@ The apply script runs these steps in this order. Everything from the drop of the
 
 1. It pins `sql_mode` and sets `lock_wait_timeout` to 60. <!-- D117 -->
 2. It refuses a connection with no default database, and a default database equal to the views database. <!-- D117, D160, D152 -->
-3. It refuses an existing views database without the marker view `hyde_db_marker`, and one whose marker names another source database (the marker's second column `source`). <!-- D115, D117, D165 -->
+3. It refuses an existing views database without the marker view `hyde_db_marker`, and one whose marker names another source database (the marker's second column `source`). It reads the marker only from a view created `SQL SECURITY DEFINER`, so a view that would run with the deploying user's rights is never selected from, and it reports a marker it cannot read, such as one whose definer account was dropped, by naming that definer. A run with `mysql --force` shows this refusal; without it the failed read is the first error. <!-- D115, D117, D165, D169 -->
 4. It refuses when the deploying user cannot read the grant tables under `mysql.*`. <!-- A77, D117 -->
 5. It resets the reader with `REVOKE ALL PRIVILEGES, GRANT OPTION`, with `IGNORE UNKNOWN USER` because the account may not exist yet, and refuses when any grant is left; it reads the reader's static global privileges from the `*_priv` columns of `mysql.user`. <!-- D117, D119, A86, D168 -->
 6. It refuses a reader that holds roles or default roles, a server with a non-empty `mandatory_roles`, proxy grants of the reader, and other accounts a reader login could match. <!-- D117, D120, A77 -->
@@ -517,6 +517,7 @@ Every refusal is `hyde-db: <problem> Fix: <fix>`, at most 128 characters. When a
 | the connection selected no database | `no default database; the connection must select the source database.` | add the database name to the connection URL |
 | the default database is the views database, in any case | `the default database is the views database.` | connect to the source database, not `redacted` |
 | the views database exists without the marker view | `database redacted has no hyde-db marker view.` | drop or rename it, or set "schema" to an unused name |
+| the marker view exists but cannot be read, for example because its definer was dropped | `the marker view of redacted cannot be read.` | re-create its definer `'user'@'host'` or drop database `redacted` |
 | the views database belongs to another source database | `database redacted belongs to source database app.` | set "schema" to an unused name |
 | the deploying user cannot read the grant tables | `the deploying user cannot read the MySQL grant tables.` | `GRANT SELECT ON mysql.* TO 'deployer'@'%';` |
 | the reader holds a global privilege | `the reader has a global privilege.` | `REVOKE <privilege> ON *.* FROM 'redacted_reader'@'%';` |
