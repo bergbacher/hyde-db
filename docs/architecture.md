@@ -20,8 +20,8 @@ The source splits into one I/O module and a pure core.
 | `src/config.ts` | `validateConfig`, `DEFAULT_CONFIG`, `CONFIG_KEYS`. |
 | `src/sensitive.ts` | `isSensitiveName`: word-based detection of field and column names that look sensitive. |
 | `src/annotations.ts` | `readModelAnnotations`, `readFieldAnnotations`: parse `/// @hyde.*` doc comments. |
-| `src/analyze.ts` | Analysis rules: config validation, annotation parsing, sensitive lint, schema-conflict checks, view-name collision detection. Returns `Analysis { config, views, diagnostics, counts }`. |
-| `src/build.ts` | `build()`: calls `analyze`, then the three renderers; sets `files: null` when any diagnostic is an error. |
+| `src/analyze.ts` | Analysis: annotation parsing, sensitive lint and view-name collision detection, with config validation and the database's own rules (such as schema conflicts) reached through the dialect. Returns `Analysis { config, views, diagnostics, counts }`. <!-- D104, D114 --> |
+| `src/build.ts` | `build()`: resolves the provider to a dialect, calls `analyze`, then the dialect's three renderers; an unknown provider becomes a diagnostic, never a throw; sets `files: null` when any diagnostic is an error. <!-- D104, D114, D142, D159 --> |
 | `src/sql.ts` | SQL-quoting helpers: `quoteIdent`, `sqlName` (PostgreSQL), `quoteMysqlIdent`, `mysqlName` (MySQL), `quoteLiteral` (both). |
 | `src/cli-help.ts` | Command-line text and argument handling, pure so the I/O module stays thin. <!-- D5 --> |
 | `src/render/apply-sql.ts` | Renders the PostgreSQL `redacted-views.sql`: the full transaction — marker guard, dependents guard, schema drop and recreate, views, grants, session defaults, final check. |
@@ -65,11 +65,15 @@ Every file in `test/integration/` targets one or more of those rows: it sets up 
 MySQL commits DDL and grants as they run (it cannot roll them back), so `src/render/mysql-apply-sql.ts` emits a script that is safe by ordering: check, build the views, grant last, re-check, and revoke and abort on failure. <!-- D95, A74 -->
 
 1. The prelude pins `sql_mode` and `lock_wait_timeout`, clears the refusal flag, reports a missing default database and creates the abort table. <!-- D117, D160 -->
-2. Checks refuse before anything changes: the default database is the views database, the views database exists without the marker view, the deployer cannot read the grant tables, the reader's reset leaves a grant, and the pre-checks find roles, a non-empty `mandatory_roles`, proxies or other accounts a login could match. <!-- D117, D119, D120 -->
+2. Checks refuse before anything changes: the default database is the views database, the views database exists without the marker view or with a marker that names another source database, the deployer cannot read the grant tables, the reader's reset leaves a grant, and the pre-checks find roles, a non-empty `mandatory_roles`, proxies or other accounts a login could match. <!-- D117, D119, D120, D165 -->
 3. The views database is dropped and recreated, with the marker view and the views, the reader account is created only when missing, and the reader is granted `SELECT` on each view last. <!-- D115, D116, D117 -->
 4. The re-check runs every refusal again; on a finding it revokes the reader's grants and aborts. <!-- D117, D119 -->
 
-An abort is a failing insert of the message into a temporary table under strict mode: no routines, nothing left behind. The message is one problem and a fix within a length limit; a fix that does not fit falls back to a shorter statement. <!-- D99, D151, D161 --> Every statement from `DROP DATABASE` on, and the drop script's `DROP DATABASE`, is a gated statement: a prepared statement that executes only while the refusal flag is unset, so a client that runs past errors (`mysql --force`) cannot grant the reader access after a refusal. <!-- D155 -->
+The marker view records the source database (`DATABASE()` when the apply runs) in a second column `source`; the apply and drop scripts read it through the view and refuse a views database whose marker names another source database. <!-- D165, A105, A106 --> Every check first sets the abort message to a "could not run" refusal for that check and only then evaluates it, so a check whose query fails under `--force` refuses instead of passing silently. <!-- D166 --> The leftover-grant check reads the reader's static global privileges from the `*_priv` columns of `mysql.user`, not from `information_schema.USER_PRIVILEGES`, and the re-check's exception for the expected view grants compares `Db` exactly and `Table_name` exactly, or case-insensitively only when `lower_case_table_names` is not 0. <!-- D168 -->
+
+A table named `hyde_db_marker` or `hyde_db_abort` (the abort table, in any case) is the one generate-time rule: it is reported as `HYDE_VIEW_NAME_COLLISION`. <!-- D157, D167 -->
+
+An abort is a failing insert of the message into a temporary table under strict mode: no routines, nothing left behind. The message is one problem and a fix within a length limit; a fix that does not fit falls back to a shorter statement. <!-- D99, D151, D161 --> Every statement from `DROP DATABASE` on, and the drop script's `DROP DATABASE`, is a gated statement: a prepared statement that executes only while the refusal flag is unset, so a client that runs past errors (`mysql --force`) cannot grant the reader access after a refusal. The gate protects only after a refusal: a failing state-changing statement (such as a lock timeout on `DROP DATABASE`) can leave the previous views granted, so the scripts are run without `--force`. <!-- D155, D164 -->
 
 ### Adding a MySQL check
 

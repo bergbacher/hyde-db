@@ -63,8 +63,21 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
       'It holds as of each successful apply: a grant made later is not prevented, and the next apply refuses it.',
     )
     expect(sessionDefaults).toContain('are session defaults, not guarantees')
-    expect(prose).toContain(guarantee)
+    // D1, D95: the README's proof sentence is the PostgreSQL mechanism; SECURITY.md words it per dialect.
+    const proof = ' The apply script proves that against the live database before it commits.'
+    expect(guarantee).toContain(proof)
+    const [head = '', tail = ''] = guarantee?.split(proof) ?? []
+    expect(prose).toContain(head)
+    expect(prose).toContain(tail.trim())
+    expect(prose).not.toContain(proof)
+    expect(prose).toContain('On PostgreSQL the apply script proves that')
+    expect(prose).toContain('before it commits')
     expect(prose).toContain(sessionDefaults)
+  })
+
+  it('D93: labels the hardening checklist as PostgreSQL only', () => {
+    expect(CHECKLIST).toMatch(/^Run each step once\./m)
+    expect(CHECKLIST).toContain('These steps are for PostgreSQL')
   })
 
   it('D93, D34, D15, D50: lists exactly the README non-guarantees, in the same order', () => {
@@ -218,9 +231,55 @@ describe('SECURITY.md on MySQL (a view of LEDGER.md)', () => {
     expect(supported).toContain('MySQL 8.0')
   })
 
+  it('D164, A105, D165: says one source database and one generator block each need their own schema and role on a MySQL server', () => {
+    const text = mysqlGuarantee + mysqlLimits
+    expect(text).toContain('its own `schema` and `role`')
+    expect(text).toContain('both belong to the whole server')
+    expect(text).toContain('a second source database that uses the same `schema` is refused')
+    expect(text).toContain(
+      'a shared `role` is not detected and lets one reader read the views of both',
+    )
+  })
+
+  it('D164, D119, A74: says the reader account must serve only as the hyde-db reader, and why', () => {
+    expect(mysqlLimits).toContain('must serve only as the hyde-db reader')
+    expect(mysqlLimits).toContain('every apply and drop first revokes all its privileges')
+    expect(mysqlLimits).toContain('MySQL cannot roll that back')
+  })
+
+  it('D164, D155, A74: says the scripts run without --force and an account with CREATE VIEW or DROP can replace a view', () => {
+    expect(mysqlLimits).toContain('without `--force`')
+    expect(mysqlLimits).toContain('can leave the previous views granted')
+    expect(mysqlLimits).toContain(
+      'an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached',
+    )
+    expect(mysqlGuarantee).toContain('only after a refusal')
+  })
+
+  it('D154, D103: the MySQL attack suite claim is scoped to the paths of A77', () => {
+    expect(mysqlGuarantee).toContain("each path beyond the reader's direct grants")
+    expect(mysqlGuarantee).toContain(
+      'neutralised by the reset or refused with a working pasted fix',
+    )
+    expect(mysqlGuarantee).not.toContain('every path through which the reader could reach more')
+    expect(mysqlGuarantee).not.toMatch(/\bA77\b/)
+  })
+
   it('cites the MySQL records it states', () => {
     const cited = citedRecords(security)
-    for (const id of ['D101', 'A74', 'A78', 'A103', 'A104', 'D118', 'D120', 'D94']) {
+    for (const id of [
+      'D101',
+      'A74',
+      'A78',
+      'A103',
+      'A104',
+      'D118',
+      'D120',
+      'D94',
+      'D164',
+      'A105',
+      'D154',
+    ]) {
       expect(cited.has(id), id).toBe(true)
     }
   })

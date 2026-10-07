@@ -26,7 +26,7 @@ hyde-db runs on the Prisma, PostgreSQL, MySQL and Node.js versions listed in the
 
 ## What hyde-db guarantees
 
-The guarantee is the privilege setup, scoped to table data: `redacted_reader` can read no table data outside the generated views. The apply script proves that against the live database before it commits. It holds as of each successful apply: a grant made later is not prevented, and the next apply refuses it. <!-- D93, D1, D14, D132 -->
+The guarantee is the privilege setup, scoped to table data: `redacted_reader` can read no table data outside the generated views. On PostgreSQL the apply script proves that against the live database before it commits; on MySQL, which cannot roll back, it checks again after the grants and revokes them when that check fails. It holds as of each successful apply: a grant made later is not prevented, and the next apply refuses it. <!-- D93, D1, D14, D132 -->
 
 `redacted_reader` is the default reader role and `redacted` the default views schema; both follow the generator block's `role` and `schema`. The reader may be an AI tool or a person. <!-- D54, D53 -->
 
@@ -34,9 +34,9 @@ The guarantee is the privilege setup, scoped to table data: `redacted_reader` ca
 
 On MySQL the same guarantee reads: the reader account can read no table data outside the views, it sees no other database names or columns, and it holds as of each successful apply. `redacted_reader` is the default reader account and `redacted` the default views database. `role` names the account's user name, with `readerHost` its host; it is not a MySQL `ROLE`. <!-- D101, D132, D120, A78 -->
 
-MySQL commits DDL and grants as the script runs, so an apply cannot be rolled back. The script instead orders its steps: check, build the views, grant last, re-check, and on a failed re-check revoke the reader's grants and abort. A refused deploy never grants the reader more than before, but it may leave the views rebuilt without the reader grant. Each abort reports one problem and a fix. Statements from the database drop on run only while no check has refused, so a client that runs past errors (`mysql --force`) still cannot grant the reader access after a refusal. <!-- D101, A74, D95, D99, D155 -->
+MySQL commits DDL and grants as the script runs, so an apply cannot be rolled back. The script instead orders its steps: check, build the views, grant last, re-check, and on a failed re-check revoke the reader's grants and abort. A refused deploy never grants the reader more than before, but it may leave the views rebuilt without the reader grant. Each abort reports one problem and a fix. Statements from the database drop on run only while no check has refused, so a client that runs past errors (`mysql --force`) still cannot grant the reader access after a refusal. That protection starts only after a refusal, so run the scripts without `--force`: see the MySQL non-guarantees. <!-- D101, A74, D95, D99, D155, D164 -->
 
-The MySQL attack suite runs on MySQL 8.4 and 9.7; it covers every path through which the reader could reach more, proves that stopping the script after each statement never gives the reader more than its view grants, and pastes the printed fixes. <!-- D103, D94 -->
+The MySQL attack suite runs on MySQL 8.4 and 9.7; it covers each path beyond the reader's direct grants (global privileges, wildcard database names, roles, accounts on a more specific host or anonymous accounts, PROXY, routines with `EXECUTE`, PROCESS, REPLICATION SLAVE, FILE, CREATE USER and ROLE_ADMIN), proving each one neutralised by the reset or refused with a working pasted fix, proves that stopping the script after each statement never gives the reader more than its view grants, and pastes the printed fixes. <!-- D103, D154, A77, D94 -->
 
 ### How the PostgreSQL guarantee is enforced
 
@@ -70,12 +70,16 @@ The table above describes PostgreSQL. On MySQL:
 - Only per-account resource limits stick. Read-only and the statement timeout are session settings, and the reader can change them. <!-- D101, A78 -->
 - The reader sees server status and variables, and its own session, in `performance_schema`. `SHOW DATABASES` lists `information_schema`, `performance_schema` and the databases it has grants in, so it sees no other database names beyond those and the views database. <!-- A103 -->
 - After a refused apply the reader keeps any access it already had through granted roles, default roles, `mandatory_roles`, an account with the same user name on a more specific host such as `localhost`, or an anonymous account that matches its login, until the printed fix runs. The apply script resets only the reader's direct grants. <!-- D101, A104 -->
+- On one MySQL server, give each source database, and each generator block, its own `schema` and `role`: both belong to the whole server, not to one database. The marker view records its source database, so a second source database that uses the same `schema` is refused, but a shared `role` is not detected and lets one reader read the views of both. <!-- D164, A105, D165, D140 -->
+- The reader account must serve only as the hyde-db reader: every apply and drop first revokes all its privileges, and MySQL cannot roll that back. <!-- D164, D119, A74 -->
+- Run the scripts without `--force`. The gate on the statements from the database drop on protects only after a refusal. A check that fails to run refuses, but a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted. <!-- D164, D155, D166, A74 -->
+- As a limit of the same kind, an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached to it. <!-- D164, A74 -->
 - A server with a non-empty `mandatory_roles` is unsupported: apply refuses it, because every login would inherit those roles. <!-- D120 -->
 - Managed services are not tested end to end. RDS and Aurora are supported per provider documentation; Cloud SQL is expected to work, but whether its deployer can read the `mysql.*` grant tables is unconfirmed, and without that read access the apply refuses before any change with the fix. Azure Flexible works because the deployer is always the view definer. PlanetScale is unsupported. <!-- D118 -->
 
 ## Hardening checklist
 
-Run each step once.
+Run each step once. These steps are for PostgreSQL; MySQL has no counterpart to them.
 
 1. **Other databases in the cluster.** By default every role may connect to every database in the cluster, and the apply script cannot see other databases. For each other database, run the following. Roles that need such a database then need their own `GRANT CONNECT`. <!-- D15, A14 -->
 

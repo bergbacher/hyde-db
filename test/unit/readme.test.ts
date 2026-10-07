@@ -1229,20 +1229,38 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D93, D151, D161: the refusal table lists exactly the problems the MySQL scripts can print, in script order, and says how they are built', () => {
+  it('D93, D151, D161, D165, D166: the refusal table lists exactly the problems the MySQL scripts can print, in script order, and says how they are built', () => {
     const problems: string[] = []
     const found =
-      /hyde-db: (no default database[^']*?\.) Fix:|SELECT CONCAT\('database ', '([^']*)', '([^']*)'\) AS problem|SELECT '([^']+\.)'(?: AS problem|,)/g
+      /hyde-db: (no default database[^']*?\.) Fix:|SELECT CONCAT\('database ', '([^']*)', '([^']*)'\) AS problem|SELECT CONCAT\('database ', '([^']*)', ' belongs to source database ', @hyde_source, '\.'\)|SELECT '([^']+\.)'(?: AS problem|,)/g
     for (const m of mysqlApply.matchAll(found)) {
-      const problem = m[1] ?? (m[2] === undefined ? m[4] : `database ${m[2]}${m[3]}`)
+      // D165's problem names the marker's source database: the table's example uses `app`.
+      const problem =
+        m[1] ??
+        (m[2] !== undefined
+          ? `database ${m[2]}${m[3]}`
+          : m[4] !== undefined
+            ? `database ${m[4]} belongs to source database app.`
+            : m[5])
       if (problem !== undefined && !problems.includes(problem)) problems.push(problem)
     }
-    expect(problems).toHaveLength(15)
+    expect(problems).toHaveLength(16)
+    expect(problems).toContain('database redacted belongs to source database app.')
     const rows = refuses
       .split('\n')
       .filter((line) => /^\| [^|]+ \| `[^`]+` \|/.test(line))
       .map(cells)
-    expect(rows.map((row) => /`([^`]*)`/.exec(row[1] ?? '')?.[1])).toEqual(problems)
+    // D166: the last row is the one every check can print, so it has no place in the script order.
+    const problemOf = (row: string[]): string | undefined => /`([^`]*)`/.exec(row[1] ?? '')?.[1]
+    expect(rows.slice(0, -1).map(problemOf)).toEqual(problems)
+    expect(problemOf(rows[rows.length - 1] ?? [])).toBe('check <id> could not run.')
+    expect(rows[rows.length - 1]?.[2]).toContain('run without `--force` and read the first error')
+    expect(mysqlApply).toContain(
+      "'hyde-db: check default-database could not run. Fix: run without --force and read the first error'",
+    )
+    expect(
+      rows.find((row) => problemOf(row)?.includes('belongs to source database'))?.[2],
+    ).toContain('set "schema" to an unused name')
     for (const row of rows) expect(row[2]?.length, row[1]).toBeGreaterThan(0)
     for (const phrase of [
       '`hyde-db: <problem> Fix: <fix>`',
@@ -1256,6 +1274,76 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     }
     expect(refuses).toContain('GRANT SELECT ON mysql.* TO')
     expect(refuses).toContain('add the database name to the connection URL')
+  })
+
+  it('D164, A105, D165: one source database and one generator block each get their own schema and role, because both belong to the whole server', () => {
+    for (const phrase of [
+      'give each source database, and each generator block, its own `schema` and `role`',
+      'both belong to the whole server, not to one database',
+      'a second source database that uses the same `schema` is refused',
+      'a shared `role` is not detected and lets one reader read the views of both',
+    ]) {
+      expect(mysqlProse, phrase).toContain(phrase)
+    }
+    expect(mysql).toMatch(/<!--[^>]*\bA105\b[^>]*-->/)
+  })
+
+  it('D164, D119, A74: the reader account serves only as the hyde-db reader, because every apply and drop revokes all its privileges, which MySQL cannot roll back', () => {
+    for (const phrase of [
+      'must serve only as the hyde-db reader',
+      'every apply and drop first revokes all its privileges',
+      'MySQL cannot roll that back',
+      "never changes an existing account's lock state or password",
+    ]) {
+      expect(mysqlProse, phrase).toContain(phrase)
+    }
+    expect(mysqlApply).toContain('REVOKE ALL PRIVILEGES, GRANT OPTION FROM')
+    // It is said where `role` and `readerHost` are configured, and in the deploy text.
+    const config = section('Config on MySQL', '###')
+    expect(config).toContain('must serve only as the hyde-db reader')
+    expect(section('Deploy on MySQL', '###')).toContain('must serve only as the hyde-db reader')
+  })
+
+  it('D164, D155, A74: the MySQL scripts run without --force, and the README says why and what an account with CREATE VIEW can do', () => {
+    expect(mysqlShell.filter((line) => line.includes('--force'))).toEqual([])
+    for (const phrase of [
+      'Run the scripts without `--force`',
+      'protects only after a refusal',
+      'a check that fails to run refuses',
+      'a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted',
+      'an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached',
+    ]) {
+      expect(mysqlProse, phrase).toContain(phrase)
+    }
+  })
+
+  it('D164, A106, D165: the deployer needs SELECT on the views database to grant it, and not SHOW VIEW', () => {
+    for (const phrase of [
+      '`SELECT` on the views database, because `GRANT SELECT` on a view fails unless the granting account holds it',
+      '`SHOW VIEW` is not needed',
+    ]) {
+      expect(mysqlProse, phrase).toContain(phrase)
+    }
+    expect(mysqlProse).not.toContain('no others are used')
+  })
+
+  it('D165, D166, D167: the marker records its source database, and hyde_db_marker and hyde_db_abort are reserved table names', () => {
+    expect(mysqlProse).toContain('second column `source`')
+    expect(mysqlProse).toContain(
+      'refuse a views database whose marker names another source database',
+    )
+    expect(mysqlApply).toContain('AS `source`')
+    expect(mysqlProse).toContain('`hyde_db_marker` and `hyde_db_abort` are reserved table names')
+    expect(mysqlProse).toContain('`HYDE_VIEW_NAME_COLLISION`')
+    const steps = section('What the MySQL apply script does', '###')
+    for (const phrase of [
+      'marker names another source database',
+      'a "could not run" refusal',
+      'static global privileges from the `*_priv` columns of `mysql.user`',
+    ]) {
+      expect(steps, phrase).toContain(phrase)
+    }
+    expect(mysqlApply).toContain('FROM mysql.user')
   })
 
   it('D101, A104, A103, A78, A74, D155: states the guarantee, what a refused deploy leaves, what the reader sees, and that MySQL cannot be rolled back', () => {

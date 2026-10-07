@@ -7,7 +7,7 @@ generator redacted {
   output   = "./redacted" // redacted-views.sql, redacted-views-drop.sql, redacted-schema.md (commit these)
   // default = "hidden"  // unannotated fields are hidden (the default)
   strict   = "true"       // every field must be classified, so new columns fail CI until someone decides
-  // role = "redacted_reader"   schema = "redacted"   statementTimeout = "15s"
+  // role = "redacted_reader"   schema = "redacted"   readerHost = "%"
 }
 
 datasource db {
