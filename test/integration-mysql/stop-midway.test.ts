@@ -10,6 +10,7 @@ import {
   runScript,
   splitStatements,
   type TestDb,
+  unlockReader,
 } from './helpers/db.ts'
 
 const created: TestDb[] = []
@@ -88,8 +89,11 @@ describe.each(['first deploy', 're-apply'] as const)(
       const finalGrants = readerGrants(db)
       expect(finalGrants.length).toBeGreaterThan(0)
       expect(viewGrantLines(db, finalGrants)).toBe(true)
-      if (mode === 're-apply') resetToDeployed(db)
-      else resetToFresh(db)
+      if (mode === 're-apply') {
+        resetToDeployed(db)
+        // The realistic state: the one-time documented step has given the reader a password.
+        unlockReader(db, 'pw-reader')
+      } else resetToFresh(db)
 
       for (let k = 1; k <= statements.length; k++) {
         const prefix = `${statements.slice(0, k).join(';\n')};\n`
@@ -102,10 +106,12 @@ describe.each(['first deploy', 're-apply'] as const)(
           grants.filter((grant) => !finalGrants.includes(grant)),
           where,
         ).toEqual([])
-        if (mode === 're-apply') resetToDeployed(db)
-        else resetToFresh(db)
+        if (mode === 're-apply') {
+          resetToDeployed(db)
+          unlockReader(db, 'pw-reader')
+        } else resetToFresh(db)
       }
-    })
+    }, 300_000)
   },
 )
 
@@ -117,7 +123,11 @@ function viewsState(db: TestDb): string {
   const tables = sqlOk(
     `SELECT CONCAT(TABLE_NAME, ' ', TABLE_TYPE) FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db.views}' ORDER BY 1`,
   )
-  return `${exists}\n${tables}`
+  const sentinel =
+    exists === '1' && tables.includes('sentinel')
+      ? sqlOk(`SELECT x FROM \`${db.views}\`.sentinel`)
+      : ''
+  return `${exists}\n${tables}\n${sentinel}`
 }
 
 function readerAccounts(db: TestDb): number {
@@ -133,12 +143,20 @@ function prepareBase(db: TestDb, base: Base): void {
     sqlOk(`CREATE DATABASE \`${db.views}\`; CREATE TABLE \`${db.views}\`.t (a INT);`)
   } else if (base === 'deployed') {
     expect(deploy(db).status).toBe(0)
+    // A table only a rebuild would lose: an identical rebuild of the views is otherwise invisible.
+    sqlOk(
+      `CREATE TABLE \`${db.views}\`.sentinel (x INT); INSERT INTO \`${db.views}\`.sentinel VALUES (7);`,
+    )
   }
 }
 
 interface Injection {
   readonly name: string
   readonly bases: readonly Base[]
+  /** The refusal the run must report (the gate's problem text). */
+  readonly expect: string | RegExp
+  /** The injection needs the reader account to exist (a role, proxy or grant on it). */
+  readonly needsReader?: boolean
   /** Makes the next run refuse; returns the way to undo it and how to run the script. */
   readonly inject: (db: TestDb) => {
     undo?: () => void
@@ -153,6 +171,7 @@ const INJECTIONS: readonly Injection[] = [
   {
     // A deployment without a default database: create and select a database, then drop it.
     name: 'no default database (D160)',
+    expect: /no default database/,
     bases: ALL_BASES,
     inject: (db) => ({
       prefix: `CREATE DATABASE \`${db.name}_tmp\`; USE \`${db.name}_tmp\`; DROP DATABASE \`${db.name}_tmp\`;\n`,
@@ -160,16 +179,19 @@ const INJECTIONS: readonly Injection[] = [
   },
   {
     name: 'the default database is the views database (D117)',
+    expect: /the default database is the views database/,
     bases: ['deployed'],
     inject: () => ({ connectToViews: true }),
   },
   {
     name: 'a views database without the marker (D115)',
+    expect: /has no hyde-db marker view/,
     bases: ['foreign'],
     inject: () => ({}),
   },
   {
     name: 'the deployer cannot read the mysql grant tables (A77)',
+    expect: /cannot read the MySQL grant tables/,
     bases: ALL_BASES,
     inject: (db) => {
       const account = createAccount(db, {
@@ -185,6 +207,8 @@ const INJECTIONS: readonly Injection[] = [
   },
   {
     name: 'the reader has a role (D119)',
+    expect: /the reader has a role/,
+    needsReader: true,
     bases: ALL_BASES,
     inject: (db) => {
       const role = createRole(db)
@@ -194,6 +218,8 @@ const INJECTIONS: readonly Injection[] = [
   },
   {
     name: 'the reader takes part in a proxy grant (D119)',
+    expect: /the reader takes part in a proxy grant/,
+    needsReader: true,
     bases: ALL_BASES,
     inject: (db) => {
       const other = createAccount(db)
@@ -203,6 +229,7 @@ const INJECTIONS: readonly Injection[] = [
   },
   {
     name: 'another account could match a reader login (D119)',
+    expect: /another account could match a reader login/,
     bases: ALL_BASES,
     inject: (db) => {
       db.extras.push({ user: db.reader, host: '10.9.8.7' })
@@ -212,6 +239,7 @@ const INJECTIONS: readonly Injection[] = [
   },
   {
     name: 'mandatory_roles is set (D120)',
+    expect: /mandatory_roles is set/,
     bases: ALL_BASES,
     inject: (db) => {
       const role = createRole(db)
@@ -232,7 +260,7 @@ describe('D155, D95: a client that runs past errors (mysql --force) after a refu
       // The reader as a deployment may already have left it (deployed) or not at all.
       prepareBase(db, base)
       // Injection first: some of them (reader role, proxy) need the reader account to exist.
-      if (readerAccounts(db) === 0 && /reader/.test(injection.name)) {
+      if (readerAccounts(db) === 0 && injection.needsReader === true) {
         sqlOk(`CREATE USER '${db.reader}'@'${db.host}' ACCOUNT LOCK`)
       }
       const setup = injection.inject(db)
@@ -246,7 +274,7 @@ describe('D155, D95: a client that runs past errors (mysql --force) after a refu
           as: setup.as,
         })
         // The refusal (or the deployer's lack of rights) reached the client; status is not asserted.
-        expect(result.stderr).toContain('ERROR')
+        expect(result.stderr).toMatch(injection.expect)
         expect(readerGrants(db).filter((grant) => !grantsBefore.includes(grant))).toEqual([])
         expect(readerAccounts(db)).toBeLessThanOrEqual(accountsBefore)
         expect(viewsState(db)).toBe(stateBefore)
@@ -262,7 +290,7 @@ describe('D155, D95: a client that runs past errors (mysql --force) after a refu
     const result = runScript(db, applyScript(db), { force: true })
     expect(result.stderr).toContain('has no hyde-db marker')
     expect(sqlOk(`SELECT a FROM t`, { database: db.views })).toBe('')
-    expect(viewsState(db)).toBe('1\nt BASE TABLE')
+    expect(viewsState(db)).toBe('1\nt BASE TABLE\n')
     expect(readerGrants(db)).toEqual([])
   })
 })
