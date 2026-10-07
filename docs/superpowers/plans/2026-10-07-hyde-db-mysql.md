@@ -883,7 +883,7 @@ git commit -m "feat(mysql): apply script in the D117 order (D95, D115, D116, D11
   ```
   The generator passes `provider` (`activeProvider ?? provider`) to `build` as `{ provider }` when it is `postgresql` or `mysql`; any other provider keeps the existing `HYDE_UNSUPPORTED_PROVIDER` diagnostic and a PostgreSQL build.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // test/unit/dialects.test.ts additions
@@ -911,15 +911,15 @@ it('D97: sourceSchema on MySQL makes build return no files', () => {
 ```
 `test/generator/protocol.test.ts`: a `generate` request whose `datasources[0].activeProvider` is `mysql` writes MySQL files (apply script contains `hyde_db_marker`) and prints the success line; `provider: 'sqlite'` still fails with `HYDE_UNSUPPORTED_PROVIDER` whose message now says "only postgresql and mysql are supported". `test/unit/cli-help.test.ts`: the usage text mentions MySQL and the `readerHost` key.
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/dialects.test.ts test/generator`
+- [x] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/dialects.test.ts test/generator`
 
-- [ ] **Step 3: Implement** `mysqlDialect` (`validate: (raw) => validateConfig(raw, 'mysql')`, renderers from Tasks 8, 9, 10), register it in `DIALECTS`, and in `generate()` replace `provider !== 'postgresql'` by `provider !== 'postgresql' && provider !== 'mysql'` and pass `{ provider }` (or no option) to `build`. Update the usage text in `cli-help.ts` (the README test cross-checks it in Task 19; keep the PostgreSQL block byte-identical).
+- [x] **Step 3: Implement** `mysqlDialect` (`validate: (raw) => validateConfig(raw, 'mysql')`, renderers from Tasks 8, 9, 10), register it in `DIALECTS`, and in `generate()` replace `provider !== 'postgresql'` by `provider !== 'postgresql' && provider !== 'mysql'` and pass `{ provider }` (or no option) to `build`. Update the usage text in `cli-help.ts` (the README test cross-checks it in Task 19; keep the PostgreSQL block byte-identical).
 
-- [ ] **Step 4: Gates**
+- [x] **Step 4: Gates**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS; PostgreSQL goldens unchanged (`git diff --exit-code example test/fixtures`).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src test
