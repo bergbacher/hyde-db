@@ -6,7 +6,7 @@ hyde-db gives any reader, an AI tool or a person, read access to a Prisma-manage
 
 ## 2. Constraints & conventions
 
-- Plan: `docs/superpowers/plans/2026-10-07-hyde-db-mysql.md`; spec: `docs/superpowers/specs/2026-10-06-hyde-db-mysql-design.md`. The ledger wins over both. Never edit `LEDGER.md`; the controller records the plan's `## Proposed ledger records` (P1 to P12).
+- Plan: `docs/superpowers/plans/2026-10-07-hyde-db-mysql.md`; spec: `docs/superpowers/specs/2026-10-06-hyde-db-mysql-design.md`. The ledger wins over both. Never edit `LEDGER.md`; the plan's open choices are recorded as D148–D159.
 - Ledger-citation rule: cite record IDs (D.., A..) in test names and doc comments; add no decision of your own.
 - TDD: red test first, minimal code, green. Conventional Commits, one commit per task, ending with the attribution line the harness gives. Parallel agents in a wave do not commit; the ESW parent does.
 - Biome lint (`pnpm lint`). Strict TypeScript, ESM, core modules pure, only `src/generator.ts` does I/O (D5). Coverage at least 95% lines and branches in `src/` (D23).
@@ -15,11 +15,11 @@ hyde-db gives any reader, an AI tool or a person, read access to a Prisma-manage
 
 ## 3. Architecture decisions
 
-- Shared core plus a `Dialect` per database in an internal registry; `build`/`analyze` take `{ provider: 'postgresql' | 'mysql' }` as optional third argument, default `postgresql` (D104, D107, D114). Unknown provider: diagnostic, never a throw (D142, P12).
+- Shared core plus a `Dialect` per database in an internal registry; `build`/`analyze` take `{ provider: 'postgresql' | 'mysql' }` as optional third argument, default `postgresql` (D104, D107, D114). Unknown provider: diagnostic, never a throw (D142, D159).
 - `ResolvedConfig` is a union on `dialect`; the `mysql` member carries `readerHost` without `sourceSchema`/`statementTimeout`; `View.sourceSchema` is `null` on MySQL; `validateConfig(raw, dialect)` holds key sets and limits as data (D112, D113). MySQL keys: `schema` (64), `role` (32, the account user name), `readerHost` (default `%`); `sourceSchema`/`statementTimeout` are errors (D97, D120).
 - Quoting: backtick identifiers, only single quotes doubled in literals, under `SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES'` (D104).
 - Apply order (D117): pin mode and `lock_wait_timeout`; default-database check; marker guard (view `hyde_db_marker`, D115); `mysql.*` read check (A77); `REVOKE ALL PRIVILEGES, GRANT OPTION … IGNORE UNKNOWN USER` then verify (D119, A86); pre-check roles, `mandatory_roles`, proxies, other accounts; drop and recreate the views database, views `DEFINER = CURRENT_USER` (A75); create the account only if missing, `ACCOUNT LOCK`, no password (D116, A85); `GRANT SELECT` per view last; re-check, revoke and abort on failure.
-- Aborts: failing temporary-table insert, no routines, no `DELIMITER`, one problem and a fix of at most 128 characters (D99, A76). Statements from the database drop on are gated on a refusal flag (P8). Drop script: marker guard, revoke, `DROP DATABASE IF EXISTS` (D100, D121).
+- Aborts: failing temporary-table insert, no routines, no `DELIMITER`, one problem and a fix of at most 128 characters (D99, A76). Statements from the database drop on are gated on a refusal flag (D155). Drop script: marker guard, revoke, `DROP DATABASE IF EXISTS` (D100, D121).
 - Non-goals: MySQL 8.0, 26.x, MariaDB, PlanetScale; a deploy CLI; any runtime dependency; end-to-end testing of managed services (D94, D95, D118).
 - Docs state: D101 guarantees, D118 services, D120 `role` meaning and `mandatory_roles`, D112 union types may gain members. Release: `minor` changeset (D107); do not merge while the 1.0.0 `major` changeset is still pending.
 

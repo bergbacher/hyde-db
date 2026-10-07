@@ -8,7 +8,7 @@
 
 **Tech Stack:** TypeScript (strict, ESM), Vitest 5, Testcontainers (`@testcontainers/mysql`), `mysql:8.4` and `mysql:9.7` images, Prisma 6.19.3 and 7.10.0 for end to end, Biome, pnpm, Changesets.
 
-**Spec:** `docs/superpowers/specs/2026-10-06-hyde-db-mysql-design.md` (Approved, Gate 1 PASS, autonomy hands-off). Source of truth is `LEDGER.md`; where spec and ledger differ the ledger wins. This plan adds no decisions of its own: every choice the ledger does not settle is listed under `## Proposed ledger records` for the controller to record. Do not edit `LEDGER.md`.
+**Spec:** `docs/superpowers/specs/2026-10-06-hyde-db-mysql-design.md` (Approved, Gate 1 PASS, autonomy hands-off). Source of truth is `LEDGER.md`; where spec and ledger differ the ledger wins. This plan adds no decisions of its own: the choices the ledger did not settle are recorded as D148–D159. Do not edit `LEDGER.md`.
 
 ## Global Constraints
 
@@ -209,7 +209,7 @@ const RULES = {
   },
 } as const
 ```
-`readerHost` validates against `/^[A-Za-z0-9._%:/-]{1,60}$/` (Proposed record P2). A key in `rejected` yields `configKeyUnsupported` (not unknown-key, not did-you-mean); its value is never read. The invalid-value hint text uses `RULES[dialect].lengths`. `validateConfig` keeps its never-throws wrappers (hostile `Proxy`, `ownKeys`, getters).
+`readerHost` validates against `/^[A-Za-z0-9._%:/-]{1,60}$/` (D149). A key in `rejected` yields `configKeyUnsupported` (not unknown-key, not did-you-mean); its value is never read. The invalid-value hint text uses `RULES[dialect].lengths`. `validateConfig` keeps its never-throws wrappers (hostile `Proxy`, `ownKeys`, getters).
 
 - [ ] **Step 4: Run tests, lint, typecheck**
 
@@ -240,7 +240,7 @@ git commit -m "feat(config): per-dialect config rules as data and the MySQL conf
   ```ts
   /** Backtick-quotes an identifier, doubling embedded backticks (D104). */
   export function quoteMysqlIdent(name: string): string
-  /** A name as `redacted-schema.md` writes it for MySQL: always backtick-quoted (Proposed P3). */
+  /** A name as `redacted-schema.md` writes it for MySQL: always backtick-quoted (D150). */
   export function mysqlName(name: string): string
   ```
 
@@ -370,7 +370,7 @@ git commit -m "feat(core): resolve the provider to a dialect through an internal
 
 ### Task 5: MySQL script guards: prelude, abort mechanism, gated statements, marker guard (D99, D104, D115, D117)
 
-The pieces both MySQL scripts share. Messages are `hyde-db: <problem> Fix: <fix>` within 128 characters; the fix is kept whole and the problem is shortened (P4).
+The pieces both MySQL scripts share. Messages are `hyde-db: <problem> Fix: <fix>` within 128 characters; the fix is kept whole and the problem is shortened (D151).
 
 **Depends on:** Task 3, Task 4
 **Wave:** 3
@@ -545,7 +545,7 @@ it('D99: the printed fixes are written for the administrator session (default sq
 - [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/render-mysql-apply-checks.test.ts`
 
 - [ ] **Step 3: Implement.**
-  - Step 2: `abortWhenFound` over `SELECT <problem>, <fix> FROM DUAL WHERE DATABASE() IS NULL OR LOWER(DATABASE()) = '<v>'`, with a `CASE`: no default database gives problem `no default database; the connection must select the source database.` and fix `name the source database in the connection URL, or run USE <db>;`; equal to views gives problem `the default database is the views database.` and fix `connect to the source database, not <v>`. (`LOWER` is the conservative comparison, P5.)
+  - Step 2: `abortWhenFound` over `SELECT <problem>, <fix> FROM DUAL WHERE DATABASE() IS NULL OR LOWER(DATABASE()) = '<v>'`, with a `CASE`: no default database gives problem `no default database; the connection must select the source database.` and fix `name the source database in the connection URL, or run USE <db>;`; equal to views gives problem `the default database is the views database.` and fix `connect to the source database, not <v>`. (`LOWER` is the conservative comparison, D152.)
   - Step 4: refuse when `(SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME IN (<the nine grant tables>)) < 9`; problem `the deploying user cannot read the MySQL grant tables.`; fix `GRANT SELECT ON mysql.* TO ` + `CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(),'@',1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(),'@',-1)))` + `;`.
   - Step 5: the statement `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <A> IGNORE UNKNOWN USER;`, then `abortWhenFound(leftoverGrants(config, []) + ' ORDER BY rank LIMIT 1')`. `leftoverGrants` is a `UNION ALL` of: global (`information_schema.USER_PRIVILEGES WHERE GRANTEE = <A> AND PRIVILEGE_TYPE <> 'USAGE'`, fix `REVOKE <priv> ON *.* FROM <A>`), `mysql.global_grants` (`USER`, `HOST`, `PRIV`), `mysql.db` (fix ``REVOKE ALL ON `<REPLACE(Db,'`','``')>`.* FROM <A>``), `mysql.tables_priv` (excluding `Db = '<v>' AND Table_priv = 'Select' AND Table_name IN (<allowed>)` when `allowed` is non-empty), `mysql.columns_priv` (fix built per column: ``REVOKE Select (`c`), Insert (`c`) …``), `mysql.procs_priv` (fix ``REVOKE ALL ON <Routine_type> `db`.`name` FROM <A>``). Each row carries a fixed problem text and a `rank` so the first problem is stable.
   - Fix texts are pasted by an administrator in the default `sql_mode`, so they are built with `QUOTE()` and backtick doubling inside the SQL, not with the script's own literal rule.
@@ -622,7 +622,7 @@ it('Review Focus 5: with no views, the re-check allows no table grant at all', (
 
 - [ ] **Step 3: Implement.** Each pre-check is `abortWhenFound` over one source, each reporting the first offender (`ORDER BY` a stable key, `LIMIT 1`, one problem per run):
   - `roles`: `mysql.role_edges WHERE TO_USER = u AND TO_HOST = h` (fix ``REVOKE <QUOTE(FROM_USER)>@<QUOTE(FROM_HOST)> FROM <A>``) `UNION ALL` `mysql.default_roles WHERE USER = u AND HOST = h` (fix `ALTER USER <A> DEFAULT ROLE NONE;`).
-  - `mandatory-roles`: `WHERE @@GLOBAL.mandatory_roles <> ''`; problem `mandatory_roles is set; that is unsupported.`; fix `SET PERSIST mandatory_roles = '';` (D120; the fix is the administrator's statement, P6).
+  - `mandatory-roles`: `WHERE @@GLOBAL.mandatory_roles <> ''`; problem `mandatory_roles is set; that is unsupported.`; fix `SET PERSIST mandatory_roles = '';` (D120; the fix is the administrator's statement, D153).
   - `proxies`: `mysql.proxies_priv WHERE (User = u AND Host = h) OR (Proxied_user = u AND Proxied_host = h)`; fix `REVOKE PROXY ON <proxied> FROM <holder>` built with `QUOTE()`.
   - `other-accounts`: `mysql.user WHERE (User = u OR User = '') AND NOT (User = u AND Host = h)`; fix `DROP USER <QUOTE(User)>@<QUOTE(Host)>;`.
   - `renderRecheck`: set `@hyde_message` from `leftoverGrants(config, views)` UNION the four pre-check sources, then
@@ -1127,7 +1127,7 @@ git commit -m "test(mysql): attack suite for the deploy lifecycle, preconditions
 - Consumes: the Task 13 helpers.
 - Produces: nothing later tasks use; fixes land in `src/render/mysql-apply-checks.ts`.
 
-The matrix is table-driven, one row per path in A77. Each row sets up the path as the administrator, applies the script, then asserts one of two outcomes recorded in the row (P7): `neutralised`, where step 5's reset removes the path and the post-apply `readerGrants(db)` equals the view grants only; or `refused`, where the apply exits non-zero with `hyde-db:` and `Fix:` (message at most 128 characters), nothing about the views database changed beyond what D101 allows, pasting the printed fix as an administrator and applying again passes, and `readerGrants(db)` afterwards equals the view grants only. Before writing expected outcomes, probe each row once on both servers and record the observed class in the table; a path whose direct grant survives the reset must be `refused`.
+The matrix is table-driven, one row per path in A77. Each row sets up the path as the administrator, applies the script, then asserts one of two outcomes recorded in the row (D154): `neutralised`, where step 5's reset removes the path and the post-apply `readerGrants(db)` equals the view grants only; or `refused`, where the apply exits non-zero with `hyde-db:` and `Fix:` (message at most 128 characters), nothing about the views database changed beyond what D101 allows, pasting the printed fix as an administrator and applying again passes, and `readerGrants(db)` afterwards equals the view grants only. Before writing expected outcomes, probe each row once on both servers and record the observed class in the table; a path whose direct grant survives the reset must be `refused`.
 
 - [ ] **Step 1: Write the matrix test**
 
@@ -1449,10 +1449,10 @@ git commit -m "docs: MySQL in SECURITY.md and the architecture doc (D101, D104, 
 - Consumes: everything.
 - Produces: the release input for the version PR.
 
-- [ ] **Step 1: Check the release sequencing before writing the changeset**
+- [ ] **Step 1: Confirm 1.0.0 is versioned on `main`**
 
-Run: `git show main:package.json | grep '"version"' && ls .changeset && git log main --oneline -5`
-Expected: if `.changeset/first-release.md` (a `major` changeset) still exists on `main` or `package.json` is `0.0.0`, 1.0.0 has not been versioned yet: Changesets would fold both changesets into one `major` bump and 1.1.0 would never be produced. Stop and report this to the controller; do not merge. The controller decides whether to wait for the 1.0.0 version PR.
+Run: `git show origin/main:package.json | grep '"version"' && git ls-tree --name-only origin/main .changeset/`
+Expected: version `1.0.0` and no `first-release.md` (versioned in `bf56256`, tagged `v1.0.0`). A `minor` changeset then produces 1.1.0.
 
 - [ ] **Step 2: Write the changeset**
 
@@ -1498,24 +1498,13 @@ git commit -m "chore: add the 1.1.0 changeset for MySQL support (D107)"
 
 **Type consistency.** `MysqlCheck`, `abortWhenFound`, `abortIf`, `gated`, `account`, `renderPrelude`, `renderTeardown`, `markerGuard` (Task 5) are the names Tasks 6 to 10 use; `renderRecheck(config, views)` and `preChecks` (Task 7) are what Task 10 imports; `Dialect`, `dialectFor`, `DIALECTS` (Task 4) are what Task 11 extends; `validateConfig(raw, dialect)` and `DEFAULT_MYSQL_CONFIG` (Task 2) are used by Tasks 4, 11 and the README test in Task 19.
 
-## Proposed ledger records
+## Ledger records
 
-- **P1.** Test tooling for MySQL: the dev dependency is `@testcontainers/mysql` (same range as `@testcontainers/postgresql`); attack-suite scripts and queries run with the `mysql` client inside the container (as D43 does with `psql`), so no `mysql2` dependency; images `mysql:8.4` and `mysql:9.7`, selected by `MYSQL_IMAGE`; the suite lives in `test/integration-mysql/` as its own Vitest project run by `pnpm test:integration:mysql`, leaving `pnpm test:integration` PostgreSQL-only; CI job `attack-mysql`. Basis: D1, D22, D43, D95 (no runtime dependency, `mysql` client), D103.
-- **P2.** `readerHost` accepts `^[A-Za-z0-9._%:/-]{1,60}$` (at most 60 characters), so printed fixes naming the account fit D99's 128-character budget. Basis: D97, D99, D113 (limits held as data).
-- **P3.** On MySQL, `redacted-schema.md` writes every relation and column name backtick-quoted, always, so no reserved-word list has to be maintained. Basis: D104, D146's purpose (names written as SQL needs them), A98.
-- **P4.** MySQL abort messages are `hyde-db: <problem> Fix: <fix>`, at most 128 characters; when a dynamic name would exceed the limit the problem text is shortened and the fix kept whole; the fix text is written for the administrator's default `sql_mode` (`QUOTE()`, doubled backticks). Basis: D99, A76, D108's rule (every fix works when pasted).
-- **P5.** The default-database check compares `LOWER(DATABASE())` with the views database name, refusing a case-differing match too. Basis: D117, D12's purpose (the views database must differ from the source), `lower_case_table_names` behaviour.
-- **P6.** The printed fix for a non-empty `mandatory_roles` is `SET PERSIST mandatory_roles = '';`. Basis: D120 (unsupported, refused), D26 (every error carries a fix hint).
-- **P7.** D103's "every path in A77 is refused" is read as "no path leaves the reader with access": a path the step-5 reset removes is proven neutralised (reader grants equal the view grants after apply); a path the reset cannot remove is proven refused with a working pasted fix. The probe on both servers fixes each path's class. Basis: A77 (the reset strips every direct grant but not roles or PROXY), D117 steps 5 and 6, D103.
-- **P8.** Gated statements: every MySQL apply statement from `DROP DATABASE` on (database, views, account, grants) and the drop script's `DROP DATABASE` run through a prepared statement that executes only while a session flag recording the first refusal is unset, so a client that runs past errors (`mysql --force`) cannot grant the reader access or build into a database hyde-db did not create after a refusal. Basis: D58's rule for PostgreSQL (a refused script changes nothing under a client that runs past errors), D95 (grant last, abort on failure), A74 (no rollback), D101.
-- **P9.** A new diagnostic code `HYDE_CONFIG_KEY_UNSUPPORTED` (error, with fix hint) reports `sourceSchema` and `statementTimeout` on MySQL; `DiagnosticCode`, like `ResolvedConfig`, may gain members in minor releases; the README diagnostics reference lists it. Basis: D97 (errors with fix hints), D25, D26, D112.
-- **P10.** A model whose table is named `hyde_db_marker` is reported on MySQL as `HYDE_VIEW_NAME_COLLISION` with the marker view as the first holder of the name. Basis: D115, D114 (dialect-supplied analysis rules), D142.
-- **P11.** Module and file names: `src/dialects/index.ts` (the `Dialect` interface, the registry, `dialectFor`), `src/dialects/mysql.ts`, `src/render/acl-helpers.ts` and `src/render/final-checks.ts` (the D143 split, with `FINAL_CHECKS` rows 2 to 15), and `src/render/mysql-guards.ts`, `mysql-apply-checks.ts`, `mysql-apply-sql.ts`, `mysql-drop-sql.ts`, `mysql-markdown.ts`; fixtures `example-mysql/` and `test/fixtures/contract/mysql-features.prisma`. Basis: D5, D104, D114, D143.
-- **P12.** Unknown provider values passed to `build` or `analyze` by JavaScript callers return the existing `HYDE_UNSUPPORTED_PROVIDER` diagnostic and no files, never a throw; its message becomes "only postgresql and mysql are supported". Basis: D107, D142.
+The controller recorded this plan's open choices in `LEDGER.md` as D148–D159 (P1 → D148, P2 → D149, P3 → D150, P4 → D151, P5 → D152, P6 → D153, P7 → D154, P8 → D155, P9 → D156, P10 → D157, P11 → D158, P12 → D159). The plan cites them by ID.
 
 ## Plan Consistency
 
-No contradictions found. One release-sequencing risk is flagged in Task 21 step 1: if 1.0.0 has not been versioned on `main` (the `major` first-release changeset still pending), a `minor` changeset cannot produce 1.1.0.
+No contradictions found. The release-sequencing risk flagged during planning is resolved: 1.0.0 is versioned on `main` (`bf56256`) and the branch is based on it.
 
 ## Parallelization
 
