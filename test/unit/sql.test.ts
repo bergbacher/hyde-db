@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { quoteIdent, quoteLiteral, RESERVED_WORDS, sqlName } from '../../src/sql.ts'
+import {
+  mysqlName,
+  quoteIdent,
+  quoteLiteral,
+  quoteMysqlIdent,
+  RESERVED_WORDS,
+  sqlName,
+} from '../../src/sql.ts'
 
 describe('SQL quoting', () => {
   it('quotes identifiers and doubles embedded double quotes', () => {
@@ -70,5 +77,20 @@ describe('names as SQL needs them (D146)', () => {
     expect(RESERVED_WORDS.has('tablesample')).toBe(true)
     expect(RESERVED_WORDS.has('time')).toBe(false)
     for (const word of RESERVED_WORDS) expect(word, word).toMatch(/^[a-z_]+$/)
+  })
+})
+
+describe('D104: MySQL quoting', () => {
+  it('D104: wraps in backticks and doubles embedded backticks', () => {
+    expect(quoteMysqlIdent('users')).toBe('`users`')
+    expect(quoteMysqlIdent('we`ird')).toBe('`we``ird`')
+    expect(quoteMysqlIdent('a"b')).toBe('`a"b`')
+  })
+  it('D104: a MySQL literal only doubles single quotes; a backslash stays a backslash', () => {
+    expect(quoteLiteral("it's \\ ok")).toBe("'it''s \\ ok'")
+  })
+  it('D150: mysqlName always quotes', () => {
+    expect(mysqlName('order')).toBe('`order`')
+    expect(mysqlName('Users')).toBe('`Users`')
   })
 })
