@@ -63,14 +63,14 @@ A pure move. Output of every renderer stays byte-identical; no ledger-backed out
   ```
   Later tasks do not import these; the MySQL renderers copy the record shape (`{ id, render }`).
 
-- [ ] **Step 1: Capture the pre-move output as the oracle**
+- [x] **Step 1: Capture the pre-move output as the oracle**
 
 Write `/private/tmp/claude-501/-Users-rubens--superset-worktrees-hyde-db-veiled-editor/531b653f-2d5a-44bb-bc0e-fa285649862c/scratchpad/dump-pg.ts` (outside the repo) that, for the `example` and `loose` schemas plus three extra configs (`{schema:'a_b', role:'r_x', sourceSchema:'app', statementTimeout:'1min'}`, `{strict:'false', default:'visible'}`, max-length 63-character names) calls `build(...)` and writes all three output files per case to a directory given as argv. Run it from the repo with `node --experimental-strip-types` against the unmodified tree:
 
 Run: `node /private/tmp/claude-501/-Users-rubens--superset-worktrees-hyde-db-veiled-editor/531b653f-2d5a-44bb-bc0e-fa285649862c/scratchpad/dump-pg.ts /private/tmp/claude-501/-Users-rubens--superset-worktrees-hyde-db-veiled-editor/531b653f-2d5a-44bb-bc0e-fa285649862c/scratchpad/before`
 Expected: files written for 5 cases x 3 outputs.
 
-- [ ] **Step 2: Write the failing structure test**
+- [x] **Step 2: Write the failing structure test**
 
 ```ts
 // test/unit/render-final-checks.test.ts
@@ -90,16 +90,16 @@ describe('D143: the final check is an ordered list of check records', () => {
 })
 ```
 
-- [ ] **Step 3: Run it to see it fail**
+- [x] **Step 3: Run it to see it fail**
 
 Run: `pnpm vitest run --project unit test/unit/render-final-checks.test.ts`
 Expected: FAIL, cannot resolve `src/render/final-checks.ts`.
 
-- [ ] **Step 4: Move the code**
+- [x] **Step 4: Move the code**
 
 Move the helpers verbatim into `acl-helpers.ts` (export what `final-checks.ts` and `apply-sql.ts` use). In `final-checks.ts` turn the body of `renderFinalCheck` into `FINAL_CHECKS`: read `renderFinalCheck` top to bottom, split it at each `IF leaks ... END IF` group in README row order (row 2 role attributes, 3 ownership, 4 memberships, 5 schema creation, 6 catalog privileges, 7 relations, 8 foreign servers, 9 SECURITY DEFINER functions, 10 sequences, 11 default privileges, 12 create in schemas, 13 `lo_compat_privileges`, 14 large-object ACLs, 15 parameters) and give each block a record whose `render(ctx)` returns exactly the lines it emitted before, keeping the comments that explain it next to it. The shared locals (`role`, `abort`, `ownersAbort`, and the per-check consts such as `catalogLoan`, `readerSetting`) move into `CheckContext` or into the record that uses them. `renderFinalCheck` keeps the header comment lines and the DO block frame, and joins `FINAL_CHECKS.flatMap((c) => c.render(ctx))`. `apply-sql.ts` imports `renderFinalCheck` and drops the moved code. Do not change a single emitted character.
 
-- [ ] **Step 5: Verify the move is byte-identical**
+- [x] **Step 5: Verify the move is byte-identical**
 
 Run the dump script again into `.../scratchpad/after`, then:
 Run: `diff -r /private/tmp/claude-501/-Users-rubens--superset-worktrees-hyde-db-veiled-editor/531b653f-2d5a-44bb-bc0e-fa285649862c/scratchpad/before /private/tmp/claude-501/-Users-rubens--superset-worktrees-hyde-db-veiled-editor/531b653f-2d5a-44bb-bc0e-fa285649862c/scratchpad/after && echo IDENTICAL`
@@ -108,7 +108,7 @@ Expected: `IDENTICAL`.
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage`
 Expected: all green; `git status` shows no change under `example/` or `test/fixtures/`.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/render test/unit/render-final-checks.test.ts
@@ -145,7 +145,7 @@ git commit -m "refactor(render): split the apply renderer into ordered check rec
   ```
   `CONFIG_KEYS` and `DEFAULT_CONFIG` keep their PostgreSQL meaning and values (the help text and README tests use them).
 
-- [ ] **Step 1: Write the failing tests** (`test/unit/config.test.ts`, new `describe('D97, D113: MySQL config')`)
+- [x] **Step 1: Write the failing tests** (`test/unit/config.test.ts`, new `describe('D97, D113: MySQL config')`)
 
 ```ts
 const mysql = (raw: Record<string, unknown>) => validateConfig(raw, 'mysql')
@@ -182,12 +182,12 @@ it('D54: PostgreSQL behaviour is unchanged: readerHost is still an unknown key t
 ```
 Add `test/unit/diagnostics.test.ts` cases: `configKeyUnsupported('sourceSchema','mysql', hint)` is an error, location `config.sourceSchema`, message names the dialect, always carries a hint (D26).
 
-- [ ] **Step 2: Run to see them fail**
+- [x] **Step 2: Run to see them fail**
 
 Run: `pnpm vitest run --project unit test/unit/config.test.ts test/unit/diagnostics.test.ts`
 Expected: FAIL (`validateConfig` takes no dialect, no `configKeyUnsupported`).
 
-- [ ] **Step 3: Implement.** In `config.ts` hold the per-dialect rules as one data table consumed by the single validation loop (the existing loop becomes dialect-generic; its steps stay in the same order so PostgreSQL diagnostics are unchanged):
+- [x] **Step 3: Implement.** In `config.ts` hold the per-dialect rules as one data table consumed by the single validation loop (the existing loop becomes dialect-generic; its steps stay in the same order so PostgreSQL diagnostics are unchanged):
 
 ```ts
 interface DialectRules {
@@ -211,12 +211,12 @@ const RULES = {
 ```
 `readerHost` validates against `/^[A-Za-z0-9._%:/-]{1,60}$/` (D149). A key in `rejected` yields `configKeyUnsupported` (not unknown-key, not did-you-mean); its value is never read. The invalid-value hint text uses `RULES[dialect].lengths`. `validateConfig` keeps its never-throws wrappers (hostile `Proxy`, `ownKeys`, getters).
 
-- [ ] **Step 4: Run tests, lint, typecheck**
+- [x] **Step 4: Run tests, lint, typecheck**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage`
 Expected: PASS; PostgreSQL goldens untouched.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src test
@@ -244,7 +244,7 @@ git commit -m "feat(config): per-dialect config rules as data and the MySQL conf
   export function mysqlName(name: string): string
   ```
 
-- [ ] **Step 1: Write the failing tests** in `test/unit/sql.test.ts`
+- [x] **Step 1: Write the failing tests** in `test/unit/sql.test.ts`
 
 ```ts
 describe('D104: MySQL quoting', () => {
@@ -263,9 +263,9 @@ describe('D104: MySQL quoting', () => {
 })
 ```
 
-- [ ] **Step 2: Run, expect FAIL** (`quoteMysqlIdent` undefined): `pnpm vitest run --project unit test/unit/sql.test.ts`
+- [x] **Step 2: Run, expect FAIL** (`quoteMysqlIdent` undefined): `pnpm vitest run --project unit test/unit/sql.test.ts`
 
-- [ ] **Step 3: Implement**
+- [x] **Step 3: Implement**
 
 ```ts
 export function quoteMysqlIdent(name: string): string {
@@ -276,9 +276,9 @@ export function mysqlName(name: string): string {
 }
 ```
 
-- [ ] **Step 4: Run, lint, typecheck:** `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
+- [x] **Step 4: Run, lint, typecheck:** `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/sql.ts test/unit/sql.test.ts
