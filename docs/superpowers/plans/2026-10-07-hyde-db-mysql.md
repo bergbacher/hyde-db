@@ -1184,7 +1184,7 @@ git commit -m "test(mysql): every A77 path is neutralised or refused with a work
 - Consumes: `splitStatements`, `runScript`, `readerGrants`, `createTestDb`, `deploy` from Task 13.
 - Produces: nothing.
 
-- [ ] **Step 1: Write the tests**
+- [x] **Step 1: Write the tests**
 
 ```ts
 // For k = 1..N (N = splitStatements(apply).length), on a fresh test database each time:
@@ -1212,12 +1212,12 @@ it('A74, D101: a refused re-apply leaves the reader no more than before', ...)
 ```
 Both `re-apply` and `first deploy` iterate every statement on both server images. To bound runtime, each iteration builds its database from the example tables once and reuses a template where practical (`CREATE DATABASE … ` then loading tables is cheap on MySQL; keep it simple unless the suite exceeds the 30-minute CI limit, then run the iterations in `Promise.all` batches of 4).
 
-- [ ] **Step 2: Run on both servers**
+- [x] **Step 2: Run on both servers**
 
 Run: `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql -- test/integration-mysql/stop-midway.test.ts && MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql -- test/integration-mysql/stop-midway.test.ts`
 Expected: PASS. A failure names the statement index; fix it in `src/render/mysql-apply-sql.ts` or `mysql-apply-checks.ts` with a unit test first, then `pnpm golden` if output changed.
 
-- [ ] **Step 3: Gates and commit**
+- [x] **Step 3: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
@@ -1361,7 +1361,7 @@ git commit -m "ci: MySQL attack suite on 8.4 and 9.7 and MySQL end-to-end; ci-ok
 - Consumes: final behaviour from Tasks 5 to 16 (read the generated `example-mysql/redacted` files and the attack tests so every documented statement is one the tests prove).
 - Produces: README sections the SECURITY.md task links to (anchor names: `#mysql`, `#what-the-mysql-apply-script-refuses`).
 
-- [ ] **Step 1: Write the failing doc tests** in `test/unit/readme.test.ts`, in the file's own style (read it first: the tests parse the README tables and compare with code)
+- [x] **Step 1: Write the failing doc tests** in `test/unit/readme.test.ts`, in the file's own style (read it first: the tests parse the README tables and compare with code)
 
 ```ts
 it('D94, D87: Supported versions names MySQL 8.4 and 9.7 and says 8.0, 26.x and MariaDB are out', ...)
@@ -1378,15 +1378,15 @@ it('A74: says a MySQL deploy cannot be rolled back and that a refused deploy may
 it('D51: the diagnostics reference lists HYDE_CONFIG_KEY_UNSUPPORTED with its severity', ...)   // the existing "lists every code" test already fails until the row exists
 ```
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/readme.test.ts test/unit/cli-help.test.ts`
+- [x] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/readme.test.ts test/unit/cli-help.test.ts`
 
-- [ ] **Step 3: Write the docs.** In `README.md`: change the Supported versions MySQL bullet (supported: 8.4 and 9.7; the attack suite runs on both; out of scope: 8.0, innovation releases, MariaDB) and the intro and keywords; add a `## MySQL` section with: the config table (spec "Config on MySQL"); the apply script's ordered steps (spec "Apply script"); the reader login step (spec "Reader login") and the drop script; the guarantee points (spec "Guarantee on MySQL"); the supported-services paragraph (spec "Supported services"); the refusal table with each printed problem and fix and who runs it; deploy commands with `mysql` and `prisma db execute --file`, chained with `&&`, using `"${DATABASE_URL:?export DATABASE_URL first}"` style guards; `Development` section: how to run `pnpm test:integration:mysql` and the MySQL end-to-end URL. Add the `HYDE_CONFIG_KEY_UNSUPPORTED` row to the diagnostics reference. Cite records in `<!-- D.. -->` comments like the rest of the file. Update `src/cli-help.ts` usage only where the README test requires the two to agree.
+- [x] **Step 3: Write the docs.** In `README.md`: change the Supported versions MySQL bullet (supported: 8.4 and 9.7; the attack suite runs on both; out of scope: 8.0, innovation releases, MariaDB) and the intro and keywords; add a `## MySQL` section with: the config table (spec "Config on MySQL"); the apply script's ordered steps (spec "Apply script"); the reader login step (spec "Reader login") and the drop script; the guarantee points (spec "Guarantee on MySQL"); the supported-services paragraph (spec "Supported services"); the refusal table with each printed problem and fix and who runs it; deploy commands with `mysql` and `prisma db execute --file`, chained with `&&`, using `"${DATABASE_URL:?export DATABASE_URL first}"` style guards; `Development` section: how to run `pnpm test:integration:mysql` and the MySQL end-to-end URL. Add the `HYDE_CONFIG_KEY_UNSUPPORTED` row to the diagnostics reference. Cite records in `<!-- D.. -->` comments like the rest of the file. Update `src/cli-help.ts` usage only where the README test requires the two to agree.
 
-- [ ] **Step 4: Run, lint and the full unit gate**
+- [x] **Step 4: Run, lint and the full unit gate**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add README.md src/cli-help.ts test
@@ -1407,7 +1407,7 @@ git commit -m "docs(readme): MySQL support, config, deploy, guarantee and suppor
 - Consumes: the final code layout from Tasks 1 to 11.
 - Produces: nothing later tasks use.
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 // security-doc.test.ts
@@ -1421,11 +1421,11 @@ it('D86: the package description and keywords mention MySQL', ...)
 ```
 `docs/architecture.md` has a test (find it with `grep -rn architecture test/unit`); if there is none, add `test/unit/architecture-doc.test.ts` asserting that every module file under `src/` is listed in the module table and that the test-layer table names `pnpm test:integration:mysql`.
 
-- [ ] **Step 2: Run, expect FAIL.**
+- [x] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Write the docs.** `SECURITY.md`: MySQL scope in "What hyde-db guarantees" and "What hyde-db does not guarantee" (as D101, A78, D118, D120; the PostgreSQL text stays), supported versions line unchanged (D133). `docs/architecture.md`: add the new modules to the module table (`src/dialects/index.ts`, `src/dialects/mysql.ts`, `src/render/final-checks.ts`, `src/render/acl-helpers.ts`, `src/render/mysql-guards.ts`, `src/render/mysql-apply-checks.ts`, `src/render/mysql-apply-sql.ts`, `src/render/mysql-drop-sql.ts`, `src/render/mysql-markdown.ts`), replace "Prepared as the hook for the 1.1.0 MySQL dialect" with the registry description (D104, D114), update the dependency direction and "The final check" section (it is now `FINAL_CHECKS` in `src/render/final-checks.ts`, D143) and add a "The MySQL apply script" section (order, abort mechanism, gated statements) and the MySQL rows to the test-layer table (attack suite on MySQL 8.4 and 9.7 via `pnpm test:integration:mysql`, stop-midway proof, MySQL end to end). Update the "Adding a final-check row" steps to name `FINAL_CHECKS`. `package.json`: description "… read-only PostgreSQL or MySQL views …", keyword `mysql`.
+- [x] **Step 3: Write the docs.** `SECURITY.md`: MySQL scope in "What hyde-db guarantees" and "What hyde-db does not guarantee" (as D101, A78, D118, D120; the PostgreSQL text stays), supported versions line unchanged (D133). `docs/architecture.md`: add the new modules to the module table (`src/dialects/index.ts`, `src/dialects/mysql.ts`, `src/render/final-checks.ts`, `src/render/acl-helpers.ts`, `src/render/mysql-guards.ts`, `src/render/mysql-apply-checks.ts`, `src/render/mysql-apply-sql.ts`, `src/render/mysql-drop-sql.ts`, `src/render/mysql-markdown.ts`), replace "Prepared as the hook for the 1.1.0 MySQL dialect" with the registry description (D104, D114), update the dependency direction and "The final check" section (it is now `FINAL_CHECKS` in `src/render/final-checks.ts`, D143) and add a "The MySQL apply script" section (order, abort mechanism, gated statements) and the MySQL rows to the test-layer table (attack suite on MySQL 8.4 and 9.7 via `pnpm test:integration:mysql`, stop-midway proof, MySQL end to end). Update the "Adding a final-check row" steps to name `FINAL_CHECKS`. `package.json`: description "… read-only PostgreSQL or MySQL views …", keyword `mysql`.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
@@ -1449,12 +1449,12 @@ git commit -m "docs: MySQL in SECURITY.md and the architecture doc (D101, D104, 
 - Consumes: everything.
 - Produces: the release input for the version PR.
 
-- [ ] **Step 1: Confirm 1.0.0 is versioned on `main`**
+- [x] **Step 1: Confirm 1.0.0 is versioned on `main`**
 
 Run: `git show origin/main:package.json | grep '"version"' && git ls-tree --name-only origin/main .changeset/`
 Expected: version `1.0.0` and no `first-release.md` (versioned in `bf56256`, tagged `v1.0.0`). A `minor` changeset then produces 1.1.0.
 
-- [ ] **Step 2: Write the changeset**
+- [x] **Step 2: Write the changeset**
 
 ```md
 ---
@@ -1464,7 +1464,7 @@ Expected: version `1.0.0` and no `first-release.md` (versioned in `bf56256`, tag
 MySQL support. With a datasource `provider = "mysql"`, hyde-db generates a portable MySQL apply script, a drop script and a Markdown description of the views, with the same three output files and the same deploy workflow as PostgreSQL; it runs with the `mysql` client and `prisma db execute`. MySQL commits DDL and grants as it runs, so the script checks first, grants last, re-checks, and revokes the reader and aborts if the final check fails. New MySQL config key `readerHost`; `sourceSchema` and `statementTimeout` are errors on MySQL (new diagnostic `HYDE_CONFIG_KEY_UNSUPPORTED`). `build` and `analyze` take an optional third argument `{ provider: 'postgresql' | 'mysql' }` (default `postgresql`); the exported `ResolvedConfig` union gains a `mysql` member and `DiagnosticCode` gains a code, which minor releases may do. Supports MySQL 8.4 and 9.7; MySQL 8.0, innovation releases and MariaDB are not supported.
 ```
 
-- [ ] **Step 3: Run every gate**
+- [x] **Step 3: Run every gate**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage && pnpm build`
 Expected: PASS, coverage at least 95% lines and branches.
@@ -1481,7 +1481,7 @@ Expected: PASS for Prisma 6.19.3 and 7.10.0.
 Run: `git diff --exit-code main -- example test/fixtures/characterization`
 Expected: no output (existing goldens byte-identical).
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add .changeset/hyde-db-mysql.md
