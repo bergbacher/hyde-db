@@ -1,9 +1,9 @@
 // The packed tarball under real `prisma generate` and `prisma db execute` with provider = "mysql"
 // on Prisma 6 and 7 (D20, D30, D43, D103).
 import assert from 'node:assert/strict'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { before, describe, it } from 'node:test'
+import { after, before, describe, it } from 'node:test'
 import {
   createProject,
   dbExecute,
@@ -47,24 +47,82 @@ INSERT INTO orders (user_id, total_cents, placed_at, shipping_address)
 INSERT INTO api_keys (id, secret) VALUES (1, 'sk_live_example');
 `
 
+/** Quotes a string for a SQL literal (single quotes doubled). */
+const lit = (value) => `'${value.replaceAll("'", "''")}'`
+
+/**
+ * Assertions as SQL (A76: \`prisma db execute\` drops result sets, so only an error can report a
+ * mismatch). Each check is a temporary table whose one NOT NULL column carries the check's name;
+ * the INSERT ... SELECT yields NULL, and so fails under strict mode, exactly when the condition
+ * is not true (the D99 technique). \`checks\` maps a name to a SQL condition.
+ */
+function assertionSql(checks) {
+  const lines = ["SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';"]
+  for (const [name, condition] of Object.entries(checks)) {
+    lines.push(
+      'DROP TEMPORARY TABLE IF EXISTS `e2e_check`;',
+      `CREATE TEMPORARY TABLE \`e2e_check\` (\`${name}\` INT NOT NULL);`,
+      `INSERT INTO \`e2e_check\` SELECT NULL FROM DUAL WHERE NOT COALESCE((${condition}), 0);`,
+    )
+  }
+  lines.push('DROP TEMPORARY TABLE IF EXISTS `e2e_check`;')
+  return lines.join('\n')
+}
+
+/** Conditions on what the reader holds, as the mysql.* grant tables see it. */
+function noGrants(reader) {
+  const r = lit(reader)
+  return {
+    reader_has_no_table_grants: `(SELECT COUNT(*) FROM mysql.tables_priv WHERE User = ${r}) = 0`,
+    reader_has_no_column_grants: `(SELECT COUNT(*) FROM mysql.columns_priv WHERE User = ${r}) = 0`,
+    reader_has_no_db_grants: `(SELECT COUNT(*) FROM mysql.db WHERE User = ${r}) = 0`,
+    reader_has_no_global_grants: `(SELECT COUNT(*) FROM mysql.global_grants WHERE USER = ${r}) = 0
+      AND (SELECT COUNT(*) FROM information_schema.USER_PRIVILEGES
+           WHERE GRANTEE = CONCAT(QUOTE(${r}), '@', QUOTE('%')) AND PRIVILEGE_TYPE <> 'USAGE') = 0`,
+  }
+}
+
 for (const version of PRISMA_VERSIONS) {
   describe(`MySQL, Prisma ${version}`, () => {
-    // One views database per Prisma version, so two jobs on one server do not collide.
-    const views = `v${version.split('.')[0]}_e2e`
+    // Everything the version touches is its own, so the Prisma 6 and 7 runs can share one server:
+    // the views database, the reader account and a source database holding the example tables.
+    const major = version.split('.')[0]
+    const views = `v${major}_e2e`
+    const reader = `e2e_reader_v${major}`
+    const source = `v${major}_e2e_src`
     const url = mysqlDatabaseUrl
+    /** The configured URL with the per-version source database as its default database (D160). */
+    const sourceUrl = () => {
+      const u = new URL(url())
+      u.pathname = `/${source}`
+      return u.toString()
+    }
     let dir
-    const exec = (opts) => dbExecute(dir, version, { ...opts, url: url() })
+    const execAt = (target, opts) => dbExecute(dir, version, { ...opts, url: target })
+    const exec = (opts) => execAt(sourceUrl(), opts)
     const generate = (source, extra = {}) => {
       writeSchema(dir, version, source)
       return prisma(dir, ['generate'], { url: url(), ...extra })
     }
-    const named = () => example.replace(CONFIG_LINE, `schema = "${views}"`)
+    const named = () => example.replace(CONFIG_LINE, `schema = "${views}"\n  role   = "${reader}"`)
     const apply = () => join('prisma', 'redacted', 'redacted-views.sql')
     const drop = () => join('prisma', 'redacted', 'redacted-views-drop.sql')
 
     before(() => {
       url() // fail before the slow install, not after
-      dir = createProject(`m${version.split('.')[0]}`, [`prisma@${version}`])
+      dir = createProject(`m${major}`, [`prisma@${version}`])
+      writeSchema(dir, version, example) // Prisma 6 db execute reads the datasource from the schema
+      const created = execAt(url(), { stdin: `CREATE DATABASE IF NOT EXISTS \`${source}\`;` })
+      assert.equal(created.status, 0, created.output)
+    })
+
+    after(() => {
+      // Best effort and idempotent (D121): drop script, the reader account, the source database.
+      if (!dir) return
+      if (existsSync(join(dir, drop()))) exec({ file: drop() })
+      execAt(url(), {
+        stdin: `DROP USER IF EXISTS ${lit(reader)}@'%';\nDROP DATABASE IF EXISTS \`${views}\`;\nDROP DATABASE IF EXISTS \`${source}\`;`,
+      })
     })
 
     it(`D103: prisma generate with provider "mysql" writes files identical to example-mysql/redacted (Prisma ${version})`, () => {
@@ -88,6 +146,29 @@ for (const version of PRISMA_VERSIONS) {
       assert.equal(first.status, 0, first.output)
       const again = exec({ file: apply() })
       assert.equal(again.status, 0, `re-apply: ${again.output}`)
+
+      // Exit codes alone prove little: check what the apply left behind, as SQL that aborts on a mismatch.
+      const v = lit(views)
+      const r = lit(reader)
+      const verify = exec({
+        stdin: assertionSql({
+          views_are_exactly_the_expected_ones: `(SELECT GROUP_CONCAT(TABLE_NAME ORDER BY TABLE_NAME) FROM information_schema.VIEWS WHERE TABLE_SCHEMA = ${v}) = 'hyde_db_marker,orders,users'`,
+          users_view_has_exactly_the_visible_columns: `(SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${v} AND TABLE_NAME = 'users') = 'id,created_at,country,plan'`,
+          orders_view_has_exactly_the_visible_columns: `(SELECT GROUP_CONCAT(COLUMN_NAME ORDER BY ORDINAL_POSITION) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${v} AND TABLE_NAME = 'orders') = 'id,user_id,total_cents,placed_at'`,
+          no_hidden_column_in_any_view: `(SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${v} AND COLUMN_NAME IN ('email', 'password_hash', 'full_name', 'shipping_address', 'secret')) = 0`,
+          reader_has_select_on_each_view_and_nothing_else_in_tables_priv: `(SELECT GROUP_CONCAT(CONCAT(Db, '.', Table_name, ':', Table_priv, ':', Column_priv) ORDER BY Table_name) FROM mysql.tables_priv WHERE User = ${r}) = CONCAT(${v}, '.orders:Select:,', ${v}, '.users:Select:')`,
+          reader_has_no_column_grants: `(SELECT COUNT(*) FROM mysql.columns_priv WHERE User = ${r}) = 0`,
+          reader_has_no_db_grants: `(SELECT COUNT(*) FROM mysql.db WHERE User = ${r}) = 0`,
+          reader_has_no_global_grants: noGrants(reader).reader_has_no_global_grants,
+          reader_exists: `(SELECT COUNT(*) FROM mysql.user WHERE User = ${r}) = 1`,
+        }),
+      })
+      assert.equal(verify.status, 0, `the apply left the wrong state: ${verify.output}`)
+
+      // Negative control: a false assertion must fail, or the checks above could pass vacuously.
+      const control = exec({ stdin: assertionSql({ control_that_must_fail: '1 = 0' }) })
+      assert.notEqual(control.status, 0, 'db execute swallowed a failing assertion')
+      assert.match(control.output, /control_that_must_fail/)
     })
 
     it(`D103, D117: the apply refuses a database without the marker and prints the hyde-db message (Prisma ${version})`, () => {
@@ -120,6 +201,13 @@ for (const version of PRISMA_VERSIONS) {
       assert.equal(dropped.status, 0, dropped.output)
       const again = exec({ file: drop() })
       assert.equal(again.status, 0, `second drop: ${again.output}`)
+      const bare = exec({
+        stdin: assertionSql({
+          views_database_is_gone: `(SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ${lit(views)}) = 0`,
+          ...noGrants(reader),
+        }),
+      })
+      assert.equal(bare.status, 0, `the drop left the reader with grants: ${bare.output}`)
       const created = exec({ stdin: `CREATE DATABASE \`${views}\`;` })
       assert.equal(created.status, 0, `the views database was not dropped: ${created.output}`)
       const cleaned = exec({ stdin: `DROP DATABASE \`${views}\`;` })
