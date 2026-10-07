@@ -1,0 +1,69 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+generator redacted {
+  provider = "hyde-db"
+  output   = "./redacted" // redacted-views.sql, redacted-views-drop.sql, redacted-schema.md (commit these)
+  // default = "hidden"  // unannotated fields are hidden (the default)
+  strict   = "true"       // every field must be classified, so new columns fail CI until someone decides
+  // role = "redacted_reader"   schema = "redacted"   statementTimeout = "15s"
+}
+
+datasource db {
+  provider = "mysql"
+  // Prisma 6: url = env("DATABASE_URL")   (Prisma 7: set it in prisma.config.ts)
+}
+
+/// A customer account.
+model User {
+  /// @hyde.visible
+  id           Int       @id @default(autoincrement())
+  /// @hyde.visible
+  createdAt    DateTime  @default(now()) @map("created_at")
+  /// @hyde.hidden
+  email        String    @unique
+  /// @hyde.hidden
+  passwordHash String    @map("password_hash")
+  /// @hyde.hidden
+  fullName     String    @map("full_name")
+  /// @hyde.visible
+  /// ISO 3166 country code
+  country      String
+  /// @hyde.visible
+  plan         Plan
+  orders       Order[]
+
+  @@map("users")
+}
+
+model Order {
+  /// @hyde.visible
+  id         Int      @id @default(autoincrement())
+  /// @hyde.visible
+  userId     Int      @map("user_id")
+  user       User     @relation(fields: [userId], references: [id])
+  /// @hyde.visible
+  /// Total in cents
+  totalCents Int      @map("total_cents")
+  /// @hyde.visible
+  placedAt   DateTime @map("placed_at")
+  /// @hyde.hidden
+  shippingAddress String @map("shipping_address")
+
+  @@map("orders")
+}
+
+/// Internal only, never exposed.
+/// @hyde.exclude
+model ApiKey {
+  id     Int    @id
+  secret String
+
+  @@map("api_keys")
+}
+
+enum Plan {
+  FREE
+  PRO
+}

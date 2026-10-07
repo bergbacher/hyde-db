@@ -8,6 +8,7 @@ const FIXTURES = {
   example: readRepoFile('example', 'schema.prisma'),
   loose: readRepoFile('test/fixtures/characterization/loose', 'schema.prisma'),
   features: readRepoFile('test/fixtures/contract', 'features.prisma'),
+  mysqlFeatures: readRepoFile('test/fixtures/contract', 'mysql-features.prisma'),
 } as const
 
 const MAJORS: readonly PrismaMajor[] = [6, 7]
@@ -23,6 +24,33 @@ describe('DMMF contract', () => {
       expect(seven?.files).not.toBeNull()
     })
   }
+
+  it('A80, D103: the MySQL fixture yields identical views and diagnostics on Prisma 6 and 7', () => {
+    const [six, seven] = MAJORS.map((major) => {
+      const { datamodel, config, provider } = parseSchema(FIXTURES.mysqlFeatures, major)
+      expect(provider).toBe('mysql')
+      return build(datamodel, config, { provider })
+    })
+    expect(six?.views).toEqual(seven?.views)
+    expect(six?.diagnostics).toEqual(seven?.diagnostics)
+    expect(seven?.files).not.toBeNull()
+  })
+
+  it.each(MAJORS)(
+    'A80: @map and @@map arrive as dbName, a view block as a model, no schema on MySQL models (Prisma %i)',
+    (major) => {
+      const { datamodel, config, provider } = parseSchema(FIXTURES.mysqlFeatures, major)
+      const user = datamodel.models.find((m) => m.name === 'User')
+      expect(user?.dbName).toBe('users')
+      expect(user?.fields.find((f) => f.name === 'email')?.dbName).toBe('email_address')
+      expect(user?.fields.find((f) => f.name === 'role')?.kind).toBe('enum')
+      expect(datamodel.models.map((m) => m.name)).toContain('UserInfo')
+      expect(datamodel.models.every((m) => !('schema' in m) || m.schema == null)).toBe(true)
+      const result = build(datamodel, config, { provider })
+      expect(result.diagnostics).toEqual([])
+      expect(result.views.find((v) => v.model === 'UserInfo')?.sourceSchema).toBeNull()
+    },
+  )
 
   it.each(MAJORS)(
     'A21: @ignore fields, @@ignore models and Unsupported fields never reach the core (Prisma %i)',

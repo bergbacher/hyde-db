@@ -6,13 +6,16 @@ import { parseSchema } from '../helpers/prisma.ts'
 const CASES = [
   { name: 'example', dir: 'example' },
   { name: 'loose', dir: 'test/fixtures/characterization/loose' },
+  { name: 'example-mysql', dir: 'example-mysql' },
 ] as const
 
 describe('characterization', () => {
   for (const testCase of CASES) {
     it(`D6: reproduces the golden files of the ${testCase.name} schema`, () => {
-      const { datamodel, config } = parseSchema(readRepoFile(testCase.dir, 'schema.prisma'))
-      const result = build(datamodel, config)
+      const { datamodel, config, provider } = parseSchema(
+        readRepoFile(testCase.dir, 'schema.prisma'),
+      )
+      const result = build(datamodel, config, { provider })
       expect(result.diagnostics.filter((d) => d.severity === 'error')).toEqual([])
       for (const file of OUTPUT_FILES) {
         expect(result.files?.[file], file).toBe(readRepoFile(testCase.dir, 'redacted', file))
@@ -32,6 +35,29 @@ describe('characterization', () => {
     ])
     expect(result.files?.['redacted-views.sql']).not.toContain('email')
     expect(result.files?.['redacted-views.sql']).not.toContain('api_keys')
+  })
+
+  it('D6, D103: the MySQL example reproduces its golden files under the mysql provider', () => {
+    const { datamodel, config, provider } = parseSchema(
+      readRepoFile('example-mysql', 'schema.prisma'),
+    )
+    expect(provider).toBe('mysql')
+    const sql = build(datamodel, config, { provider }).files?.['redacted-views.sql']
+    expect(sql).toBe(readRepoFile('example-mysql', 'redacted', 'redacted-views.sql'))
+    expect(sql).toContain("SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';")
+    expect(sql).toContain('hyde_db_marker')
+    expect(sql).not.toContain('DELIMITER')
+  })
+
+  it('D103: the MySQL example hides what the PostgreSQL example hides', () => {
+    const { datamodel, config, provider } = parseSchema(
+      readRepoFile('example-mysql', 'schema.prisma'),
+    )
+    const result = build(datamodel, config, { provider })
+    expect(result.views.map((v) => v.name)).toEqual(['users', 'orders'])
+    const sql = result.files?.['redacted-views.sql']
+    expect(sql).not.toContain('email')
+    expect(sql).not.toContain('api_keys')
   })
 
   it('D54: without strict = "false" the loose schema fails with strict diagnostics', () => {

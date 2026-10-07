@@ -1,0 +1,35 @@
+// Contract fixture: MySQL DMMF shapes hyde-db depends on (A80, D103).
+generator redacted {
+  provider        = "hyde-db"
+  output          = "./redacted"
+  previewFeatures = ["views"]
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+/// A user of the app
+model User {
+  /// @hyde.visible
+  id    Int    @id @default(autoincrement())
+  /// @hyde.hidden
+  email String @unique @map("email_address")
+  /// @hyde.visible
+  role  Role   @default(USER)
+
+  @@map("users")
+}
+
+/// A read-only report
+view UserInfo {
+  /// @hyde.visible
+  id    Int    @unique
+  /// @hyde.hidden
+  email String
+}
+
+enum Role {
+  USER
+  ADMIN
+}

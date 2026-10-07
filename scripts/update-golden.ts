@@ -5,11 +5,13 @@ import { join } from 'node:path'
 import { build } from '../src/build.ts'
 import { parseSchema } from '../test/helpers/prisma.ts'
 
-const CASES = ['example', 'test/fixtures/characterization/loose']
+const CASES = ['example', 'test/fixtures/characterization/loose', 'example-mysql']
 
 for (const dir of CASES) {
-  const { datamodel, config } = parseSchema(readFileSync(join(dir, 'schema.prisma'), 'utf8'))
-  const result = build(datamodel, config)
+  const { datamodel, config, provider } = parseSchema(
+    readFileSync(join(dir, 'schema.prisma'), 'utf8'),
+  )
+  const result = build(datamodel, config, { provider })
   if (result.files === null)
     throw new Error(`${dir}: ${JSON.stringify(result.diagnostics, null, 2)}`)
   mkdirSync(join(dir, 'redacted'), { recursive: true })
