@@ -61,7 +61,12 @@ export interface MysqlConfig {
  * The resolved config, a union discriminated on `dialect`. The union may gain members in minor
  * releases, so switch on `dialect` instead of assuming one shape.
  */
-export type ResolvedConfig = PostgresqlConfig
+export type ResolvedConfig = PostgresqlConfig | MysqlConfig
+
+/** The optional third argument of `build` and `analyze`: the datasource provider, `postgresql` when omitted (D107). */
+export interface BuildOptions {
+  readonly provider?: Provider
+}
 
 export type Severity = 'error' | 'warning'
 

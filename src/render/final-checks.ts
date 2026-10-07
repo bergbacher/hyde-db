@@ -4,7 +4,7 @@
 // D69, D81, D127, D130, D134). Moved verbatim out of apply-sql.ts: the emitted SQL is unchanged.
 import { BRAND } from '../brand.ts'
 import { quoteLiteral as ql } from '../sql.ts'
-import type { PostgresqlConfig, ResolvedConfig } from '../types.ts'
+import type { PostgresqlConfig } from '../types.ts'
 import {
   COLUMN_PRIVILEGES,
   catalogEntries,
@@ -409,7 +409,7 @@ export const FINAL_CHECKS: readonly FinalCheck[] = [
 ]
 
 /** The context every check renders with, built from the resolved configuration. */
-export function checkContext(config: ResolvedConfig): CheckContext {
+export function checkContext(config: PostgresqlConfig): CheckContext {
   const role = ql(config.role)
   const abort = (message: string, ...values: string[]): string =>
     `    RAISE EXCEPTION '${BRAND}: ${message}', ${values.map((v) => (v === 'fixes' ? printedFix(v) : v)).join(', ')};`
@@ -420,7 +420,7 @@ export function checkContext(config: ResolvedConfig): CheckContext {
 }
 
 /** The final safety check: every way the role could reach data outside the views aborts the script. */
-export function renderFinalCheck(config: ResolvedConfig): string[] {
+export function renderFinalCheck(config: PostgresqlConfig): string[] {
   const ctx = checkContext(config)
   return [
     '-- Safety check, in this order: abort if the role',

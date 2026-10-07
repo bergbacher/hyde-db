@@ -3,6 +3,7 @@ export { analyze } from './analyze.ts'
 export { build } from './build.ts'
 export type {
   Analysis,
+  BuildOptions,
   BuildResult,
   ColumnCounts,
   Diagnostic,
@@ -11,6 +12,7 @@ export type {
   DmmfField,
   DmmfModel,
   GeneratorConfig,
+  MysqlConfig,
   OutputFiles,
   PostgresqlConfig,
   ResolvedConfig,

@@ -3,7 +3,7 @@
 // configure it, the annotations, the output files and the deploy order, in that order.
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import { CONFIG_KEYS } from './config.ts'
-import type { ResolvedConfig } from './types.ts'
+import type { PostgresqlConfig } from './types.ts'
 
 export type CliCommand =
   | { readonly kind: 'protocol' }
@@ -67,7 +67,7 @@ export function repositoryUrl(repository: unknown): string | undefined {
 }
 
 /** The generator-block keys: the resolved config's keys except `dialect`, which the package sets (D112). */
-type ConfigKey = Exclude<keyof ResolvedConfig, 'dialect'>
+type ConfigKey = Exclude<keyof PostgresqlConfig, 'dialect'>
 
 /** What each config key does; the keys themselves come from CONFIG_KEYS, the values from the caller. */
 const CONFIG_NOTES: Readonly<Record<ConfigKey, string>> = {
@@ -79,7 +79,7 @@ const CONFIG_NOTES: Readonly<Record<ConfigKey, string>> = {
   statementTimeout: 'role statement timeout: "500ms", "15s" or "1min"',
 }
 
-function configLines(config: ResolvedConfig): string[] {
+function configLines(config: PostgresqlConfig): string[] {
   return CONFIG_KEYS.map((name) => {
     const key = name as ConfigKey
     const setting = `  ${key} = "${String(config[key])}"`
@@ -91,7 +91,7 @@ function configLines(config: ResolvedConfig): string[] {
 const DB_URL = `\${DATABASE_URL:?export DATABASE_URL first}`
 
 /** The help text, without a trailing newline. `config` supplies the defaults it prints. */
-export function usage(config: ResolvedConfig, repository?: string): string {
+export function usage(config: PostgresqlConfig, repository?: string): string {
   return [
     `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role.`,
     '',

@@ -2,13 +2,13 @@
 // the reader must write it in SQL (D146).
 import { BRAND } from '../brand.ts'
 import { sqlName } from '../sql.ts'
-import type { ResolvedConfig, View } from '../types.ts'
+import type { PostgresqlConfig, View } from '../types.ts'
 
 export function renderMarkdown({
   config,
   views,
 }: {
-  readonly config: ResolvedConfig
+  readonly config: PostgresqlConfig
   readonly views: readonly View[]
 }): string {
   const out: string[] = []

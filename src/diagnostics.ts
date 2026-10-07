@@ -272,8 +272,8 @@ export function unsupportedProvider(provider: string): Diagnostic {
   return make(
     'HYDE_UNSUPPORTED_PROVIDER',
     'datasource',
-    `only postgresql is supported (datasource provider is "${provider}")`,
-    `Use ${BRAND} only with a datasource whose provider is "postgresql".`,
+    `only postgresql and mysql are supported (datasource provider is "${provider}")`,
+    `Use ${BRAND} only with a datasource whose provider is "postgresql" or "mysql".`,
   )
 }
 

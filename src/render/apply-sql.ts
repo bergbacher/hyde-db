@@ -4,12 +4,12 @@
 // D123, D124, D127, D130, D131, D134, D135, D138, D141); it revokes nothing itself (D69).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteIdent as qi, quoteLiteral as ql } from '../sql.ts'
-import type { ResolvedConfig, View } from '../types.ts'
+import type { PostgresqlConfig, View } from '../types.ts'
 import { renderFinalCheck } from './final-checks.ts'
 import { renderDependentsGuard, renderSchemaGuard } from './schema-guard.ts'
 
 export interface RenderInput {
-  readonly config: ResolvedConfig
+  readonly config: PostgresqlConfig
   readonly views: readonly View[]
 }
 
