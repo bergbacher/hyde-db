@@ -111,12 +111,40 @@ describe('mysql apply checks A', () => {
     expect(sql).toContain('QUOTE(')
   })
 
-  it('D99, D149: every computed fix is guarded by FIX_LIMIT with a literal fallback that fits it, at maximum config lengths', () => {
+  it('D161, D99, D149: every leftover fix falls back per-object, then to the reader-wide revoke, then to prose that fits FIX_LIMIT', () => {
     const sql = leftoverGrants(maxConfig, ['users'])
-    const guards = sql.match(new RegExp(`> ${FIX_LIMIT}, '`, 'g')) ?? []
-    // global, global_grants, db, tables_priv, columns_priv, procs_priv
-    expect(guards).toHaveLength(6)
+    const wide = "CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM ', CONCAT(QUOTE("
+    // global (privileges and grant option), dynamic, db, tables_priv, columns_priv, procs_priv
+    const chain = new RegExp(
+      `> ${FIX_LIMIT}, IF\\(CHAR_LENGTH\\(CONCAT\\('REVOKE ALL PRIVILEGES, GRANT OPTION FROM `,
+      'g',
+    )
+    expect(sql.match(chain)).toHaveLength(6)
+    expect(sql.split(wide)).toHaveLength(6 * 2 + 1)
     for (const m of sql.matchAll(new RegExp(`> ${FIX_LIMIT}, '((?:[^']|'')*)'`, 'g')))
       expect((m[1] ?? '').length).toBeLessThanOrEqual(FIX_LIMIT)
+    expect(sql.match(new RegExp(`> ${FIX_LIMIT}, '`, 'g'))).toHaveLength(6)
+  })
+
+  it('D161: the reader-wide revoke fits FIX_LIMIT for the default config and for near-max role plus host only up to the budget', () => {
+    const wideLength = (c: { role: string; readerHost: string }): number =>
+      `REVOKE ALL PRIVILEGES, GRANT OPTION FROM '${c.role}'@'${c.readerHost}';`.length
+    expect(wideLength(config)).toBeLessThanOrEqual(FIX_LIMIT)
+    expect(wideLength({ role: 'r'.repeat(32), readerHost: 'h'.repeat(60) })).toBeGreaterThan(
+      FIX_LIMIT,
+    )
+    expect(wideLength({ role: 'r'.repeat(32), readerHost: 'h'.repeat(30) })).toBeLessThanOrEqual(
+      FIX_LIMIT,
+    )
+  })
+
+  it('D119, A86: an account holding only GRANT OPTION (USAGE with IS_GRANTABLE) is a leftover and prints REVOKE GRANT OPTION', () => {
+    const sql = leftoverGrants(config, [])
+    expect(sql).toContain("(PRIVILEGE_TYPE <> 'USAGE' OR IS_GRANTABLE = 'YES')")
+    expect(sql).toContain("'REVOKE GRANT OPTION'")
+  })
+
+  it('D152: the allowed-grant exclusion compares the database name case-insensitively', () => {
+    expect(leftoverGrants(config, ['users'])).toContain("LOWER(Db) = LOWER('redacted')")
   })
 })

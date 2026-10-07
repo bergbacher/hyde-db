@@ -19,9 +19,18 @@ const GRANT_TABLES = [
   'role_edges',
 ]
 
-/** `full` (a SQL string expression) when it fits FIX_LIMIT, else the literal `fallback`. */
+/** `full` (a SQL string expression) when it fits FIX_LIMIT, else `fallback` (an expression or literal). */
 function fitted(full: string, fallback: string): string {
-  return `IF(CHAR_LENGTH(${full}) > ${FIX_LIMIT}, ${ql(fallback)}, ${full})`
+  return `IF(CHAR_LENGTH(${full}) > ${FIX_LIMIT}, ${fallback}, ${full})`
+}
+
+/**
+ * A leftover-grant fix (D161): the per-object revoke, else the reader-wide revoke, else `prose`,
+ * the last only when even the reader-wide revoke exceeds FIX_LIMIT.
+ */
+function leftoverFix(config: MysqlConfig, full: string, prose: string): string {
+  const wide = `CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM ', ${accountFix(config)}, ';')`
+  return fitted(full, fitted(wide, ql(prose)))
 }
 
 /** The account as a SQL expression quoted for an administrator session. */
@@ -50,7 +59,7 @@ export const grantTableAccessCheck: MysqlCheck = {
       "CONCAT(QUOTE(SUBSTRING_INDEX(CURRENT_USER(),'@',1)), '@', QUOTE(SUBSTRING_INDEX(CURRENT_USER(),'@',-1)))"
     const fix = fitted(
       `CONCAT('GRANT SELECT ON mysql.* TO ', ${deployer}, ';')`,
-      'grant SELECT on mysql.* to the deploying user',
+      ql('grant SELECT on mysql.* to the deploying user'),
     )
     return abortWhenFound(
       [
@@ -75,25 +84,25 @@ export function leftoverGrants(config: MysqlConfig, allowed: readonly string[]):
   const expected =
     allowed.length === 0
       ? ''
-      : `\n    AND NOT (Db = ${ql(config.schema)} AND Table_priv = 'Select' AND Table_name IN (${allowed.map(ql).join(', ')}))`
+      : `\n    AND NOT (LOWER(Db) = LOWER(${ql(config.schema)}) AND Table_priv = 'Select' AND Table_name IN (${allowed.map(ql).join(', ')}))`
   const columnFix = `CONCAT('REVOKE ', REPLACE(Column_priv, ',', CONCAT(' (', ${bt('Column_name')}, '), ')), ' (', ${bt('Column_name')}, ') ON ', ${bt('Db')}, '.', ${bt('Table_name')}, ' FROM ', ${acct}, ';')`
   return [
-    `SELECT 'the reader has a global privilege.' AS problem, ${fitted(`CONCAT('REVOKE ', PRIVILEGE_TYPE, ' ON *.* FROM ', ${acct}, ';')`, "revoke the reader's global privileges")} AS fix, 1 AS \`rank\``,
-    `  FROM information_schema.USER_PRIVILEGES WHERE GRANTEE = ${ql(a)} AND PRIVILEGE_TYPE <> 'USAGE'`,
+    `SELECT 'the reader has a global privilege.' AS problem, ${leftoverFix(config, `CONCAT(IF(PRIVILEGE_TYPE = 'USAGE', 'REVOKE GRANT OPTION', CONCAT('REVOKE ', PRIVILEGE_TYPE)), ' ON *.* FROM ', ${acct}, ';')`, "revoke the reader's global privileges")} AS fix, 1 AS \`rank\``,
+    `  FROM information_schema.USER_PRIVILEGES WHERE GRANTEE = ${ql(a)} AND (PRIVILEGE_TYPE <> 'USAGE' OR IS_GRANTABLE = 'YES')`,
     'UNION ALL',
-    `SELECT 'the reader has a dynamic global privilege.', ${fitted(`CONCAT('REVOKE ', PRIV, ' ON *.* FROM ', ${acct}, ';')`, "revoke the reader's dynamic privileges")}, 2`,
+    `SELECT 'the reader has a dynamic global privilege.', ${leftoverFix(config, `CONCAT('REVOKE ', PRIV, ' ON *.* FROM ', ${acct}, ';')`, "revoke the reader's dynamic privileges")}, 2`,
     `  FROM mysql.global_grants WHERE ${who('USER,HOST')}`,
     'UNION ALL',
-    `SELECT 'the reader has a grant on a database.', ${fitted(`CONCAT('REVOKE ALL ON ', ${bt('Db')}, '.* FROM ', ${acct}, ';')`, "revoke the reader's database grants")}, 3`,
+    `SELECT 'the reader has a grant on a database.', ${leftoverFix(config, `CONCAT('REVOKE ALL ON ', ${bt('Db')}, '.* FROM ', ${acct}, ';')`, "revoke the reader's database grants")}, 3`,
     `  FROM mysql.db WHERE ${who('User,Host')}`,
     'UNION ALL',
-    `SELECT 'the reader has an unexpected table grant.', ${fitted(`CONCAT('REVOKE ALL ON ', ${bt('Db')}, '.', ${bt('Table_name')}, ' FROM ', ${acct}, ';')`, "revoke the reader's table grants")}, 4`,
+    `SELECT 'the reader has an unexpected table grant.', ${leftoverFix(config, `CONCAT('REVOKE ALL ON ', ${bt('Db')}, '.', ${bt('Table_name')}, ' FROM ', ${acct}, ';')`, "revoke the reader's table grants")}, 4`,
     `  FROM mysql.tables_priv WHERE ${who('User,Host')}${expected}`,
     'UNION ALL',
-    `SELECT 'the reader has a column grant.', ${fitted(columnFix, "revoke the reader's column grants")}, 5`,
+    `SELECT 'the reader has a column grant.', ${leftoverFix(config, columnFix, "revoke the reader's column grants")}, 5`,
     `  FROM mysql.columns_priv WHERE ${who('User,Host')}`,
     'UNION ALL',
-    `SELECT 'the reader has a routine grant.', ${fitted(`CONCAT('REVOKE ALL ON ', Routine_type, ' ', ${bt('Db')}, '.', ${bt('Routine_name')}, ' FROM ', ${acct}, ';')`, "revoke the reader's routine grants")}, 6`,
+    `SELECT 'the reader has a routine grant.', ${leftoverFix(config, `CONCAT('REVOKE ALL ON ', Routine_type, ' ', ${bt('Db')}, '.', ${bt('Routine_name')}, ' FROM ', ${acct}, ';')`, "revoke the reader's routine grants")}, 6`,
     `  FROM mysql.procs_priv WHERE ${who('User,Host')}`,
   ].join('\n')
 }
