@@ -44,6 +44,19 @@ export interface PostgresqlConfig {
   readonly statementTimeout: string
 }
 
+/** The databases hyde-db can target (D86, D104). */
+export type Provider = 'postgresql' | 'mysql'
+
+/** The resolved config of a MySQL database: `role` is the account's user name, `readerHost` its host part (D97, D120). */
+export interface MysqlConfig {
+  readonly dialect: 'mysql'
+  readonly schema: string
+  readonly role: string
+  readonly readerHost: string
+  readonly default: Visibility
+  readonly strict: boolean
+}
+
 /**
  * The resolved config, a union discriminated on `dialect`. The union may gain members in minor
  * releases, so switch on `dialect` instead of assuming one shape.
@@ -55,6 +68,7 @@ export type Severity = 'error' | 'warning'
 export type DiagnosticCode =
   | 'HYDE_CONFIG_UNKNOWN_KEY'
   | 'HYDE_CONFIG_INVALID_VALUE'
+  | 'HYDE_CONFIG_KEY_UNSUPPORTED'
   | 'HYDE_SCHEMA_CONFLICT'
   | 'HYDE_ANNOTATION_UNKNOWN'
   | 'HYDE_ANNOTATION_MISPLACED'

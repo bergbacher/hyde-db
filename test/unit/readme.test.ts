@@ -331,7 +331,10 @@ describe('README (a view of LEDGER.md)', () => {
     for (const block of generatorBlocks) {
       for (const major of MAJORS) {
         const { config } = parseSchema(`${DATASOURCE}\n${block}`, major)
-        expect(validateConfig(config).diagnostics, `Prisma ${major}:\n${block}`).toEqual([])
+        expect(
+          validateConfig(config, 'postgresql').diagnostics,
+          `Prisma ${major}:\n${block}`,
+        ).toEqual([])
       }
     }
   })
@@ -342,7 +345,7 @@ describe('README (a view of LEDGER.md)', () => {
     for (const major of MAJORS) {
       const { config } = parseSchema(`${DATASOURCE}\n${full}`, major)
       expect(Object.keys(config).sort()).toEqual([...CONFIG_KEYS].sort())
-      expect(validateConfig(config).config).toEqual(DEFAULT_CONFIG)
+      expect(validateConfig(config, 'postgresql').config).toEqual(DEFAULT_CONFIG)
     }
   })
 

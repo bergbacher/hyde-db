@@ -19,7 +19,7 @@ describe('D112: forward-compatible public types', () => {
     expect(DEFAULT_CONFIG.dialect).toBe('postgresql')
     expect(analyze(datamodel()).config.dialect).toBe('postgresql')
     expect(CONFIG_KEYS).not.toContain('dialect')
-    const { config: resolved, diagnostics } = validateConfig({ dialect: 'mysql' })
+    const { config: resolved, diagnostics } = validateConfig({ dialect: 'mysql' }, 'postgresql')
     expect(diagnostics.map((d) => [d.code, d.location])).toEqual([
       ['HYDE_CONFIG_UNKNOWN_KEY', 'config.dialect'],
     ])

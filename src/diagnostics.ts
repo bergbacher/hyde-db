@@ -7,6 +7,7 @@ import type { Diagnostic, DiagnosticCode, Severity } from './types.ts'
 export const SEVERITY: Readonly<Record<DiagnosticCode, Severity>> = {
   HYDE_CONFIG_UNKNOWN_KEY: 'error',
   HYDE_CONFIG_INVALID_VALUE: 'error',
+  HYDE_CONFIG_KEY_UNSUPPORTED: 'error',
   HYDE_SCHEMA_CONFLICT: 'error',
   HYDE_ANNOTATION_UNKNOWN: 'error',
   HYDE_ANNOTATION_MISPLACED: 'error',
@@ -96,6 +97,16 @@ export function unknownConfigKey(key: string, validKeys: readonly string[]): Dia
     suggestion === undefined
       ? `Remove "${key}" from the generator block. Valid keys: ${validKeys.join(', ')}.`
       : `Rename "${key}" to "${suggestion}" in the generator block.`,
+  )
+}
+
+/** A config key that exists on another dialect only (D97); the hint says how to fix it (D26). */
+export function configKeyUnsupported(key: string, dialect: 'mysql', hint: string): Diagnostic {
+  return make(
+    'HYDE_CONFIG_KEY_UNSUPPORTED',
+    `config.${key}`,
+    `config key "${key}" is not supported on ${dialect}`,
+    hint,
   )
 }
 

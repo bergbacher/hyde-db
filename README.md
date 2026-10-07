@@ -393,6 +393,7 @@ hyde-db: warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible altho
 |---|---|---|---|
 | `HYDE_CONFIG_UNKNOWN_KEY` | error | The generator block has a key hyde-db does not know. | Rename it to the suggested key, or remove it. |
 | `HYDE_CONFIG_INVALID_VALUE` | error | A config value is invalid or not a string, including an `env()` call, which arrives as the variable's name; from `build` or `analyze`, also a config that is not a plain object. | Set the value the message names. |
+| `HYDE_CONFIG_KEY_UNSUPPORTED` | error | A config key exists only on another database, such as `sourceSchema` or `statementTimeout` on MySQL. | Remove the key; the message says what to do instead. |
 | `HYDE_SCHEMA_CONFLICT` | error | `schema` equals `sourceSchema`, or a model's `@@schema` equals `schema`. | Point `schema` at a schema no model uses, or move the model. |
 | `HYDE_ANNOTATION_UNKNOWN` | error | A `@hyde.*` annotation does not exist. | Use the suggested annotation. |
 | `HYDE_ANNOTATION_MISPLACED` | error | `@hyde.visible` or `@hyde.hidden` on a model, or `@hyde.exclude` or `@hyde.default` on a field. | Move it; on a model, use `@hyde.default(…)`. |

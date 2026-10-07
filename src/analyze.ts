@@ -134,7 +134,7 @@ export function viewCollisions(views: readonly View[]): Diagnostic[] {
 
 export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): Analysis {
   const { models } = toDatamodel(datamodel)
-  const { config, diagnostics: configDiagnostics } = validateConfig(rawConfig)
+  const { config, diagnostics: configDiagnostics } = validateConfig(rawConfig, 'postgresql')
   const diagnostics: Diagnostic[] = [...configDiagnostics]
 
   diagnostics.push(...postgresqlConfigRules(config, models))
