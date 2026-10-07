@@ -24,6 +24,8 @@ export interface TestDb {
   /** The reader account's host part (config `readerHost`, default `%`). */
   readonly host: string
   readonly files: OutputFiles
+  /** Extra accounts and roles a test created (`createAccount`, `createRole`); `dropTestDb` drops them. */
+  readonly extras: { user: string; host: string }[]
 }
 
 export interface ClientResult {
@@ -180,6 +182,7 @@ export async function createTestDb(options: CreateOptions = {}): Promise<TestDb>
     reader,
     host: typeof merged.readerHost === 'string' ? merged.readerHost : '%',
     files: result.files,
+    extras: [],
   }
   const created = mysql(`CREATE DATABASE \`${name}\`;`, {})
   if (created.status !== 0) {
@@ -195,32 +198,84 @@ export async function createTestDb(options: CreateOptions = {}): Promise<TestDb>
   return db
 }
 
-/** Drops the source and views databases and the reader account (all server-wide, so they would leak across tests). */
+/** Drops the source and views databases, the reader and the extra accounts and roles (all server-wide, so they would leak across tests). */
 export async function dropTestDb(db: TestDb): Promise<void> {
   const dropped = mysql(
-    `DROP DATABASE IF EXISTS \`${db.name}\`; DROP DATABASE IF EXISTS \`${db.views}\`; DROP USER IF EXISTS '${db.reader}'@'${db.host}';`,
+    `DROP DATABASE IF EXISTS \`${db.name}\`; DROP DATABASE IF EXISTS \`${db.views}\`; ${[{ user: db.reader, host: db.host }, ...db.extras].map((a) => `DROP USER IF EXISTS '${a.user}'@'${a.host}';`).join(' ')}`,
     {},
   )
   if (dropped.status !== 0) throw new Error(`test database cleanup failed: ${dropped.stderr}`)
 }
 
+/** The `*_priv` columns of a table in the `mysql` schema, discovered so no privilege is missed on any server version. */
+function privColumns(table: 'user' | 'db'): string[] {
+  const result = query(
+    `SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME = '${table}' AND COLUMN_NAME LIKE '%\\_priv' ORDER BY COLUMN_NAME;`,
+  )
+  if (result.status !== 0)
+    throw new Error(`reading mysql.${table} columns failed: ${result.stderr}`)
+  return result.stdout.split('\n').filter((column) => column !== '')
+}
+
 /**
- * Every grant row of reader@host in the grant tables, one text line each: global (`user`,
- * `global_grants`), `db`, `tables_priv`, `columns_priv` and `procs_priv`.
+ * Every grant the reader has or takes part in, as sorted text lines (comparable with `toEqual`):
+ * `global: <x>_priv` per `*_priv` column of `mysql.user` set to Y, `dynamic: <PRIV>[ WITH GRANT
+ * OPTION]` from `global_grants`, `db: <db> <x>_priv` per `*_priv` column of `mysql.db`,
+ * `table: <db>.<table> <Table_priv>|<Column_priv>`, `column: <db>.<table>.<column> <Column_priv>`,
+ * `routine: <db>.<name> <Proc_priv>`, `proxy: <grantee> -> <proxied>`, `role: <role> -> <grantee>`
+ * and `default role: <role> -> <account>`, the last three with the reader on either side. A freshly
+ * deployed reader has exactly its view grants (`table:` rows).
  */
 export function readerGrants(db: TestDb): string[] {
-  const who = (user: string, host: string) => `${user} = '${db.reader}' AND ${host} = '${db.host}'`
-  const sql = [
-    `SELECT CONCAT('global: ', Select_priv, Insert_priv, Update_priv, Delete_priv, Create_priv, Drop_priv, Grant_priv) FROM mysql.user WHERE ${who('User', 'Host')} AND (Select_priv = 'Y' OR Insert_priv = 'Y' OR Update_priv = 'Y' OR Delete_priv = 'Y' OR Create_priv = 'Y' OR Drop_priv = 'Y' OR Grant_priv = 'Y')`,
-    `SELECT CONCAT('dynamic: ', PRIV, ' ', WITH_GRANT_OPTION) FROM mysql.global_grants WHERE ${who('USER', 'HOST')}`,
-    `SELECT CONCAT('db: ', Db, ' ', Select_priv) FROM mysql.db WHERE ${who('User', 'Host')}`,
-    `SELECT CONCAT('table: ', Db, '.', Table_name, ' ', Table_priv) FROM mysql.tables_priv WHERE ${who('User', 'Host')}`,
-    `SELECT CONCAT('column: ', Db, '.', Table_name, '.', Column_name, ' ', Column_priv) FROM mysql.columns_priv WHERE ${who('User', 'Host')}`,
-    `SELECT CONCAT('routine: ', Db, '.', Routine_name, ' ', Proc_priv) FROM mysql.procs_priv WHERE ${who('User', 'Host')}`,
-  ].join(' UNION ALL ')
-  const result = query(`${sql};`)
+  const is = (user: string, host: string) => `${user} = '${db.reader}' AND ${host} = '${db.host}'`
+  const selects = [
+    ...privColumns('user').map(
+      (c) =>
+        `SELECT 'global: ${c.toLowerCase()}' FROM mysql.user WHERE ${is('User', 'Host')} AND \`${c}\` = 'Y'`,
+    ),
+    `SELECT CONCAT('dynamic: ', PRIV, IF(WITH_GRANT_OPTION = 'Y', ' WITH GRANT OPTION', '')) FROM mysql.global_grants WHERE ${is('USER', 'HOST')}`,
+    ...privColumns('db').map(
+      (c) =>
+        `SELECT CONCAT('db: ', Db, ' ${c.toLowerCase()}') FROM mysql.db WHERE ${is('User', 'Host')} AND \`${c}\` = 'Y'`,
+    ),
+    `SELECT CONCAT('table: ', Db, '.', Table_name, ' ', Table_priv, '|', Column_priv) FROM mysql.tables_priv WHERE ${is('User', 'Host')}`,
+    `SELECT CONCAT('column: ', Db, '.', Table_name, '.', Column_name, ' ', Column_priv) FROM mysql.columns_priv WHERE ${is('User', 'Host')}`,
+    `SELECT CONCAT('routine: ', Db, '.', Routine_name, ' ', Proc_priv) FROM mysql.procs_priv WHERE ${is('User', 'Host')}`,
+    `SELECT CONCAT('proxy: ', User, '@', Host, ' -> ', Proxied_user, '@', Proxied_host) FROM mysql.proxies_priv WHERE (${is('User', 'Host')}) OR (${is('Proxied_user', 'Proxied_host')})`,
+    `SELECT CONCAT('role: ', FROM_USER, '@', FROM_HOST, ' -> ', TO_USER, '@', TO_HOST) FROM mysql.role_edges WHERE (${is('FROM_USER', 'FROM_HOST')}) OR (${is('TO_USER', 'TO_HOST')})`,
+    `SELECT CONCAT('default role: ', DEFAULT_ROLE_USER, '@', DEFAULT_ROLE_HOST, ' -> ', USER, '@', HOST) FROM mysql.default_roles WHERE (${is('USER', 'HOST')}) OR (${is('DEFAULT_ROLE_USER', 'DEFAULT_ROLE_HOST')})`,
+  ]
+  const result = query(`${selects.join(' UNION ALL ')};`)
   if (result.status !== 0) throw new Error(`reading the grant tables failed: ${result.stderr}`)
-  return result.stdout.split('\n').filter((line) => line !== '')
+  return result.stdout
+    .split('\n')
+    .filter((line) => line !== '')
+    .sort()
+}
+
+/** A unique extra account `d_<id>@%` (no password unless given), tracked on `db` and dropped by `dropTestDb`. Each entry of `grants` is the part of a GRANT statement between `GRANT` and `TO`. */
+export function createAccount(
+  db: TestDb,
+  options: { readonly grants?: readonly string[]; readonly password?: string } = {},
+): { user: string; host: string; password: string | undefined } {
+  const user = `d_${randomBytes(4).toString('hex')}`
+  const sql = [
+    `CREATE USER '${user}'@'%'${options.password === undefined ? '' : ` IDENTIFIED BY '${options.password}'`};`,
+    ...(options.grants ?? []).map((grant) => `GRANT ${grant} TO '${user}'@'%';`),
+  ].join('\n')
+  db.extras.push({ user, host: '%' })
+  const result = query(sql)
+  if (result.status !== 0) throw new Error(`creating account ${user} failed: ${result.stderr}`)
+  return { user, host: '%', password: options.password }
+}
+
+/** A unique role `x_<id>@%`, tracked on `db` and dropped by `dropTestDb`. */
+export function createRole(db: TestDb): { user: string; host: string } {
+  const user = `x_${randomBytes(4).toString('hex')}`
+  db.extras.push({ user, host: '%' })
+  const result = query(`CREATE ROLE '${user}'@'%';`)
+  if (result.status !== 0) throw new Error(`creating role ${user} failed: ${result.stderr}`)
+  return { user, host: '%' }
 }
 
 /** Gives the reader a password and unlocks it (the documented one-time step). */
@@ -231,7 +286,11 @@ export function unlockReader(db: TestDb, password: string): void {
   if (result.status !== 0) throw new Error(`unlocking the reader failed: ${result.stderr}`)
 }
 
-/** Splits a script into statements at `;`, never inside `'…'`, `` `…` `` or a `--` comment (comments are dropped). */
+/**
+ * Splits a script into statements at `;`, never inside `'…'`, `` `…` `` or a comment; comments
+ * (`-- ` followed by a space, tab, newline or the end, `#`, and `/* … *\/`) are dropped, which
+ * includes `/*! … *\/` executable comments. No `DELIMITER` support: hyde-db scripts have none (D99).
+ */
 export function splitStatements(sql: string): string[] {
   const statements: string[] = []
   let current = ''
@@ -244,9 +303,13 @@ export function splitStatements(sql: string): string[] {
     } else if (char === "'" || char === '`') {
       quote = char
       current += char
-    } else if (char === '-' && sql.startsWith('-- ', i)) {
+    } else if (/^(--(?:[ \t\r\n]|$)|#)/.test(sql.slice(i, i + 3))) {
       const end = sql.indexOf('\n', i)
       i = end === -1 ? sql.length : end - 1
+    } else if (char === '/' && sql.charAt(i + 1) === '*') {
+      const end = sql.indexOf('*/', i + 2)
+      i = end === -1 ? sql.length : end + 1
+      current += ' '
     } else if (char === ';') {
       statements.push(current.trim())
       current = ''

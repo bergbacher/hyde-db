@@ -71,4 +71,9 @@ describe('integration policy', () => {
   it("D22: a hook outlasts testcontainers' 120-second startup timeout, so a slow start fails as itself", () => {
     expect(readRepoFile('vitest.config.ts').match(/hookTimeout: 180_000,/g)).toHaveLength(2)
   })
+
+  it('D22: the MySQL project runs one test file at a time, as its tests change server-wide state', () => {
+    const mysql = readRepoFile('vitest.config.ts').split("name: 'integration-mysql'")[1] ?? ''
+    expect(mysql).toContain('fileParallelism: false,')
+  })
 })
