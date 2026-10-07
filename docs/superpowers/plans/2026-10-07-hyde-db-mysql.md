@@ -760,7 +760,7 @@ git commit -m "feat(mysql): redacted-schema.md for MySQL (D104)"
 - Consumes: Tasks 5 and 7 exports; `View`, `MysqlConfig`, `qi`, `ql`.
 - Produces: `export function renderMysqlApplySql({ config, views }: { readonly config: MysqlConfig; readonly views: readonly View[] }): string`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 const sql = renderMysqlApplySql({ config, views: [users] })
@@ -818,9 +818,9 @@ it('D117: ends by dropping the abort table, after the re-check', () => {
 ```
 (In a test the quoted view names go through `gated`, which doubles single quotes inside the prepared literal; assert on the doubled form where the statement is gated. Adjust the `toContain` strings to match `gated()` output.)
 
-- [ ] **Step 2: Run, expect FAIL.**
+- [x] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement.** Assembly:
+- [x] **Step 3: Implement.** Assembly:
 
 ```ts
 export function renderMysqlApplySql({ config, views }: Input): string {
@@ -851,7 +851,7 @@ export function renderMysqlApplySql({ config, views }: Input): string {
 ```
 `viewSql` is `CREATE DEFINER = CURRENT_USER SQL SECURITY DEFINER VIEW <S>.<name> (<cols>) AS SELECT <cols> FROM <qi(source)>;` (column lists explicit; MySQL views carry no comments, so doc strings go to the Markdown only). Statements that are not gated are emitted as plain lines ending in `;`.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
