@@ -2,7 +2,7 @@
 // a location and a message; every error also carries a fix hint (D26). Unknown names get a
 // "did you mean" suggestion when a valid spelling is within edit distance 2 (D25).
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
-import type { Diagnostic, DiagnosticCode, Severity } from './types.ts'
+import type { Diagnostic, DiagnosticCode, Provider, Severity } from './types.ts'
 
 export const SEVERITY: Readonly<Record<DiagnosticCode, Severity>> = {
   HYDE_CONFIG_UNKNOWN_KEY: 'error',
@@ -101,7 +101,7 @@ export function unknownConfigKey(key: string, validKeys: readonly string[]): Dia
 }
 
 /** A config key that exists on another dialect only (D97); the hint says how to fix it (D26). */
-export function configKeyUnsupported(key: string, dialect: 'mysql', hint: string): Diagnostic {
+export function configKeyUnsupported(key: string, dialect: Provider, hint: string): Diagnostic {
   return make(
     'HYDE_CONFIG_KEY_UNSUPPORTED',
     `config.${key}`,

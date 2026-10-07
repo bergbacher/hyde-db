@@ -66,7 +66,7 @@ interface DialectRules {
   readonly lengths: Readonly<Record<'schema' | 'role', number>>
 }
 
-const RULES: Readonly<Record<'postgresql' | 'mysql', DialectRules>> = {
+const RULES: Readonly<Record<Provider, DialectRules>> = {
   postgresql: {
     defaults: DEFAULT_CONFIG,
     keys: CONFIG_KEYS,
@@ -123,11 +123,11 @@ interface Working {
   dialect: Provider
   schema: string
   role: string
-  sourceSchema: string
-  readerHost: string
+  sourceSchema?: string
+  readerHost?: string
   default: Visibility
   strict: boolean
-  statementTimeout: string
+  statementTimeout?: string
 }
 
 export function validateConfig(
@@ -145,46 +145,38 @@ export function validateConfig(
   const rules = RULES[dialect]
   const validKeys = rules.keys
   // One working record for both dialects; keys of the other dialect stay at their defaults, unset.
-  const config: Working = { ...rules.defaults } as Working
+  const config: Working = { ...rules.defaults }
   const diagnostics: Diagnostic[] = []
-  if (rawConfig === null || rawConfig === undefined)
-    return { config: config as PostgresqlConfig | MysqlConfig, diagnostics }
-  if (typeof rawConfig !== 'object')
-    return {
-      config: config as PostgresqlConfig | MysqlConfig,
-      diagnostics: [configNotAnObject(typeof rawConfig)],
-    }
+  const result = (found: readonly Diagnostic[]): ConfigResult<PostgresqlConfig | MysqlConfig> => ({
+    config: config as PostgresqlConfig | MysqlConfig,
+    diagnostics: found,
+  })
+  if (rawConfig === null || rawConfig === undefined) return result(diagnostics)
+  if (typeof rawConfig !== 'object') return result([configNotAnObject(typeof rawConfig)])
   const raw: GeneratorConfig = rawConfig
   // Prisma 6 and 7 deliver config keys in different orders; a canonical order keeps
   // diagnostics identical across majors: known keys first, then unknown keys sorted.
   let keys: string[]
   try {
     // Inside the try: `Array.isArray` throws on a revoked Proxy, as do hostile `ownKeys`/`has` traps.
-    if (Array.isArray(raw))
-      return {
-        config: config as PostgresqlConfig | MysqlConfig,
-        diagnostics: [configNotAnObject('array')],
-      }
+    if (Array.isArray(raw)) return result([configNotAnObject('array')])
     // The tag, not the prototype, so class instances, prototype-less and cross-realm plain objects
     // stay accepted while boxed primitives, typed arrays, Map, Set, Date, Error, … are refused once.
     const tag = objectTag(raw)
-    if (tag !== undefined && tag !== 'Object')
-      return {
-        config: config as PostgresqlConfig | MysqlConfig,
-        diagnostics: [configNotAnObject(tag)],
-      }
+    if (tag !== undefined && tag !== 'Object') return result([configNotAnObject(tag)])
     const known = validKeys.filter((key) => key in raw)
     const unknown = Object.keys(raw)
       .filter((key) => !validKeys.includes(key))
       .sort()
     keys = [...known, ...unknown]
   } catch {
-    return { config: config as PostgresqlConfig | MysqlConfig, diagnostics: [unreadableConfig()] }
+    return result([unreadableConfig()])
   }
   for (const key of keys) {
     // An unknown key is reported whatever its value, and its value is never read.
-    if (Object.hasOwn(rules.rejected, key)) {
-      diagnostics.push(configKeyUnsupported(key, 'mysql', rules.rejected[key] as string))
+    const unsupportedHint = Object.hasOwn(rules.rejected, key) ? rules.rejected[key] : undefined
+    if (unsupportedHint !== undefined) {
+      diagnostics.push(configKeyUnsupported(key, dialect, unsupportedHint))
       continue
     }
     if (!validKeys.includes(key)) {
@@ -256,7 +248,7 @@ export function validateConfig(
     }
   }
   // D59: a zero timeout is valid but turns the reader role's statement timeout off.
-  if (dialect === 'postgresql' && timeoutMillis(config.statementTimeout) === 0)
+  if (config.statementTimeout !== undefined && timeoutMillis(config.statementTimeout) === 0)
     diagnostics.push(timeoutDisabled(config.statementTimeout, config.role))
-  return { config: config as PostgresqlConfig | MysqlConfig, diagnostics }
+  return result(diagnostics)
 }

@@ -450,12 +450,90 @@ describe('D97, D113: MySQL config', () => {
     expect(d[0]?.hint).toContain('64')
     expect(d[1]?.hint).toContain('32')
   })
-  it('D97: readerHost is a MySQL key; an invalid host is an error', () => {
-    expect(mysql({ readerHost: '10.0.%' }).config.readerHost).toBe('10.0.%')
-    expect(mysql({ readerHost: "a'b" }).diagnostics[0]?.code).toBe('HYDE_CONFIG_INVALID_VALUE')
-    expect(mysql({ readerHost: 'x'.repeat(61) }).diagnostics[0]?.code).toBe(
-      'HYDE_CONFIG_INVALID_VALUE',
+  it('D149: readerHost accepts valid hosts and patterns, up to 60 characters', () => {
+    for (const host of [
+      'localhost',
+      '10.0.0.1',
+      '::1',
+      '%.example.com',
+      '10.0.%',
+      '192.168.0.0/255.255.255.0',
+      'x'.repeat(60),
+    ]) {
+      const r = mysql({ readerHost: host })
+      expect([host, r.diagnostics, r.config.readerHost]).toEqual([host, [], host])
+    }
+  })
+  it('D149: hostile or malformed readerHost values are errors and keep the default', () => {
+    const hostile: unknown[] = [
+      '',
+      'x'.repeat(61),
+      'a;b',
+      '`',
+      'a\\b',
+      'a b',
+      'a\n',
+      'é',
+      "x'; DROP",
+      "a'b",
+      123,
+      ['a'],
+      {},
+      true,
+    ]
+    for (const value of hostile) {
+      const r = mysql({ readerHost: value })
+      expect(
+        r.diagnostics.map((d) => [d.code, d.location]),
+        String(value),
+      ).toEqual([['HYDE_CONFIG_INVALID_VALUE', 'config.readerHost']])
+      expect(r.config.readerHost, String(value)).toBe('%')
+    }
+  })
+  it('D97: a partial MySQL config defaults the other keys', () => {
+    expect(mysql({ schema: 'x' }).config).toEqual({ ...DEFAULT_MYSQL_CONFIG, schema: 'x' })
+  })
+  it('D97: MySQL accepts every valid key', () => {
+    const r = mysql({
+      strict: 'false',
+      default: 'visible',
+      readerHost: 'h.example',
+      schema: 's',
+      role: 'r',
+    })
+    expect(r).toEqual({
+      config: {
+        dialect: 'mysql',
+        schema: 's',
+        role: 'r',
+        readerHost: 'h.example',
+        default: 'visible',
+        strict: false,
+      },
+      diagnostics: [],
+    })
+  })
+  it('D113: each dialect returns only its own keys, never a stray undefined field', () => {
+    expect(Object.keys(mysql({}).config).sort()).toEqual([
+      'default',
+      'dialect',
+      'readerHost',
+      'role',
+      'schema',
+      'strict',
+    ])
+    expect(Object.keys(mysql({ sourceSchema: 'a', statementTimeout: '1s' }).config).sort()).toEqual(
+      ['default', 'dialect', 'readerHost', 'role', 'schema', 'strict'],
     )
+    expect(Object.keys(validateConfig({ readerHost: 'x' }, 'postgresql').config).sort()).toEqual([
+      'default',
+      'dialect',
+      'role',
+      'schema',
+      'sourceSchema',
+      'statementTimeout',
+      'strict',
+    ])
   })
   it('D97, D26: sourceSchema and statementTimeout are errors on MySQL with fix hints', () => {
     const d = mysql({ sourceSchema: 'app', statementTimeout: '5s' }).diagnostics
@@ -469,19 +547,70 @@ describe('D97, D113: MySQL config', () => {
   it('D25: a MySQL typo still gets did-you-mean from the MySQL key set', () => {
     expect(mysql({ readerhost: 'x' }).diagnostics[0]?.hint).toContain('readerHost')
   })
-  it('D142: MySQL validation never throws on hostile input', () => {
-    expect(() =>
-      mysql(
-        new Proxy(
-          {},
-          {
-            ownKeys() {
-              throw new Error('x')
-            },
-          },
-        ) as never,
-      ),
-    ).not.toThrow()
+  it('D142: MySQL validation of a hostile object returns defaults and one error, never throws', () => {
+    const hostile = new Proxy(
+      {},
+      {
+        ownKeys() {
+          throw new Error('x')
+        },
+      },
+    )
+    expect(mysql(hostile as never)).toEqual({
+      config: DEFAULT_MYSQL_CONFIG,
+      diagnostics: [
+        {
+          code: 'HYDE_CONFIG_INVALID_VALUE',
+          severity: 'error',
+          location: 'config',
+          message: 'config could not be read: listing its keys threw',
+          hint: 'Pass an object of generator config keys, or omit it.',
+        },
+      ],
+    })
+  })
+  it('D142, D156: a rejected MySQL key is reported without reading its value, even when null or undefined', () => {
+    const raw = {}
+    Object.defineProperty(raw, 'sourceSchema', {
+      enumerable: true,
+      get() {
+        throw new Error('must not be read')
+      },
+    })
+    expect(mysql(raw).diagnostics.map((d) => [d.code, d.location])).toEqual([
+      ['HYDE_CONFIG_KEY_UNSUPPORTED', 'config.sourceSchema'],
+    ])
+    for (const value of [null, undefined]) {
+      expect(mysql({ statementTimeout: value }).diagnostics.map((d) => d.code)).toEqual([
+        'HYDE_CONFIG_KEY_UNSUPPORTED',
+      ])
+    }
+  })
+  it('D142: MySQL validation never throws for an exotic value of any key', () => {
+    const exotics: unknown[] = [null, undefined, 0, '', 'x', {}, [], () => 1, Symbol('s'), 10n, NaN]
+    for (const value of exotics) {
+      for (const key of [...MYSQL_CONFIG_KEYS, 'sourceSchema', 'statementTimeout', 'unknownKey']) {
+        const { config, diagnostics } = mysql({ [key]: value })
+        expect(config.dialect).toBe('mysql')
+        const rejected = key === 'sourceSchema' || key === 'statementTimeout'
+        const skipped = (value === null || value === undefined) && key !== 'unknownKey' && !rejected
+        const expected = rejected
+          ? 'HYDE_CONFIG_KEY_UNSUPPORTED'
+          : key === 'unknownKey'
+            ? 'HYDE_CONFIG_UNKNOWN_KEY'
+            : 'HYDE_CONFIG_INVALID_VALUE'
+        const codes = diagnostics.map((d) => d.code)
+        // 'x' and 'hidden'-like strings can be valid for schema, role, readerHost.
+        if (
+          !skipped &&
+          typeof value === 'string' &&
+          value === 'x' &&
+          ['schema', 'role', 'readerHost'].includes(key)
+        )
+          expect(codes).toEqual([])
+        else expect(codes, `${String(value)} for ${key}`).toEqual(skipped ? [] : [expected])
+      }
+    }
   })
   it('D54: PostgreSQL behaviour is unchanged: readerHost is still an unknown key there', () => {
     expect(validateConfig({ readerHost: 'x' }, 'postgresql').diagnostics[0]?.code).toBe(
