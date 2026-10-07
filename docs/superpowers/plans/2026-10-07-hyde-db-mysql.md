@@ -403,7 +403,7 @@ The pieces both MySQL scripts share. Messages are `hyde-db: <problem> Fix: <fix>
   export function renderTeardown(): string[]
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 const config = { dialect: 'mysql', schema: 'redacted', role: 'redacted_reader', readerHost: '%', default: 'hidden', strict: true } as const
@@ -447,9 +447,9 @@ it('D99: every static message of this module fits 128 characters at the maximum 
 ```
 Also unit-assert: `account(config)` is `'redacted_reader'@'%'`; a role or host containing `'` is doubled.
 
-- [ ] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/render-mysql-guards.test.ts`
+- [x] **Step 2: Run, expect FAIL:** `pnpm vitest run --project unit test/unit/render-mysql-guards.test.ts`
 
-- [ ] **Step 3: Implement.** Key SQL (all literals through `ql`, identifiers through `qi`):
+- [x] **Step 3: Implement.** Key SQL (all literals through `ql`, identifiers through `qi`):
 
 ```ts
 export function abortWhenFound(source: string): string[] {
@@ -475,11 +475,11 @@ WHERE EXISTS (SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '<v>
 ```
 Include the database name in the problem text only when it fits (`CONCAT('database ', '<v>', ' lacks the hyde-db marker view.')`; the cut-to-fit rule handles long names).
 
-- [ ] **Step 4: Probe the mechanism on both servers (no code kept).** With Docker, run a throwaway container `mysql:8.4` and `mysql:9.7` and confirm by hand that, under the prelude, `abortIf('1=1', <a 100-character problem>, 'GRANT SELECT ON mysql.* TO x;')` makes the `mysql` client print the full `hyde-db: … Fix: …` text in its error line and exit non-zero, and that the same text reaches `prisma db execute` stderr. If either server truncates, shorten `MESSAGE_LIMIT` only within D99's 128-character rule and update the test. Task 13 turns this probe into a permanent attack test.
+- [x] **Step 4: Probe the mechanism on both servers (no code kept).** With Docker, run a throwaway container `mysql:8.4` and `mysql:9.7` and confirm by hand that, under the prelude, `abortIf('1=1', <a 100-character problem>, 'GRANT SELECT ON mysql.* TO x;')` makes the `mysql` client print the full `hyde-db: … Fix: …` text in its error line and exit non-zero, and that the same text reaches `prisma db execute` stderr. If either server truncates, shorten `MESSAGE_LIMIT` only within D99's 128-character rule and update the test. Task 13 turns this probe into a permanent attack test.
 
 Run: `docker run --rm -d --name hyde-probe -e MYSQL_ROOT_PASSWORD=probe mysql:8.4` then pipe the rendered statements through `docker exec -i hyde-probe mysql -uroot -pprobe`; remove the container afterwards.
 
-- [ ] **Step 5: Run gates and commit**
+- [x] **Step 5: Run gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
@@ -708,7 +708,7 @@ git commit -m "feat(mysql): drop script (D100, D115, D119, D121)"
 - Consumes: `mysqlName` (Task 3), `BRAND`, `View`, `MysqlConfig`.
 - Produces: `export function renderMysqlMarkdown({ config, views }: { readonly config: MysqlConfig; readonly views: readonly View[] }): string`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it('D104: says MySQL, names the views database, and tells the reader to qualify names or run USE', () => {
@@ -732,11 +732,11 @@ it('D3: the generated header names the product and says do not edit', () => {
 })
 ```
 
-- [ ] **Step 2: Run, expect FAIL.**
+- [x] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement** by copying the structure of `src/render/markdown.ts` (same headings, table, `Joins:` block), replacing the intro paragraph with MySQL wording (database `v`, connect as the reader account, name the database with `USE` or qualify each table, quoted names are written exactly as shown, only the listed columns exist) and `sqlName` with `mysqlName`. No statement-timeout sentence.
+- [x] **Step 3: Implement** by copying the structure of `src/render/markdown.ts` (same headings, table, `Joins:` block), replacing the intro paragraph with MySQL wording (database `v`, connect as the reader account, name the database with `USE` or qualify each table, quoted names are written exactly as shown, only the listed columns exist) and `sqlName` with `mysqlName`. No statement-timeout sentence.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
