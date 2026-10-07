@@ -74,6 +74,9 @@ export function gated(statement: string): string[] {
   ]
 }
 
+/** The marker refusal's fix; short enough that the default schema's message prints uncut (D151). */
+export const MARKER_FIX: string = 'drop or rename it, or set "schema" to an unused name'
+
 /** Refuses a views database without the marker view (D115); apply step 3 and drop step 1. */
 export const markerGuard: MysqlCheck = {
   id: 'marker-guard',
@@ -81,8 +84,8 @@ export const markerGuard: MysqlCheck = {
     const v = ql(config.schema)
     return abortWhenFound(
       [
-        `SELECT CONCAT('database ', ${v}, ' lacks the ${BRAND} marker view.') AS problem,`,
-        `       ${ql('rename or drop it yourself, or set the config "schema" to an unused name')} AS fix`,
+        `SELECT CONCAT('database ', ${v}, ' has no ${BRAND} marker view.') AS problem,`,
+        `       ${ql(MARKER_FIX)} AS fix`,
         'FROM DUAL',
         `WHERE EXISTS (SELECT 1 FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ${v})`,
         '  AND NOT EXISTS (SELECT 1 FROM information_schema.VIEWS v JOIN information_schema.COLUMNS c',
