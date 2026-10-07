@@ -579,7 +579,7 @@ git commit -m "feat(mysql): default-database, grant-table and reset-and-verify c
   export function renderRecheck(config: MysqlConfig, views: readonly string[]): string[]
   ```
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 ```ts
 it('A77: the pre-checks run in the order roles, mandatory roles, proxies, other accounts', () => {
@@ -618,9 +618,9 @@ it('Review Focus 5: with no views, the re-check allows no table grant at all', (
 })
 ```
 
-- [ ] **Step 2: Run, expect FAIL.**
+- [x] **Step 2: Run, expect FAIL.**
 
-- [ ] **Step 3: Implement.** Each pre-check is `abortWhenFound` over one source, each reporting the first offender (`ORDER BY` a stable key, `LIMIT 1`, one problem per run):
+- [x] **Step 3: Implement.** Each pre-check is `abortWhenFound` over one source, each reporting the first offender (`ORDER BY` a stable key, `LIMIT 1`, one problem per run):
   - `roles`: `mysql.role_edges WHERE TO_USER = u AND TO_HOST = h` (fix ``REVOKE <QUOTE(FROM_USER)>@<QUOTE(FROM_HOST)> FROM <A>``) `UNION ALL` `mysql.default_roles WHERE USER = u AND HOST = h` (fix `ALTER USER <A> DEFAULT ROLE NONE;`).
   - `mandatory-roles`: `WHERE @@GLOBAL.mandatory_roles <> ''`; problem `mandatory_roles is set; that is unsupported.`; fix `SET PERSIST mandatory_roles = '';` (D120; the fix is the administrator's statement, D153).
   - `proxies`: `mysql.proxies_priv WHERE (User = u AND Host = h) OR (Proxied_user = u AND Proxied_host = h)`; fix `REVOKE PROXY ON <proxied> FROM <holder>` built with `QUOTE()`.
@@ -632,7 +632,7 @@ it('Review Focus 5: with no views, the re-check allows no table grant at all', (
     ```
     then the sticky flag and the failing insert (the `abortWhenFound` tail). Task 5 exports `abortWhenFound` only, so this file composes the same three statements (set message, set sticky flag, failing insert) locally.
 
-- [ ] **Step 4: Gates and commit**
+- [x] **Step 4: Gates and commit**
 
 Run: `pnpm lint && pnpm typecheck && pnpm test:coverage` — PASS.
 
