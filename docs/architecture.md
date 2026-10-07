@@ -58,7 +58,7 @@ Every file in `test/integration/` targets one or more of those rows: it sets up 
 | Characterization | `pnpm test:coverage` | The generator reproduces the base output for the example schema byte-for-byte. Golden files change only with `pnpm golden` after a ledger-backed output change. |
 | DMMF contract | `pnpm test:coverage` | The pinned Prisma 6 and 7 schema engines (WASM) produce identical views and diagnostics for the same fixture schema. |
 | Attack suite | `pnpm test:integration` | A real PostgreSQL container (Testcontainers): the final check refuses every category of leaked access, each printed fix removes exactly that access, and a re-apply passes. Runs on PostgreSQL 14 and 18. |
-| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('hyde-db')` works. |
+| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('@hyde/db')` works. |
 
 Coverage gate: at least 95% of lines and branches in `src/`, generator entry excluded. <!-- D23 -->
 
