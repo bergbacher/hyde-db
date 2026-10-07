@@ -48,6 +48,7 @@
     "test": "vitest run --project unit",
     "test:coverage": "vitest run --project unit --coverage",
     "test:integration": "vitest run --project integration",
+    "test:integration:mysql": "vitest run --project integration-mysql",
     "test:e2e": "node scripts/pack-e2e.mjs && node --test test/e2e/*.test.mjs",
     "changeset": "changeset",
     "golden": "node scripts/update-golden.ts"
@@ -56,6 +57,7 @@
     "@arethetypeswrong/core": "0.18.5",
     "@biomejs/biome": "2.5.15",
     "@changesets/cli": "^3.0.3",
+    "@testcontainers/mysql": "^12.2.0",
     "@testcontainers/postgresql": "^12.2.0",
     "@types/node": "^22.20.5",
     "@types/pg": "^8.15.6",

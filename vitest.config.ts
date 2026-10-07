@@ -30,6 +30,15 @@ const config: ViteUserConfig = defineConfig({
           hookTimeout: 180_000,
         },
       },
+      {
+        test: {
+          name: 'integration-mysql',
+          include: ['test/integration-mysql/**/*.test.ts'],
+          globalSetup: ['test/integration-mysql/global-setup.ts'],
+          testTimeout: 120_000,
+          hookTimeout: 180_000,
+        },
+      },
     ],
   },
 })
