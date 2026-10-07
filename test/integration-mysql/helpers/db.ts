@@ -2,7 +2,7 @@
 // (all server-wide names, so unique), and the `mysql` client inside the database container (D43).
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
-import { inject } from 'vitest'
+import { afterEach, expect, inject } from 'vitest'
 import { build } from '../../../src/index.ts'
 import type { OutputFiles } from '../../../src/types.ts'
 import { readRepoFile } from '../../helpers/files.ts'
@@ -319,4 +319,68 @@ export function splitStatements(sql: string): string[] {
   }
   if (current.trim() !== '') statements.push(current.trim())
   return statements.filter((statement) => statement !== '')
+}
+
+/**
+ * Test-database tracking for one test file: returns a `newDb` that creates a database through
+ * `createTestDb` and registers it for `dropTestDb` after each test. Call it at the top level of a file.
+ */
+export function trackTestDbs(): {
+  newDb: (options?: CreateOptions) => Promise<TestDb>
+  replaceLast: (db: TestDb) => void
+} {
+  const tracked: TestDb[] = []
+  afterEach(async () => {
+    for (const db of tracked.splice(0)) await dropTestDb(db)
+  })
+  return {
+    newDb: async (options) => {
+      const db = await createTestDb(options)
+      tracked.push(db)
+      return db
+    },
+    replaceLast: (db) => {
+      tracked[tracked.length - 1] = db
+    },
+  }
+}
+
+/** The grant lines of a freshly deployed reader on the example schema: SELECT on the two views. */
+export function viewGrants(db: TestDb): string[] {
+  return [`table: ${db.views}.orders Select|`, `table: ${db.views}.users Select|`]
+}
+
+/** The trimmed stdout of a single-value query run as root. */
+export function count(sql: string): string {
+  return query(sql).stdout.trim()
+}
+
+export function schemaExists(name: string): boolean {
+  return (
+    count(`SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${name}'`) === '1'
+  )
+}
+
+export function accountExists(user: string): boolean {
+  return count(`SELECT COUNT(*) FROM mysql.user WHERE User = '${user}'`) === '1'
+}
+
+/** An abort is a 1366 error (temporary-table insert, D99) or, with no default database, a 1231 (D160, A102). */
+const ABORT_MESSAGE = /'(hyde-db: .*? Fix: .*?)'(?: for column|$)/m
+
+/**
+ * Asserts a refusal (non-zero status, a hyde-db message with a fix of at most 128 characters in
+ * the expected error) and returns the message and the printed fix.
+ */
+export function refusal(
+  result: ClientResult,
+  code: '1366' | '1231' = '1366',
+): { message: string; fix: string } {
+  expect(result.status, result.stderr).not.toBe(0)
+  expect(result.stderr).toContain(`ERROR ${code}`)
+  const found = ABORT_MESSAGE.exec(result.stderr)
+  expect(found, result.stderr).not.toBeNull()
+  const message = found?.[1] ?? ''
+  expect(message.length).toBeLessThanOrEqual(128)
+  return { message, fix: message.slice(message.indexOf(' Fix: ') + ' Fix: '.length) }
 }

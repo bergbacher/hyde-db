@@ -1,57 +1,23 @@
 // Attack suite A, part 2: refusals before any change, and what a refused deploy leaves behind (A74, A77, A102, D115, D117, D155, D160, D161).
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  type ClientResult,
+  accountExists,
+  count,
   createAccount,
   createRole,
   createTestDb,
   deploy,
-  dropTestDb,
   query,
   readerGrants,
+  refusal,
   runScript,
+  schemaExists,
   type TestDb,
+  trackTestDbs,
+  viewGrants,
 } from './helpers/db.ts'
 
-const created: TestDb[] = []
-async function newDb(options?: Parameters<typeof createTestDb>[0]): Promise<TestDb> {
-  const db = await createTestDb(options)
-  created.push(db)
-  return db
-}
-afterEach(async () => {
-  for (const db of created.splice(0)) await dropTestDb(db)
-})
-
-const viewGrants = (db: TestDb) => [
-  `table: ${db.views}.orders Select|`,
-  `table: ${db.views}.users Select|`,
-]
-const count = (sql: string) => query(sql).stdout.trim()
-const schemaExists = (name: string) =>
-  count(`SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${name}'`) === '1'
-const accountExists = (user: string) =>
-  count(`SELECT COUNT(*) FROM mysql.user WHERE User = '${user}'`) === '1'
-
-/**
- * Asserts a refusal (non-zero status, a hyde-db message with a fix, at most 128 characters) and
- * returns the problem and the fix as printed. The message sits in a 1366 (temporary table) or, with
- * no default database, 1231 (sql_warnings) error (A102, D160).
- */
-function refusal(
-  result: ClientResult,
-  code: '1366' | '1231' = '1366',
-): { message: string; fix: string } {
-  expect(result.status, result.stderr).not.toBe(0)
-  expect(result.stderr).toContain(`ERROR ${code}`)
-  expect(result.stderr).toContain('hyde-db:')
-  expect(result.stderr).toContain('Fix:')
-  const found = /(hyde-db: .*? Fix: .*?)'(?: for column|$)/m.exec(result.stderr)
-  expect(found, result.stderr).not.toBeNull()
-  const message = found?.[1] ?? ''
-  expect(message.length).toBeLessThanOrEqual(128)
-  return { message, fix: message.slice(message.indexOf(' Fix: ') + ' Fix: '.length) }
-}
+const { newDb } = trackTestDbs()
 
 const markerless = (db: TestDb) =>
   query(
@@ -78,7 +44,13 @@ describe('MySQL deploy preconditions', () => {
     expect(message).toContain('default database is the views database')
     expect(count(`SELECT id FROM \`${db.views}\`.keep`)).toBe('7')
     expect(accountExists(db.reader)).toBe(false)
-    expect(deploy(db).status).not.toBe(0) // still the marker guard
+    // The remedy: select the source database. The views database is still foreign (no marker), so
+    // the marker guard refuses next; once that database is dropped, the apply is green.
+    expect(refusal(deploy(db)).message).toContain('has no hyde-db marker view')
+    expect(query(`DROP DATABASE \`${db.views}\``).status).toBe(0)
+    const again = deploy(db)
+    expect(again.status, again.stderr).toBe(0)
+    expect(readerGrants(db)).toEqual(viewGrants(db))
   })
 
   it('D115: a views database without the marker view is refused and nothing is dropped', async () => {
@@ -134,19 +106,38 @@ describe('MySQL deploy preconditions', () => {
     expect(readerGrants(db)).toEqual(viewGrants(db))
   })
 
-  it('A102: a deployer without CREATE TEMPORARY TABLES on the source database cannot even start the abort table', async () => {
+  it('A102, D99: a deployer without CREATE TEMPORARY TABLES on the source database is refused at the temporary-table step; granting it makes a re-apply pass', async () => {
     const db = await newDb()
     const deployer = createAccount(db, {
       password: 'pw-deployer',
-      grants: [`SELECT ON \`${db.name}\`.*`, 'SELECT ON mysql.*', 'CREATE USER ON *.*'],
+      grants: [
+        `SELECT ON \`${db.name}\`.*`,
+        `ALL PRIVILEGES ON \`${db.views}\`.*`,
+        'SELECT ON mysql.*',
+        'CREATE USER ON *.*',
+      ],
     })
-    const result = runScript(db, db.files['redacted-views.sql'], {
-      as: { user: deployer.user, password: deployer.password },
-    })
+    expect(
+      query(`GRANT SELECT ON \`${db.views}\`.* TO '${deployer.user}'@'%' WITH GRANT OPTION`).status,
+    ).toBe(0)
+    const as = { user: deployer.user, password: deployer.password }
+    const script = db.files['redacted-views.sql']
+    const result = runScript(db, script, { as })
     expect(result.status).not.toBe(0)
-    expect(result.stderr).toMatch(/ERROR 1044|ERROR 1142/)
+    const step =
+      script.split('\n').findIndex((line) => line.startsWith('CREATE TEMPORARY TABLE')) + 1
+    expect(step).toBeGreaterThan(0)
+    expect(result.stderr).toMatch(
+      new RegExp(`^ERROR 1044 \\(42000\\) at line ${step}: Access denied`),
+    )
     expect(schemaExists(db.views)).toBe(false)
     expect(accountExists(db.reader)).toBe(false)
+    expect(
+      query(`GRANT CREATE TEMPORARY TABLES ON \`${db.name}\`.* TO '${deployer.user}'@'%'`).status,
+    ).toBe(0)
+    const again = runScript(db, script, { as })
+    expect(again.status, again.stderr).toBe(0)
+    expect(readerGrants(db)).toEqual(viewGrants(db))
   })
 
   it('D115: a model whose table is hyde_db_marker fails at generate time, not at deploy time', async () => {
@@ -168,50 +159,80 @@ model Marker {
   })
 
   describe('a refused deploy (A74, D101, D155, D161)', () => {
-    /** Deploys cleanly, then makes the next apply refuse; returns the printed fix. */
+    /** The views database as a comparable text: its objects with their definitions, and the sentinel row. */
+    const viewsContent = (db: TestDb) =>
+      [
+        query(
+          `SELECT TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES WHERE TABLE_SCHEMA = '${db.views}' ORDER BY TABLE_NAME`,
+        ).stdout,
+        query(
+          `SELECT TABLE_NAME, VIEW_DEFINITION, DEFINER FROM information_schema.VIEWS WHERE TABLE_SCHEMA = '${db.views}' ORDER BY TABLE_NAME`,
+        ).stdout,
+        query(`SELECT id, note FROM \`${db.views}\`.sentinel`).stdout,
+      ].join('\n')
+    /** What the ungated reader-wide revoke (D155) leaves: only proxies, roles and default roles. */
+    const afterRefusal = (before: string[]) =>
+      before.filter((g) => /^(proxy|role|default role): /.test(g))
+
+    /**
+     * Deploys cleanly, adds a sentinel table to the views database, makes the next apply refuse and
+     * returns the printed fix. The views database must be unchanged (sentinel included) and the
+     * reader must hold nothing it did not hold before.
+     */
     async function refusedDb(
       sabotage: (db: TestDb) => void,
-    ): Promise<{ db: TestDb; fix: string; message: string }> {
+    ): Promise<{ db: TestDb; fix: string; message: string; grants: string[]; content: string }> {
       const db = await newDb()
       expect(deploy(db).status).toBe(0)
+      expect(
+        query(
+          `CREATE TABLE \`${db.views}\`.sentinel (id INT, note VARCHAR(20)); INSERT INTO \`${db.views}\`.sentinel VALUES (1, 'kept');`,
+        ).status,
+      ).toBe(0)
       sabotage(db)
-      const result = deploy(db)
-      return { db, ...refusal(result) }
+      const grantsBefore = readerGrants(db)
+      const content = viewsContent(db)
+      expect(content).toContain('kept')
+      const refused = refusal(deploy(db))
+      expect(viewsContent(db)).toBe(content)
+      const grants = readerGrants(db)
+      expect(grants).toEqual(afterRefusal(grantsBefore))
+      return { db, ...refused, grants, content }
     }
     const reader = (db: TestDb) => `'${db.reader}'@'${db.host}'`
 
-    it('A74, D101: a refusal leaves the views built, drops nothing and leaves the reader with no grant (the revoke is ungated, D155)', async () => {
-      const { db } = await refusedDb((db) => {
+    it('A74, D101, D155: a refusal drops nothing, also under --force; the reader is left with no view grant (the revoke is ungated)', async () => {
+      const { db, grants, content } = await refusedDb((db) => {
         const other = createAccount(db)
         expect(query(`GRANT PROXY ON '${other.user}'@'%' TO ${reader(db)}`).status).toBe(0)
         expect(query(`GRANT SELECT ON \`${db.name}\`.* TO ${reader(db)}`).status).toBe(0)
       })
-      expect(readerGrants(db).filter((g) => g.startsWith('proxy:'))).toHaveLength(1)
-      expect(readerGrants(db).some((g) => g.startsWith('db:'))).toBe(false)
-      expect(readerGrants(db).some((g) => g.startsWith('table:'))).toBe(false)
-      // The views database was not touched: gated statements after the refusal did not run.
-      expect(count(`SELECT COUNT(*) FROM \`${db.views}\`.users`)).toBe('1')
-      expect(count(`SELECT COUNT(*) FROM \`${db.views}\`.hyde_db_marker`)).toBe('1')
+      expect(grants).toHaveLength(1)
+      expect(grants[0]).toMatch(/^proxy: /)
       // Under --force the client runs on past the refusal: every statement from the drop on is gated (D155).
       const forced = runScript(db, db.files['redacted-views.sql'], { force: true })
-      expect(forced.status).toBe(0)
       expect(forced.stderr).toContain('hyde-db:')
-      expect(count(`SELECT COUNT(*) FROM \`${db.views}\`.users`)).toBe('1')
-      expect(count(`SELECT COUNT(*) FROM \`${db.views}\`.hyde_db_marker`)).toBe('1')
-      expect(readerGrants(db).some((g) => g.startsWith('table:') || g.startsWith('db:'))).toBe(
-        false,
-      )
+      expect(viewsContent(db)).toBe(content) // the sentinel survives: no DROP DATABASE ran
+      expect(readerGrants(db)).toEqual(grants)
     })
 
     it('A74: no refused deploy grants the reader more than it held before', async () => {
-      const { db } = await refusedDb((db) => {
+      const { grants } = await refusedDb((db) => {
         const role = createRole(db)
         expect(query(`GRANT '${role.user}'@'%' TO ${reader(db)}`).status).toBe(0)
         expect(query(`GRANT SELECT ON \`${db.name}\`.* TO ${reader(db)}`).status).toBe(0)
       })
-      const grants = readerGrants(db)
-      expect(grants.every((g) => g.startsWith('role:'))).toBe(true)
+      expect(grants).toHaveLength(1)
+      expect(grants[0]).toMatch(/^role: /)
     })
+
+    /** Pastes the fix as the administrator and expects a green re-apply that leaves exactly the view grants. */
+    function pasteAndReapply(db: TestDb, fix: string): void {
+      expect(query(fix).status).toBe(0)
+      const again = deploy(db)
+      expect(again.status, again.stderr).toBe(0)
+      expect(readerGrants(db)).toEqual(viewGrants(db))
+    }
 
     it('D161: a proxy grant is refused with a per-object fix that works when pasted', async () => {
       const { db, fix } = await refusedDb((db) => {
@@ -219,10 +240,7 @@ model Marker {
         expect(query(`GRANT PROXY ON '${other.user}'@'%' TO ${reader(db)}`).status).toBe(0)
       })
       expect(fix).toMatch(/^REVOKE PROXY ON '.+'@'%' FROM '.+'@'%';$/)
-      expect(query(fix).status).toBe(0)
-      const again = deploy(db)
-      expect(again.status, again.stderr).toBe(0)
-      expect(readerGrants(db)).toEqual(viewGrants(db))
+      pasteAndReapply(db, fix)
     })
 
     it('D161: a role granted to the reader is refused with a per-object fix that works when pasted', async () => {
@@ -231,10 +249,7 @@ model Marker {
         expect(query(`GRANT '${role.user}'@'%' TO ${reader(db)}`).status).toBe(0)
       })
       expect(fix).toMatch(/^REVOKE '.+'@'%' FROM '.+'@'%';$/)
-      expect(query(fix).status).toBe(0)
-      const again = deploy(db)
-      expect(again.status, again.stderr).toBe(0)
-      expect(readerGrants(db)).toEqual(viewGrants(db))
+      pasteAndReapply(db, fix)
     })
 
     it('D161: a default role on the reader is refused with a fix that works when pasted', async () => {
@@ -244,10 +259,7 @@ model Marker {
         expect(query(`SET DEFAULT ROLE '${role.user}'@'%' TO ${reader(db)}`).status).toBe(0)
       })
       // Roles are refused first (rank 7 before 8); revoking the role removes its default-role row too.
-      expect(query(fix).status).toBe(0)
-      const again = deploy(db)
-      expect(again.status, again.stderr).toBe(0)
-      expect(readerGrants(db)).toEqual(viewGrants(db))
+      pasteAndReapply(db, fix)
     })
 
     it('D161: another account that could match a reader login is refused with a DROP USER fix that works when pasted', async () => {
@@ -256,22 +268,17 @@ model Marker {
         expect(query(`CREATE USER '${db.reader}'@'localhost'`).status).toBe(0)
       })
       expect(fix).toBe(`DROP USER '${db.reader}'@'localhost';`)
-      expect(query(fix).status).toBe(0)
-      const again = deploy(db)
-      expect(again.status, again.stderr).toBe(0)
+      pasteAndReapply(db, fix)
     })
 
-    it('D161: the anonymous account is refused with a DROP USER fix that works when pasted', async () => {
-      const db = await newDb()
-      expect(deploy(db).status).toBe(0)
-      const existing = count("SELECT COUNT(*) FROM mysql.user WHERE User = ''")
-      if (existing !== '0') return // a server that already has an anonymous account is not ours to touch
-      db.extras.push({ user: '', host: 'anon.example' })
-      expect(query("CREATE USER ''@'anon.example'").status).toBe(0)
-      const { fix } = refusal(deploy(db))
-      expect(fix).toBe("DROP USER ''@'anon.example';")
-      expect(query(fix).status).toBe(0)
-      expect(deploy(db).status).toBe(0)
+    it('D161: an anonymous account is refused with a DROP USER fix that works when pasted', async () => {
+      const { db, fix } = await refusedDb((db) => {
+        // Unique host, so it neither collides with an anonymous account of the server nor leaks.
+        db.extras.push({ user: '', host: `anon-${db.name}.example` })
+        expect(query(`CREATE USER ''@'anon-${db.name}.example'`).status).toBe(0)
+      })
+      expect(fix).toBe(`DROP USER ''@'anon-${db.name}.example';`)
+      pasteAndReapply(db, fix)
     })
   })
 })

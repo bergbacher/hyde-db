@@ -1,45 +1,26 @@
 // Attack suite A, part 1: the deploy lifecycle against a real MySQL server (A74, A75, A78, A85, A86, D104, D116, D119).
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  type ClientResult,
   createAccount,
-  createTestDb,
   deploy,
-  dropTestDb,
   query,
   readerGrants,
+  refusal,
   runScript,
   type TestDb,
+  trackTestDbs,
   unlockReader,
+  viewGrants,
 } from './helpers/db.ts'
 
-const created: TestDb[] = []
-async function newDb(options?: Parameters<typeof createTestDb>[0]): Promise<TestDb> {
-  const db = await createTestDb(options)
-  created.push(db)
-  return db
-}
-afterEach(async () => {
-  for (const db of created.splice(0)) await dropTestDb(db)
-})
+const { newDb, replaceLast } = trackTestDbs()
 
 const PASSWORD = 'pw-reader-1'
 const asReader = (db: TestDb) => ({ user: db.reader, password: PASSWORD })
-const viewGrants = (db: TestDb) => [
-  `table: ${db.views}.orders Select|`,
-  `table: ${db.views}.users Select|`,
-]
 const accountState = (db: TestDb) =>
   query(
     `SELECT account_locked, HEX(authentication_string), plugin FROM mysql.user WHERE User='${db.reader}' AND Host='${db.host}'`,
   ).stdout.trim()
-
-/** The abort message printed in a failed script's stderr. */
-function abortMessage(result: ClientResult): string {
-  const found = /'(hyde-db: .*? Fix: .*?)'(?: for column|$)/m.exec(result.stderr)
-  expect(found, result.stderr).not.toBeNull()
-  return found?.[1] ?? ''
-}
 
 /** Prisma schema with one model mapped to `table` whose visible column is mapped to `column` (names given as Prisma string-literal text). */
 const oddSchema = (table: string, column: string, hidden = false) => `
@@ -149,7 +130,10 @@ describe('MySQL deploy lifecycle', () => {
     expect(query(`DROP USER '${deployer.user}'@'%'`).status).toBe(0)
     const broken = query('SELECT * FROM users', { as, database: db.views })
     expect(broken.status).not.toBe(0)
-    expect(broken.stderr).toMatch(/ERROR (1449|1045)/) // a missing definer is reported as 1449 or as access denied
+    // Recorded on mysql:8.4 (8.4.11) and mysql:9.7 (9.7.2): both answer a view whose definer account is gone with ERROR 1045.
+    expect(broken.stderr).toContain(
+      `ERROR 1045 (28000) at line 1: Access denied for user '${db.reader}'`,
+    )
     expect(query('SELECT 1', { as, database: db.views }).stdout.trim()).toBe('1') // the login itself still works
     expect(broken.stdout).toBe('')
   })
@@ -226,7 +210,7 @@ describe('MySQL deploy lifecycle', () => {
       config: { schema: views, role, readerHost: host },
     })
     const db: TestDb = { ...made, views, reader: role, host }
-    created[created.length - 1] = db
+    replaceLast(db)
     const setup = runScript(
       db,
       `CREATE TABLE \`${table}\` (id INT PRIMARY KEY, \`${column}\` VARCHAR(20) NOT NULL); INSERT INTO \`${table}\` VALUES (1, 'long');`,
@@ -241,8 +225,8 @@ describe('MySQL deploy lifecycle', () => {
     expect(query(`GRANT PROXY ON '${seeded.user}'@'%' TO '${role}'@'${host}'`).status).toBe(0)
     const refused = deploy(db)
     expect(refused.status).not.toBe(0)
-    const message = abortMessage(refused)
-    expect(message.length).toBeLessThanOrEqual(128)
-    expect(message).toContain('Fix: ')
+    const { message, fix } = refusal(refused) // at most 128 characters, checked by refusal
+    expect(message).toContain('the reader takes part in a proxy grant')
+    expect(fix).not.toMatch(/^REVOKE /) // too long to paste at maximal lengths: prose
   })
 })

@@ -1,30 +1,22 @@
 // Attack suite A, part 3: the drop script (A74, D100, D115, D119, D121).
-import { afterEach, describe, expect, it } from 'vitest'
+import { describe, expect, it } from 'vitest'
 import {
-  createTestDb,
+  count,
   deploy,
-  dropTestDb,
   query,
   readerGrants,
+  refusal,
   runScript,
+  schemaExists,
   type TestDb,
+  trackTestDbs,
   unlockReader,
+  viewGrants,
 } from './helpers/db.ts'
 
-const created: TestDb[] = []
-async function newDb(options?: Parameters<typeof createTestDb>[0]): Promise<TestDb> {
-  const db = await createTestDb(options)
-  created.push(db)
-  return db
-}
-afterEach(async () => {
-  for (const db of created.splice(0)) await dropTestDb(db)
-})
+const { newDb } = trackTestDbs()
 
 const dropScript = (db: TestDb) => runScript(db, db.files['redacted-views-drop.sql'])
-const count = (sql: string) => query(sql).stdout.trim()
-const schemaExists = (name: string) =>
-  count(`SELECT COUNT(*) FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = '${name}'`) === '1'
 
 describe('MySQL drop script', () => {
   it("D100, A74: drop removes the views database and the reader's view grants, so a re-created view name is not re-granted", async () => {
@@ -74,16 +66,16 @@ describe('MySQL drop script', () => {
     ).toBe(0)
     const before = readerGrants(db)
     expect(before).toHaveLength(2)
-    const result = dropScript(db)
-    expect(result.status).not.toBe(0)
-    expect(result.stderr).toContain('ERROR 1366')
-    expect(result.stderr).toContain('hyde-db:')
-    expect(result.stderr).toContain('Fix:')
-    const message = /'(hyde-db: .*? Fix: .*?)'(?: for column|$)/m.exec(result.stderr)?.[1] ?? ''
-    expect(message.length).toBeGreaterThan(0)
-    expect(message.length).toBeLessThanOrEqual(128)
+    const { message, fix } = refusal(dropScript(db))
+    expect(message).toContain('has no hyde-db marker view')
     expect(count(`SELECT id FROM \`${db.views}\`.keep`)).toBe('7')
     expect(readerGrants(db)).toEqual(before)
+    // The remedy: drop the foreign database (or choose another "schema"); the drop then runs green.
+    expect(fix).toContain('drop or rename it')
+    expect(query(`DROP DATABASE \`${db.views}\``).status).toBe(0)
+    const again = dropScript(db)
+    expect(again.status, again.stderr).toBe(0)
+    expect(readerGrants(db)).toEqual([])
   })
 
   it('D119: drop succeeds when the reader account does not exist', async () => {
@@ -104,9 +96,6 @@ describe('MySQL drop script', () => {
     expect(dropScript(db).status).toBe(0)
     const result = deploy(db)
     expect(result.status, result.stderr).toBe(0)
-    expect(readerGrants(db)).toEqual([
-      `table: ${db.views}.orders Select|`,
-      `table: ${db.views}.users Select|`,
-    ])
+    expect(readerGrants(db)).toEqual(viewGrants(db))
   })
 })
