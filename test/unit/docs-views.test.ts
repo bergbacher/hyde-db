@@ -2,7 +2,7 @@
 // the final-check pipeline and the test layers for contributors and AI agents.
 // These tests pin its view conventions so it cannot drift from the ledger or reference
 // paths that no longer exist.
-import { existsSync } from 'node:fs'
+import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { citedRecords, headingAnchors, ledgerStates, withoutComments } from '../helpers/docs.ts'
@@ -51,5 +51,30 @@ describe('docs/architecture.md (a view of LEDGER.md)', () => {
   it('README.md links to docs/architecture.md from the Development section', () => {
     const readme = readRepoFile('README.md')
     expect(withoutComments(readme)).toContain('[docs/architecture.md](docs/architecture.md)')
+  })
+
+  it('D158: names every module file under src/ in a backtick path', () => {
+    const files = (dir: string): string[] =>
+      readdirSync(join(repoRoot, dir), { withFileTypes: true }).flatMap((entry) =>
+        entry.isDirectory()
+          ? files(`${dir}/${entry.name}`)
+          : entry.name.endsWith('.ts')
+            ? [`${dir}/${entry.name}`]
+            : [],
+      )
+    for (const file of files('src')) {
+      expect(prose, file).toContain(`\`${file}\``)
+    }
+  })
+
+  it('D103: the test-layer table names the MySQL attack suite and end to end', () => {
+    expect(prose).toContain('pnpm test:integration:mysql')
+    expect(prose).toContain('MYSQL_IMAGE')
+    expect(prose).toContain('E2E_MYSQL_DATABASE_URL')
+  })
+
+  it('D143: the final-check section names FINAL_CHECKS in src/render/final-checks.ts', () => {
+    expect(prose).toContain('`FINAL_CHECKS`')
+    expect(prose).not.toContain('renderFinalCheck()` in `src/render/apply-sql.ts`')
   })
 })

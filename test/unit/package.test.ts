@@ -23,7 +23,7 @@ describe('package.json', () => {
 
   it('D53: describes privacy, not one kind of reader, and stays discoverable', () => {
     expect(pkg.description).toBe(
-      'Prisma generator that turns /// @hyde annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role',
+      'Prisma generator that turns /// @hyde annotations into read-only PostgreSQL or MySQL views with sensitive columns removed, plus a locked-down reader role',
     )
     expect(pkg.keywords).toEqual(
       expect.arrayContaining([
@@ -57,6 +57,12 @@ describe('package.json', () => {
     expect(pkg.homepage).toBe('https://github.com/bergbacher/hyde-db#readme')
     expect(pkg.bugs).toBe('https://github.com/bergbacher/hyde-db/issues')
     expect(pkg.publishConfig).toEqual({ access: 'public', provenance: true })
+  })
+
+  it('D86: the package description and keywords mention MySQL', () => {
+    expect(pkg.description).toContain('MySQL')
+    expect(pkg.keywords).toContain('mysql')
+    expect(pkg.keywords).toContain('postgresql')
   })
 
   it('D55: stays discoverable to agent tooling', () => {

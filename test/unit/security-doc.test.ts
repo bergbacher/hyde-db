@@ -163,3 +163,65 @@ describe('SECURITY.md (a view of LEDGER.md)', () => {
     expect(security.trimEnd()).toMatch(/\n---\n\nView on LEDGER\.md, \d{4}-\d{2}-\d{2}$/)
   })
 })
+
+describe('SECURITY.md on MySQL (a view of LEDGER.md)', () => {
+  const guarantee = section(prose, 'What hyde-db guarantees')
+  const notGuaranteed = section(prose, 'What hyde-db does not guarantee')
+  const mysqlGuarantee = section(guarantee, 'MySQL', '###')
+  const mysqlLimits = section(notGuaranteed, 'MySQL', '###')
+
+  it('D101, A74, D132: states the MySQL guarantee: no table data outside the views, no rollback, the refused-deploy wording, the time scope', () => {
+    expect(mysqlGuarantee).toContain('can read no table data outside the views')
+    expect(mysqlGuarantee).toContain('cannot be rolled back')
+    expect(mysqlGuarantee).toContain('never grants the reader more than before')
+    expect(mysqlGuarantee).toContain('rebuilt without the reader grant')
+    expect(mysqlGuarantee).toContain('no other database names or columns')
+    expect(mysqlGuarantee).toContain('as of each successful apply')
+    expect(mysqlGuarantee).toContain('check, build the views, grant last, re-check')
+  })
+
+  it('D101, A78: lists the MySQL non-guarantees: only per-account resource limits stick; read-only and timeout are session settings', () => {
+    expect(mysqlLimits).toContain('per-account resource limits')
+    expect(mysqlLimits).toContain('session settings')
+    expect(mysqlLimits).toContain('can change')
+  })
+
+  it('A103: says the reader sees server status and variables and its own session in performance_schema', () => {
+    expect(mysqlLimits).toContain('performance_schema')
+    expect(mysqlLimits).toContain('server status and variables')
+    expect(mysqlLimits).toContain('its own session')
+  })
+
+  it('D101, A104: says a refused apply leaves access the reader already has until the printed fix runs', () => {
+    expect(mysqlLimits).toContain('default roles')
+    expect(mysqlLimits).toContain('mandatory_roles')
+    expect(mysqlLimits).toContain('same user name')
+    expect(mysqlLimits).toContain('anonymous')
+    expect(mysqlLimits).toContain('until the printed fix runs')
+  })
+
+  it('D120: says role is the account user name, not a MySQL ROLE, and a non-empty mandatory_roles is unsupported', () => {
+    expect(mysqlGuarantee + mysqlLimits).toContain('not a MySQL `ROLE`')
+    expect(mysqlLimits).toContain('non-empty `mandatory_roles` is unsupported')
+  })
+
+  it('D118: says managed services are not tested end to end and PlanetScale is unsupported', () => {
+    expect(mysqlLimits).toContain('not tested end to end')
+    expect(mysqlLimits).toContain('PlanetScale is unsupported')
+    expect(mysqlLimits).toContain('Cloud SQL')
+  })
+
+  it('D94: names the supported MySQL lines and the unsupported ones', () => {
+    const supported = section(prose, 'Supported versions')
+    expect(supported).toContain('MySQL 8.4 and 9.7')
+    expect(supported).toContain('MariaDB')
+    expect(supported).toContain('MySQL 8.0')
+  })
+
+  it('cites the MySQL records it states', () => {
+    const cited = citedRecords(security)
+    for (const id of ['D101', 'A74', 'A78', 'A103', 'A104', 'D118', 'D120', 'D94']) {
+      expect(cited.has(id), id).toBe(true)
+    }
+  })
+})
