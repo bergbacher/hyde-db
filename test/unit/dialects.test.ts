@@ -85,6 +85,19 @@ describe('the MySQL dialect (Task 11)', () => {
     expect(found[0]?.message).toContain('the hyde-db marker view and hyde_db_marker')
   })
 
+  it('D157, D152: the marker-name collision ignores case, as servers with lower_case_table_names do', () => {
+    const dm = datamodel(
+      model('Marker', [scalar('id', '@hyde.visible', { isId: true })], {
+        dbName: 'Hyde_Db_Marker',
+      }),
+    )
+    const found = analyze(dm, {}, { provider: 'mysql' }).diagnostics.filter(
+      (d) => d.code === 'HYDE_VIEW_NAME_COLLISION',
+    )
+    expect(found).toHaveLength(1)
+    expect(found[0]?.message).toContain('Hyde_Db_Marker')
+  })
+
   it('D115: the marker-name rule is MySQL only; PostgreSQL accepts that table name', () => {
     const dm = datamodel(
       model('Marker', [scalar('id', '@hyde.visible', { isId: true })], {
@@ -122,5 +135,9 @@ describe('the MySQL dialect (Task 11)', () => {
     const d = dialectFor('mysql')
     expect(d?.provider).toBe('mysql')
     expect(Object.keys(DIALECTS)).toContain('mysql')
+    const config = analyze(datamodel(), {}, { provider: 'mysql' }).config
+    const models = toDatamodel(datamodel(user())).models
+    expect(d?.sourceSchemaOf(models[0] as never, config as never)).toBeNull()
+    expect(d?.configRules(config as never, models)).toEqual([])
   })
 })

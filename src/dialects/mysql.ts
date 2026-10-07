@@ -9,10 +9,10 @@ import { renderMysqlMarkdown } from '../render/mysql-markdown.ts'
 import type { Diagnostic, MysqlConfig, View } from '../types.ts'
 import type { Dialect } from './index.ts'
 
-/** D115, D157: a view named like the marker view collides with it; the marker view holds the name first. */
+/** D115, D157: a view named like the marker view, in any case (D152), collides with it; the marker view holds the name first. */
 export function mysqlViewRules(_config: MysqlConfig, views: readonly View[]): Diagnostic[] {
   return views
-    .filter((view) => view.name === MARKER_VIEW)
+    .filter((view) => view.name.toLowerCase() === MARKER_VIEW)
     .map((view) => viewNameCollision(MARKER_VIEW, 'the hyde-db marker view', view.source))
 }
 
