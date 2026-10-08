@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the module structure, the dependency direction, the final-check pipeline and the test layers. The code is the authority on behaviour; `LEDGER.md` is the source of decisions. <!-- D46, D20 -->
+This document describes the module structure, the dependency direction, the PostgreSQL final check, the MySQL apply script and the test layers. The code is the authority on behaviour; `LEDGER.md` is the source of decisions. <!-- D46, D20 -->
 
 ## Module layout
 
@@ -20,45 +20,83 @@ The source splits into one I/O module and a pure core.
 | `src/config.ts` | `validateConfig`, `DEFAULT_CONFIG`, `CONFIG_KEYS`. |
 | `src/sensitive.ts` | `isSensitiveName`: word-based detection of field and column names that look sensitive. |
 | `src/annotations.ts` | `readModelAnnotations`, `readFieldAnnotations`: parse `/// @hyde.*` doc comments. |
-| `src/analyze.ts` | Analysis rules: config validation, annotation parsing, sensitive lint, schema-conflict checks, view-name collision detection. Returns `Analysis { config, views, diagnostics, counts }`. |
-| `src/build.ts` | `build()`: calls `analyze`, then the three renderers; sets `files: null` when any diagnostic is an error. |
-| `src/sql.ts` | `quoteIdent`, `quoteLiteral` — SQL-quoting helpers shared by all three renderers. |
-| `src/render/apply-sql.ts` | Renders `redacted-views.sql`: the full transaction — marker guard, dependents guard, schema drop and recreate, views, grants, session defaults, final check. |
-| `src/render/drop-sql.ts` | Renders `redacted-views-drop.sql`: drops the schema, also guarded by the marker and dependents checks. |
+| `src/analyze.ts` | Analysis: annotation parsing, sensitive lint and view-name collision detection, with config validation and the database's own rules (such as schema conflicts) reached through the dialect. Returns `Analysis { config, views, diagnostics, counts }`. <!-- D104, D114 --> |
+| `src/build.ts` | `build()`: resolves the provider to a dialect, calls `analyze`, then the dialect's three renderers; an unknown provider becomes a diagnostic, never a throw; sets `files: null` when any diagnostic is an error. <!-- D104, D114, D142, D159 --> |
+| `src/sql.ts` | SQL-quoting helpers: `quoteIdent`, `sqlName` (PostgreSQL), `quoteMysqlIdent`, `mysqlName` (MySQL), `quoteLiteral` (both). |
+| `src/cli-help.ts` | Command-line text and argument handling, pure so the I/O module stays thin. <!-- D5 --> |
+| `src/render/apply-sql.ts` | Renders the PostgreSQL `redacted-views.sql`: the full transaction — marker guard, dependents guard, schema drop and recreate, views, grants, session defaults, final check. |
+| `src/render/acl-helpers.ts` | ACL SQL helpers shared by the PostgreSQL final checks: catalog queries and the statements that revoke what the reader role must not hold, printed as fixes. <!-- D143 --> |
+| `src/render/final-checks.ts` | `FINAL_CHECKS`, the ordered check records for rows 2–15 of the README refusal table, and `renderFinalCheck()`, which joins them into the final check. <!-- D143, D158 --> |
+| `src/render/drop-sql.ts` | Renders the PostgreSQL `redacted-views-drop.sql`: drops the schema, also guarded by the marker and dependents checks. |
 | `src/render/schema-guard.ts` | Two shared DO-block helpers: `renderSchemaGuard` (refuses a schema not marked by hyde-db) and `renderDependentsGuard` (refuses when objects outside the schema depend on its views). |
-| `src/render/markdown.ts` | Renders `redacted-schema.md`. |
-| `src/dialects/postgresql.ts` | PostgreSQL-specific analysis rules (the schema-conflict checks). Prepared as the hook for the 1.1.0 MySQL dialect. |
+| `src/render/markdown.ts` | Renders the PostgreSQL `redacted-schema.md`. |
+| `src/dialects/index.ts` | The `Dialect` interface (config validation, analysis rules, source schema, and the apply, drop and Markdown renderers), the registry `DIALECTS` and `dialectFor`, which returns `undefined` for a provider with no entry. <!-- D104, D114, D158 --> |
+| `src/dialects/postgresql.ts` | The PostgreSQL `Dialect`: its config, its schema-conflict analysis rules and its three renderers. |
+| `src/dialects/mysql.ts` | The MySQL `Dialect`: its config, the marker-view name collision rule (the only generate-time rule) and its three renderers. <!-- D117, D115 --> |
+| `src/render/mysql-guards.ts` | MySQL pieces both scripts share: the prelude (`sql_mode`, `lock_wait_timeout`, the refusal flag, the missing-default-database report, the abort table), the abort through a failing temporary-table insert, `gated` statements and the marker guard. <!-- D99, D155, D160, D115 --> |
+| `src/render/mysql-apply-checks.ts` | MySQL apply checks: default database is not the views database, grant-table access, reader reset and verify, pre-checks (roles, `mandatory_roles`, proxies, other accounts) and the re-check; fixes that outgrow the limit fall back to a shorter one. <!-- D117, D119, D161 --> |
+| `src/render/mysql-apply-sql.ts` | Renders the MySQL `redacted-views.sql` in the order of the apply pipeline. <!-- D117 --> |
+| `src/render/mysql-drop-sql.ts` | Renders the MySQL `redacted-views-drop.sql`: marker guard, revoke, gated `DROP DATABASE IF EXISTS`. <!-- D100, D121 --> |
+| `src/render/mysql-markdown.ts` | Renders the MySQL `redacted-schema.md`. |
 
-**Dependency direction:** `src/generator.ts` → `src/build.ts` → `src/analyze.ts` and the three renderers → `src/sql.ts`, `src/brand.ts`, `src/diagnostics.ts`, `src/types.ts`. The core never imports from `src/generator.ts`. `src/datamodel.ts` and `src/config.ts` import no Prisma types. <!-- D7 -->
+**Dependency direction:** `src/generator.ts` → `src/build.ts` → `src/analyze.ts` and `src/dialects/index.ts` → `src/dialects/postgresql.ts` and `src/dialects/mysql.ts` → the renderers of each database → `src/sql.ts`, `src/brand.ts`, `src/diagnostics.ts`, `src/types.ts`. `src/build.ts` and `src/analyze.ts` reach a database only through `dialectFor`; renderers never import a dialect. On PostgreSQL both renderers share `src/render/schema-guard.ts`, and only `src/render/apply-sql.ts` uses `src/render/final-checks.ts` (which uses `src/render/acl-helpers.ts`). On MySQL both renderers share `src/render/mysql-guards.ts`, and only `src/render/mysql-apply-sql.ts` uses `src/render/mysql-apply-checks.ts`. The core never imports from `src/generator.ts`. `src/datamodel.ts` and `src/config.ts` import no Prisma types. <!-- D7, D104, D114 -->
+
+`build` and `analyze` take the provider as an optional third argument (`'postgresql'` by default) and resolve it to a `Dialect` through the registry; a provider with no entry becomes a diagnostic, never a throw. Each dialect's renderers are testable on their own. <!-- D107, D114, D142 -->
 
 `build` and `analyze` accept the DMMF datamodel exactly as Prisma passes it (`options.dmmf.datamodel`); the adapter converts it to the internal `Datamodel` inside the core. <!-- D47 --> The analysis result carries the visible and hidden column counts the generator entry needs for the success summary line. <!-- D48 --> The public API is exactly `build`, `analyze` and their types, nothing else. <!-- D9 -->
 
-## The final check
+## The PostgreSQL final check
 
-`renderFinalCheck()` in `src/render/apply-sql.ts` emits the last section of `redacted-views.sql`. The whole script runs in one transaction; the final check runs after the new views and grants, so it queries the live role state against the just-created schema. Any raised exception rolls back the whole transaction, leaving nothing changed. <!-- D1, D11 -->
+`renderFinalCheck()` in `src/render/final-checks.ts` emits the last section of `redacted-views.sql`. The whole script runs in one transaction; the final check runs after the new views and grants, so it queries the live role state against the just-created schema. Any raised exception rolls back the whole transaction, leaving nothing changed. <!-- D1, D11 -->
 
-The function emits sixteen sequential catalog-query blocks (rows 0–15 of the refusal table in `README.md`). Each block that detects a problem raises with a message starting `hyde-db:` and a `Fix:` suffix holding a pasteable SQL statement. The fix names only grantees that currently exist, so pasting it works even when a first-deploy rollback cleared the role. <!-- D13, D24, D49 -->
+`src/render/apply-sql.ts` emits rows 0 and 1 of the refusal table in `README.md` (the marker and dependents guards) before the drop. `FINAL_CHECKS` holds one check record per row 2–15, in the order of the aborts, and `renderFinalCheck()` renders them in sequence as catalog-query blocks. Each block that detects a problem raises with a message starting `hyde-db:` and a `Fix:` suffix holding a pasteable SQL statement. The fix names only grantees that currently exist, so pasting it works even when a first-deploy rollback cleared the role. <!-- D13, D24, D49 -->
 
 Every file in `test/integration/` targets one or more of those rows: it sets up the offending privilege, applies the script, asserts the exception text and the fix SQL, pastes the fix, and applies the script again to confirm it passes. Integration tests never skip and use no error handling around the container start. <!-- D22, D43 -->
 
 ### Adding a final-check row
 
-1. Add a catalog query block and fix emission in `renderFinalCheck()` in `src/render/apply-sql.ts`.
+1. Add a check record, with its catalog query and fix emission, to `FINAL_CHECKS` in `src/render/final-checks.ts`; shared catalog queries and fix statements go in `src/render/acl-helpers.ts`. <!-- D143 -->
 2. Add tests in `test/integration/` that set up the offending privilege, assert the refusal message and fix text, paste the fix, and re-apply to confirm it passes.
 3. Run `pnpm test:integration` against PostgreSQL 14 and 18 (`PG_IMAGE=postgres:14-alpine pnpm test:integration`).
 4. The controller records the decision in `LEDGER.md`.
 
+## The MySQL apply script
+
+MySQL commits DDL and grants as they run (it cannot roll them back), so `src/render/mysql-apply-sql.ts` emits a script that is safe by ordering: check, build the views, grant last, re-check, and revoke and abort on failure. <!-- D95, A74 -->
+
+1. The prelude pins `sql_mode` and `lock_wait_timeout`, clears the refusal flag, reports a missing default database and creates the abort table. <!-- D117, D160 -->
+2. Checks refuse before anything changes: the default database is the views database, the views database exists without the marker view or with a marker that names another source database, the deployer cannot read the grant tables, the reader's reset leaves a grant, and the pre-checks find roles, a non-empty `mandatory_roles`, proxies or other accounts a login could match. <!-- D117, D119, D120, D165 -->
+3. The views database is dropped and recreated, with the marker view and the views, the reader account is created only when missing, and the reader is granted `SELECT` on each view last. <!-- D115, D116, D117 -->
+4. The re-check runs every refusal again; on a finding it revokes the reader's grants and aborts. <!-- D117, D119 -->
+
+The marker view records the source database (`DATABASE()` when the apply runs) in a second column `source`; the apply and drop scripts read it through the view and refuse a views database whose marker names another source database. <!-- D165, A105, A106 --> Every check first sets the abort message to a "could not run" refusal for that check and only then evaluates it, so a check whose query fails under `--force` refuses instead of passing silently. <!-- D166 --> The leftover-grant check reads the reader's static global privileges from the `*_priv` columns of `mysql.user`, not from `information_schema.USER_PRIVILEGES`, and the re-check's exception for the expected view grants compares `Db` exactly and `Table_name` exactly, or case-insensitively only when `lower_case_table_names` is not 0. <!-- D168 -->
+
+A table named `hyde_db_marker` or `hyde_db_abort` (the abort table, in any case) is the one generate-time rule: it is reported as `HYDE_VIEW_NAME_COLLISION`. <!-- D157, D167 -->
+
+An abort is a failing insert of the message into a temporary table under strict mode: no routines, nothing left behind. The message is one problem and a fix within a length limit; a fix that does not fit falls back to a shorter statement. <!-- D99, D151, D161 --> Every statement from `DROP DATABASE` on, and the drop script's `DROP DATABASE`, is a gated statement: a prepared statement that executes only while the refusal flag is unset, so a client that runs past errors (`mysql --force`) cannot grant the reader access after a refusal. The gate protects only after a refusal: a failing state-changing statement (such as a lock timeout on `DROP DATABASE`) can leave the previous views granted, so the scripts are run without `--force`. <!-- D155, D164 -->
+
+### Adding a MySQL check
+
+1. A refusal that must hold both before the changes and after the grants is a new entry `{ id, source }` in the private `sources` array of `src/render/mysql-apply-checks.ts`, where `source` is a SELECT of `problem`, `fix` and `rank`. It then runs as a pre-check (`preChecks`) and again in `renderRecheck`. <!-- D117, D119 -->
+2. A refusal that runs once is a standalone `MysqlCheck` (`id` and `render(config)`), built on `abortWhenFound` or `abortIf` from `src/render/mysql-guards.ts`. Insert it, in the order of the apply pipeline above, into the render list in `renderMysqlApplySql` in `src/render/mysql-apply-sql.ts`. <!-- D117 -->
+3. Keep the printed fix within the fix limit, with a shorter fallback when a computed fix can outgrow it. <!-- D151, D161 -->
+4. Run `pnpm golden` and review the diff of `example-mysql/redacted`; golden files change only after a ledger-backed output change. <!-- D6 -->
+5. Add a unit test in `test/unit/render-mysql-apply-checks.test.ts` and an attack test in `test/integration-mysql/` that sets up the offending access, asserts the message and fix, pastes the fix and re-applies.
+6. Run `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql` and `MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`.
+7. The controller records the decision in `LEDGER.md`.
+
 ## Test layers
 
-<!-- D20, D6, D22, D23, D43 -->
+<!-- D20, D6, D22, D23, D43, D94, D103 -->
 
 | Layer | Command | What it proves |
 |---|---|---|
-| Unit | `pnpm test:coverage` | Config validation, annotation parsing, sensitive-name lint, each analysis rule, all three renderers, SQL quoting and the generator protocol. |
+| Unit | `pnpm test:coverage` | Config validation, annotation parsing, sensitive-name lint, each analysis rule, all renderers of both databases, SQL quoting and the generator protocol. |
 | Characterization | `pnpm test:coverage` | The generator reproduces the base output for the example schema byte-for-byte. Golden files change only with `pnpm golden` after a ledger-backed output change. |
 | DMMF contract | `pnpm test:coverage` | The pinned Prisma 6 and 7 schema engines (WASM) produce identical views and diagnostics for the same fixture schema. |
 | Attack suite | `pnpm test:integration` | A real PostgreSQL container (Testcontainers): the final check refuses every category of leaked access, each printed fix removes exactly that access, and a re-apply passes. Runs on PostgreSQL 14 and 18. |
-| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('hyde-db')` works. |
+| MySQL attack suite | `pnpm test:integration:mysql` | A real MySQL container (Testcontainers, image from `MYSQL_IMAGE`): every access path is refused or neutralised, each printed fix removes exactly that access, stopping the script after each statement never gives the reader more than its view grants, and `mysql --force` after a refusal grants nothing. Runs on MySQL 8.4 and 9.7. |
+| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('hyde-db')` works. With `provider = "mysql"` the same runs against `E2E_MYSQL_DATABASE_URL`. |
 
 Coverage gate: at least 95% of lines and branches in `src/`, generator entry excluded. <!-- D23 -->
 

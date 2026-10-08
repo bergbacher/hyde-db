@@ -1,7 +1,6 @@
 // Analysis rules: decide which columns of which models become views, and collect every
 // diagnostic (D29) plus the visible/hidden column counts (D48).
 import { readFieldAnnotations, readModelAnnotations } from './annotations.ts'
-import { validateConfig } from './config.ts'
 import { type Model, toDatamodel } from './datamodel.ts'
 import {
   relationAnnotated,
@@ -9,12 +8,14 @@ import {
   sensitiveImplicit,
   strictModelDefault,
   strictUnannotated,
+  unsupportedProvider,
   viewNameCollision,
 } from './diagnostics.ts'
-import { postgresqlConfigRules } from './dialects/postgresql.ts'
+import { type Dialect, dialectFor } from './dialects/index.ts'
 import { isSensitiveName } from './sensitive.ts'
 import type {
   Analysis,
+  BuildOptions,
   Diagnostic,
   DmmfDatamodel,
   GeneratorConfig,
@@ -50,6 +51,7 @@ function relationsOf(
 function analyzeModel(
   model: Model,
   config: ResolvedConfig,
+  sourceSchema: string | null,
   modelsByName: ReadonlyMap<string, Model>,
   diagnostics: Diagnostic[],
 ): View | undefined {
@@ -111,7 +113,7 @@ function analyzeModel(
   return {
     model: model.name,
     name: model.table,
-    sourceSchema: model.schema ?? config.sourceSchema,
+    sourceSchema,
     source: model.table,
     columns,
     relations: relationsOf(model, columns, modelsByName),
@@ -132,23 +134,34 @@ export function viewCollisions(views: readonly View[]): Diagnostic[] {
   return diagnostics
 }
 
-export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): Analysis {
+function analyzeWith<C extends ResolvedConfig>(
+  dialect: Dialect<C>,
+  datamodel: DmmfDatamodel,
+  rawConfig: GeneratorConfig | undefined,
+  leading: readonly Diagnostic[],
+): Analysis & { config: C } {
   const { models } = toDatamodel(datamodel)
-  const { config, diagnostics: configDiagnostics } = validateConfig(rawConfig)
-  const diagnostics: Diagnostic[] = [...configDiagnostics]
+  const { config, diagnostics: configDiagnostics } = dialect.validate(rawConfig)
+  const diagnostics: Diagnostic[] = [...leading, ...configDiagnostics]
 
-  diagnostics.push(...postgresqlConfigRules(config, models))
+  diagnostics.push(...dialect.configRules(config, models))
 
   const modelsByName = new Map(models.map((m) => [m.name, m]))
   const candidates: View[] = []
   let columnTotal = 0
   for (const model of models) {
     columnTotal += model.fields.filter((f) => f.kind === 'scalar' || f.kind === 'enum').length
-    const view = analyzeModel(model, config, modelsByName, diagnostics)
+    const view = analyzeModel(
+      model,
+      config,
+      dialect.sourceSchemaOf(model, config),
+      modelsByName,
+      diagnostics,
+    )
     if (view !== undefined) candidates.push(view)
   }
 
-  diagnostics.push(...viewCollisions(candidates))
+  diagnostics.push(...viewCollisions(candidates), ...dialect.viewRules(config, candidates))
 
   // A join is worth describing only when the reader can write it: the target has a view, and that
   // view shows every target column, each paired with a source column (D146).
@@ -166,4 +179,28 @@ export function analyze(datamodel: DmmfDatamodel, rawConfig?: GeneratorConfig): 
   }))
   const visible = views.reduce((n, v) => n + v.columns.length, 0)
   return { config, views, diagnostics, counts: { visible, hidden: columnTotal - visible } }
+}
+
+/**
+ * The provider is `postgresql` when omitted (D107). One that is not registered is a diagnostic,
+ * never a throw (D142); the analysis then runs with the PostgreSQL defaults so the counts stay meaningful.
+ */
+export function analyze(
+  datamodel: DmmfDatamodel,
+  rawConfig?: GeneratorConfig,
+  options: BuildOptions = {},
+): Analysis {
+  // The provider is read defensively: options and provider come from JavaScript callers (D142, D159).
+  let provider: unknown
+  try {
+    provider = options?.provider ?? 'postgresql'
+  } catch {
+    provider = undefined
+  }
+  const dialect = typeof provider === 'string' ? dialectFor(provider) : undefined
+  if (dialect !== undefined) return analyzeWith(dialect, datamodel, rawConfig, [])
+  // 'postgresql' is always registered, so the fallback is defined.
+  return analyzeWith(dialectFor('postgresql') as Dialect, datamodel, rawConfig, [
+    unsupportedProvider(provider),
+  ])
 }

@@ -20,6 +20,8 @@ const engines: Record<PrismaMajor, SchemaWasm> = {
 export interface ParsedSchema {
   readonly datamodel: DmmfDatamodel
   readonly config: Record<string, unknown>
+  /** The datasource's `activeProvider`, as the generator receives it (A80). */
+  readonly provider: 'postgresql' | 'mysql'
 }
 
 /** Prisma 6 requires `url` in the datasource block; Prisma 7 rejects it (it lives in prisma.config.ts). */
@@ -39,6 +41,7 @@ export function parseSchema(source: string, major: PrismaMajor = 7): ParsedSchem
   }
   const loaded = JSON.parse(engine.get_config(JSON.stringify({ prismaSchema }))) as {
     config: {
+      datasources: { activeProvider: string }[]
       generators: {
         name: string
         provider: { value: string | null }
@@ -46,7 +49,10 @@ export function parseSchema(source: string, major: PrismaMajor = 7): ParsedSchem
       }[]
     }
   }
-  const { generators } = loaded.config
+  const { generators, datasources } = loaded.config
+  const activeProvider = datasources[0]?.activeProvider
+  if (activeProvider !== 'postgresql' && activeProvider !== 'mysql')
+    throw new Error(`unsupported datasource provider: ${String(activeProvider)}`)
   const generator = generators.find((g) => g.name === 'redacted')
   if (generator === undefined) {
     // A schema with a hyde-db generator under another name would silently get the default
@@ -57,5 +63,5 @@ export function parseSchema(source: string, major: PrismaMajor = 7): ParsedSchem
         `schema declares a generator with provider "hyde-db" but none is named "redacted" (found: ${others.join(', ')})`,
       )
   }
-  return { datamodel: dmmf.datamodel, config: generator?.config ?? {} }
+  return { datamodel: dmmf.datamodel, config: generator?.config ?? {}, provider: activeProvider }
 }

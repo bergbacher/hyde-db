@@ -3,7 +3,7 @@
 // configure it, the annotations, the output files and the deploy order, in that order.
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
 import { CONFIG_KEYS } from './config.ts'
-import type { ResolvedConfig } from './types.ts'
+import type { PostgresqlConfig } from './types.ts'
 
 export type CliCommand =
   | { readonly kind: 'protocol' }
@@ -67,7 +67,7 @@ export function repositoryUrl(repository: unknown): string | undefined {
 }
 
 /** The generator-block keys: the resolved config's keys except `dialect`, which the package sets (D112). */
-type ConfigKey = Exclude<keyof ResolvedConfig, 'dialect'>
+type ConfigKey = Exclude<keyof PostgresqlConfig, 'dialect'>
 
 /** What each config key does; the keys themselves come from CONFIG_KEYS, the values from the caller. */
 const CONFIG_NOTES: Readonly<Record<ConfigKey, string>> = {
@@ -79,7 +79,7 @@ const CONFIG_NOTES: Readonly<Record<ConfigKey, string>> = {
   statementTimeout: 'role statement timeout: "500ms", "15s" or "1min"',
 }
 
-function configLines(config: ResolvedConfig): string[] {
+function configLines(config: PostgresqlConfig): string[] {
   return CONFIG_KEYS.map((name) => {
     const key = name as ConfigKey
     const setting = `  ${key} = "${String(config[key])}"`
@@ -91,9 +91,9 @@ function configLines(config: ResolvedConfig): string[] {
 const DB_URL = `\${DATABASE_URL:?export DATABASE_URL first}`
 
 /** The help text, without a trailing newline. `config` supplies the defaults it prints. */
-export function usage(config: ResolvedConfig, repository?: string): string {
+export function usage(config: PostgresqlConfig, repository?: string): string {
   return [
-    `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only PostgreSQL views with sensitive columns removed, plus a locked-down reader role.`,
+    `${BRAND}: a Prisma generator that turns /// @hyde.* annotations into read-only views of a PostgreSQL or MySQL database with sensitive columns removed, plus a locked-down reader role.`,
     '',
     `During prisma generate, Prisma runs it. Running ${BRAND} directly only prints this help.`,
     '',
@@ -108,7 +108,10 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     '',
     'Optional keys, all strings, where an unset key uses the default shown:',
     ...configLines(config),
+    'On MySQL (provider mysql in the datasource), the MySQL specific keys are schema (the views database), role (the account user name) and readerHost (default %). The keys default and strict apply as on PostgreSQL. The keys sourceSchema and statementTimeout are PostgreSQL only.',
     'Roles belong to the whole cluster, not to one database: give each database, and each generator block, its own role.',
+    'On one MySQL server give each source database, and each generator block, its own schema and role. Both belong to the whole server: a second source database with the same schema is refused, but a shared role is not detected and lets one reader read both.',
+    'On MySQL the reader account must serve only as the hyde-db reader, because every apply and drop first revokes all its privileges, which MySQL cannot roll back.',
     '',
     'To annotate fields and models, use /// comments in schema.prisma:',
     '  /// @hyde.visible                  field: keep the column in its view',
@@ -127,6 +130,7 @@ export function usage(config: ResolvedConfig, repository?: string): string {
     `Deploy in this order. In the paths below, replace the placeholder with the output directory of the generator, relative to schema.prisma (default ${DEFAULT_OUTPUT}):`,
     'First, write the three files:',
     '  npx prisma generate',
+    'On MySQL, see the README section MySQL for the mysql client or prisma db execute, and run the scripts without --force: it protects only after a refusal. The rest of this help is for PostgreSQL.',
     'Note: psql does not read .env. Export DATABASE_URL in your shell first, as a plain libpq URL without Prisma-only parameters such as ?schema=public.',
     'If the URL Prisma uses carries such parameters, deploy with npx prisma db execute --file instead, as the README shows, and set sourceSchema to its ?schema= name.',
     'Do not strip the parameters for psql: prisma migrate deploy would then run against the stripped URL, which can point at another schema.',

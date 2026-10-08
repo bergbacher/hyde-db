@@ -91,10 +91,14 @@ function generate(params: GenerateParams): void {
   const provider = datasource?.activeProvider ?? datasource?.provider
   const outDir = params.generator.output?.value ?? undefined
 
-  const result = build(params.dmmf.datamodel, params.generator.config ?? {})
+  const supported = provider === 'postgresql' || provider === 'mysql'
+  const result = build(
+    params.dmmf.datamodel,
+    params.generator.config ?? {},
+    supported ? { provider } : {},
+  )
   const diagnostics: Diagnostic[] = []
-  if (provider !== undefined && provider !== 'postgresql')
-    diagnostics.push(unsupportedProvider(provider))
+  if (provider !== undefined && !supported) diagnostics.push(unsupportedProvider(provider))
   if (outDir === undefined) diagnostics.push(noOutputDirectory())
   diagnostics.push(...result.diagnostics)
 

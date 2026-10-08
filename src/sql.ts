@@ -38,3 +38,13 @@ export const RESERVED_WORDS: ReadonlySet<string> = new Set(
 export function sqlName(name: string): string {
   return /^[a-z_][a-z0-9_]*$/.test(name) && !RESERVED_WORDS.has(name) ? name : quoteIdent(name)
 }
+
+/** Backtick-quotes an identifier, doubling embedded backticks (D104). */
+export function quoteMysqlIdent(name: string): string {
+  return `\`${name.replace(/`/g, '``')}\``
+}
+
+/** A name as `redacted-schema.md` writes it for MySQL: always backtick-quoted (D150). */
+export function mysqlName(name: string): string {
+  return quoteMysqlIdent(name)
+}

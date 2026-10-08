@@ -1,7 +1,7 @@
 // Hand-written renderer inputs for unit tests.
-import type { ResolvedConfig, View } from '../../src/types.ts'
+import type { PostgresqlConfig, View } from '../../src/types.ts'
 
-export const config: ResolvedConfig = {
+export const config: PostgresqlConfig = {
   dialect: 'postgresql',
   schema: 'redacted',
   role: 'redacted_reader',

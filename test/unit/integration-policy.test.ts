@@ -4,7 +4,11 @@ import { describe, expect, it } from 'vitest'
 import { readRepoFile, repoRoot } from '../helpers/files.ts'
 import { startServer } from '../integration/helpers/server.ts'
 
-function integrationFiles(dir = join(repoRoot, 'test', 'integration')): string[] {
+const INTEGRATION_DIRS = ['integration', 'integration-mysql'] as const
+
+function integrationFiles(dir: string | undefined = undefined): string[] {
+  if (dir === undefined)
+    return INTEGRATION_DIRS.flatMap((name) => integrationFiles(join(repoRoot, 'test', name)))
   return readdirSync(dir, { withFileTypes: true }).flatMap((entry) =>
     entry.isDirectory() ? integrationFiles(join(dir, entry.name)) : [join(dir, entry.name)],
   )
@@ -41,9 +45,11 @@ describe('integration policy', () => {
       if (!file.endsWith(join('helpers', 'server.ts')))
         expect(source, file).not.toMatch(/\.start\(\)/)
     }
-    const globalSetup = readRepoFile('test', 'integration', 'global-setup.ts')
-    expect(globalSetup).not.toMatch(/\btry\s*\{|\.catch\s*\(/)
-    expect(globalSetup).toContain('await startServer(')
+    for (const name of INTEGRATION_DIRS) {
+      const globalSetup = readRepoFile('test', name, 'global-setup.ts')
+      expect(globalSetup, name).not.toMatch(/\btry\s*\{|\.catch\s*\(/)
+      expect(globalSetup, name).toContain('await startServer(')
+    }
   })
 
   it('D22: startServer starts a container once more only when testcontainers timed out binding its ports', async () => {
@@ -63,6 +69,11 @@ describe('integration policy', () => {
   })
 
   it("D22: a hook outlasts testcontainers' 120-second startup timeout, so a slow start fails as itself", () => {
-    expect(readRepoFile('vitest.config.ts')).toContain('hookTimeout: 180_000,')
+    expect(readRepoFile('vitest.config.ts').match(/hookTimeout: 180_000,/g)).toHaveLength(2)
+  })
+
+  it('D22: the MySQL project runs one test file at a time, as its tests change server-wide state', () => {
+    const mysql = readRepoFile('vitest.config.ts').split("name: 'integration-mysql'")[1] ?? ''
+    expect(mysql).toContain('fileParallelism: false,')
   })
 })

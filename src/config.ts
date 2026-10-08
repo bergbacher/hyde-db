@@ -2,6 +2,7 @@
 // a JavaScript caller passes (D142).
 // An invalid value keeps the safe default for its key so analysis can go on.
 import {
+  configKeyUnsupported,
   configNotAnObject,
   invalidConfigValue,
   timeoutDisabled,
@@ -9,7 +10,15 @@ import {
   unreadableConfig,
   unreadableConfigValue,
 } from './diagnostics.ts'
-import type { Diagnostic, GeneratorConfig, ResolvedConfig } from './types.ts'
+import type {
+  Diagnostic,
+  GeneratorConfig,
+  MysqlConfig,
+  PostgresqlConfig,
+  Provider,
+  ResolvedConfig,
+  Visibility,
+} from './types.ts'
 
 export const CONFIG_KEYS: readonly string[] = [
   'schema',
@@ -20,7 +29,7 @@ export const CONFIG_KEYS: readonly string[] = [
   'statementTimeout',
 ]
 
-export const DEFAULT_CONFIG: ResolvedConfig = {
+export const DEFAULT_CONFIG: PostgresqlConfig = {
   dialect: 'postgresql',
   schema: 'redacted',
   role: 'redacted_reader',
@@ -30,8 +39,55 @@ export const DEFAULT_CONFIG: ResolvedConfig = {
   statementTimeout: '15s',
 }
 
-/** PostgreSQL truncates longer identifiers (NAMEDATALEN - 1). */
-const MAX_IDENTIFIER_LENGTH = 63
+export const MYSQL_CONFIG_KEYS: readonly string[] = [
+  'schema',
+  'role',
+  'readerHost',
+  'default',
+  'strict',
+]
+
+export const DEFAULT_MYSQL_CONFIG: MysqlConfig = {
+  dialect: 'mysql',
+  schema: 'redacted',
+  role: 'redacted_reader',
+  readerHost: '%',
+  default: 'hidden',
+  strict: true,
+}
+
+/** Per-dialect rules as data (D113); the one validation loop below reads them. */
+interface DialectRules {
+  readonly defaults: PostgresqlConfig | MysqlConfig
+  readonly keys: readonly string[]
+  /** Keys that exist on the other dialect only: key -> fix hint. */
+  readonly rejected: Readonly<Record<string, string>>
+  /** PostgreSQL truncates longer identifiers (NAMEDATALEN - 1); MySQL allows 64 and 32 (D97). */
+  readonly lengths: Readonly<Record<'schema' | 'role', number>>
+}
+
+const RULES: Readonly<Record<Provider, DialectRules>> = {
+  postgresql: {
+    defaults: DEFAULT_CONFIG,
+    keys: CONFIG_KEYS,
+    rejected: {},
+    lengths: { schema: 63, role: 63 },
+  },
+  mysql: {
+    defaults: DEFAULT_MYSQL_CONFIG,
+    keys: MYSQL_CONFIG_KEYS,
+    rejected: {
+      sourceSchema:
+        'Remove "sourceSchema": MySQL has no schemas; views read from the connection\'s database (name it in the connection URL).',
+      statementTimeout:
+        'Remove "statementTimeout": MySQL has no per-account statement timeout; limit load with per-account resource limits instead.',
+    },
+    lengths: { schema: 64, role: 32 },
+  },
+}
+
+/** A MySQL host part (D149): letters, digits and the characters of names, addresses and wildcards. */
+const READER_HOST = /^[A-Za-z0-9._%:/-]{1,60}$/
 const IDENTIFIER = /^[a-z_][a-z0-9_]*$/
 /** What PostgreSQL accepts in a role setting: digits, one optional plain space, an optional unit. */
 const TIMEOUT = /^(\d+)(?: ?(ms|s|min))?$/
@@ -58,43 +114,73 @@ function objectTag(value: object): string | undefined {
   }
 }
 
-export interface ConfigResult {
-  readonly config: ResolvedConfig
+export interface ConfigResult<C = ResolvedConfig> {
+  readonly config: C
   readonly diagnostics: readonly Diagnostic[]
 }
 
-type Mutable<T> = { -readonly [K in keyof T]: T[K] }
+interface Working {
+  dialect: Provider
+  schema: string
+  role: string
+  sourceSchema?: string
+  readerHost?: string
+  default: Visibility
+  strict: boolean
+  statementTimeout?: string
+}
 
-export function validateConfig(rawConfig?: GeneratorConfig | null): ConfigResult {
-  const config: Mutable<ResolvedConfig> = { ...DEFAULT_CONFIG }
+export function validateConfig(
+  rawConfig: GeneratorConfig | null | undefined,
+  dialect: 'postgresql',
+): ConfigResult<PostgresqlConfig>
+export function validateConfig(
+  rawConfig: GeneratorConfig | null | undefined,
+  dialect: 'mysql',
+): ConfigResult<MysqlConfig>
+export function validateConfig(
+  rawConfig: GeneratorConfig | null | undefined,
+  dialect: Provider,
+): ConfigResult<PostgresqlConfig | MysqlConfig> {
+  const rules = RULES[dialect]
+  const validKeys = rules.keys
+  // One working record for both dialects; keys of the other dialect stay at their defaults, unset.
+  const config: Working = { ...rules.defaults }
   const diagnostics: Diagnostic[] = []
-  if (rawConfig === null || rawConfig === undefined) return { config, diagnostics }
-  if (typeof rawConfig !== 'object')
-    return { config, diagnostics: [configNotAnObject(typeof rawConfig)] }
+  const result = (found: readonly Diagnostic[]): ConfigResult<PostgresqlConfig | MysqlConfig> => ({
+    config: config as PostgresqlConfig | MysqlConfig,
+    diagnostics: found,
+  })
+  if (rawConfig === null || rawConfig === undefined) return result(diagnostics)
+  if (typeof rawConfig !== 'object') return result([configNotAnObject(typeof rawConfig)])
   const raw: GeneratorConfig = rawConfig
   // Prisma 6 and 7 deliver config keys in different orders; a canonical order keeps
   // diagnostics identical across majors: known keys first, then unknown keys sorted.
   let keys: string[]
   try {
     // Inside the try: `Array.isArray` throws on a revoked Proxy, as do hostile `ownKeys`/`has` traps.
-    if (Array.isArray(raw)) return { config, diagnostics: [configNotAnObject('array')] }
+    if (Array.isArray(raw)) return result([configNotAnObject('array')])
     // The tag, not the prototype, so class instances, prototype-less and cross-realm plain objects
     // stay accepted while boxed primitives, typed arrays, Map, Set, Date, Error, … are refused once.
     const tag = objectTag(raw)
-    if (tag !== undefined && tag !== 'Object')
-      return { config, diagnostics: [configNotAnObject(tag)] }
-    const known = CONFIG_KEYS.filter((key) => key in raw)
+    if (tag !== undefined && tag !== 'Object') return result([configNotAnObject(tag)])
+    const known = validKeys.filter((key) => key in raw)
     const unknown = Object.keys(raw)
-      .filter((key) => !CONFIG_KEYS.includes(key))
+      .filter((key) => !validKeys.includes(key))
       .sort()
     keys = [...known, ...unknown]
   } catch {
-    return { config, diagnostics: [unreadableConfig()] }
+    return result([unreadableConfig()])
   }
   for (const key of keys) {
     // An unknown key is reported whatever its value, and its value is never read.
-    if (!CONFIG_KEYS.includes(key)) {
-      diagnostics.push(unknownConfigKey(key, CONFIG_KEYS))
+    const unsupportedHint = Object.hasOwn(rules.rejected, key) ? rules.rejected[key] : undefined
+    if (unsupportedHint !== undefined) {
+      diagnostics.push(configKeyUnsupported(key, dialect, unsupportedHint))
+      continue
+    }
+    if (!validKeys.includes(key)) {
+      diagnostics.push(unknownConfigKey(key, validKeys))
       continue
     }
     let value: unknown
@@ -132,28 +218,37 @@ export function validateConfig(rawConfig?: GeneratorConfig | null): ConfigResult
             ),
           )
         break
+      case 'readerHost':
+        if (typeof value === 'string' && READER_HOST.test(value)) config.readerHost = value
+        else
+          diagnostics.push(
+            invalidConfigValue(
+              key,
+              value,
+              'a host name, address or wildcard pattern of 1 to 60 characters (letters, digits and . _ % : / -)',
+            ),
+          )
+        break
       case 'schema':
       case 'role':
-      case 'sourceSchema':
-        if (
-          typeof value === 'string' &&
-          IDENTIFIER.test(value) &&
-          value.length <= MAX_IDENTIFIER_LENGTH
-        )
+      case 'sourceSchema': {
+        const limit = key === 'role' ? rules.lengths.role : rules.lengths.schema
+        if (typeof value === 'string' && IDENTIFIER.test(value) && value.length <= limit)
           config[key] = value
         else
           diagnostics.push(
             invalidConfigValue(
               key,
               value,
-              `a lowercase SQL identifier of at most ${MAX_IDENTIFIER_LENGTH} characters`,
+              `a lowercase SQL identifier of at most ${limit} characters`,
             ),
           )
         break
+      }
     }
   }
   // D59: a zero timeout is valid but turns the reader role's statement timeout off.
-  if (timeoutMillis(config.statementTimeout) === 0)
+  if (config.statementTimeout !== undefined && timeoutMillis(config.statementTimeout) === 0)
     diagnostics.push(timeoutDisabled(config.statementTimeout, config.role))
-  return { config, diagnostics }
+  return result(diagnostics)
 }

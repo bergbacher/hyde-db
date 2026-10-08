@@ -142,9 +142,47 @@ describe('usage', () => {
   const text = usage(DEFAULT_CONFIG)
   const lines = text.split('\n')
 
-  it('D56: starts with one line saying what hyde-db is', () => {
+  it('D112, D120: mentions MySQL, readerHost, and that sourceSchema and statementTimeout are PostgreSQL only', () => {
+    const line = lines.find((l) => l.includes('MySQL') && l.includes('readerHost'))
+    expect(line).toBeDefined()
+    expect(line).toContain('sourceSchema')
+    expect(line).toContain('statementTimeout')
+    expect(line).toContain('PostgreSQL only')
+  })
+
+  it('D112: says the MySQL specific keys, so default and strict still apply', () => {
+    const line = lines.find((l) => l.includes('MySQL') && l.includes('readerHost')) ?? ''
+    expect(line).toContain('the MySQL specific keys are')
+    expect(line).not.toContain('the keys are')
+    expect(line).toContain('default and strict apply as on PostgreSQL')
+  })
+
+  it('D164, D140, A105: tells MySQL users to give each source database and generator block its own schema and role', () => {
+    const line = lines.find((l) => l.includes('server') && l.includes('own schema and role')) ?? ''
+    expect(line).toContain('Both belong to the whole server')
+    expect(line).toContain('a second source database with the same schema is refused')
+    expect(line).toContain('a shared role is not detected')
+  })
+
+  it('D164, D119, D155: says the reader account must serve only as the reader, and to run MySQL scripts without force', () => {
+    const line = lines.find((l) => l.includes('only as the hyde-db reader')) ?? ''
+    expect(line).toContain('every apply and drop first revokes all its privileges')
+    const force = lines.find((l) => l.includes('without --force')) ?? ''
+    expect(force).toContain('MySQL')
+  })
+
+  it('D68, D164: the added prose lines hold no semicolon, ampersand, quote or angle bracket', () => {
+    for (const line of lines.filter(
+      (l) => l.includes('MySQL') || l.includes('server') || l.includes('without --force'),
+    )) {
+      expect(line, line).not.toMatch(/[;&"'<>]/)
+    }
+  })
+
+  it('D56, D107: starts with one dialect-neutral line saying what hyde-db is', () => {
     expect(lines[0]).toMatch(/^hyde-db: a Prisma generator that turns \/\/\/ @hyde\.\* annotations/)
-    expect(lines[0]).toContain('read-only PostgreSQL views')
+    expect(lines[0]).toContain('read-only views of a PostgreSQL or MySQL database')
+    expect(lines[0]).not.toContain('read-only PostgreSQL views')
     expect(lines[0]).toContain('sensitive columns removed')
     expect(lines[0]).toContain('locked-down reader role')
   })
@@ -299,6 +337,16 @@ describe('usage', () => {
       // A chained line is followed by its next command, never by prose.
       if (lines[index]?.endsWith(' &&')) expect(isCommand(lines[index + 1] ?? '')).toBe(true)
     }
+  })
+
+  it('D107, D170: labels the psql deploy as PostgreSQL and points MySQL users to the README section MySQL', () => {
+    const pointer = lines.filter((l) => l.startsWith('On MySQL, see the README section MySQL'))
+    expect(pointer).toHaveLength(1)
+    expect(pointer[0]).toContain('mysql client or prisma db execute')
+    expect(pointer[0]).toContain('The rest of this help is for PostgreSQL.')
+    expect(lines.indexOf(pointer[0] ?? '')).toBeLessThan(
+      lines.findIndex((l) => l.includes('<output>/redacted-views-drop.sql')),
+    )
   })
 
   it('D56: says prisma generate writes the three files and the login step runs once, after the first deploy', () => {

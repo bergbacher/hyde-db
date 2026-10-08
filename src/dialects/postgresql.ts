@@ -1,7 +1,12 @@
-// PostgreSQL-specific analysis rules (D114 prep). The place a Dialect will hang from in 1.1.0.
+// PostgreSQL-specific analysis rules and the PostgreSQL Dialect (D104, D114).
+import { validateConfig } from '../config.ts'
 import type { Model } from '../datamodel.ts'
 import { modelInViewsSchema, schemaEqualsSource } from '../diagnostics.ts'
+import { renderApplySql } from '../render/apply-sql.ts'
+import { renderDropSql } from '../render/drop-sql.ts'
+import { renderMarkdown } from '../render/markdown.ts'
 import type { Diagnostic, PostgresqlConfig } from '../types.ts'
+import type { Dialect } from './index.ts'
 
 /** D12: the views schema must differ from `sourceSchema` and from every model's `@@schema` (A13). */
 export function postgresqlConfigRules(
@@ -15,4 +20,13 @@ export function postgresqlConfigRules(
       diagnostics.push(modelInViewsSchema(model.name, config.schema))
   }
   return diagnostics
+}
+
+export const postgresqlDialect: Dialect<PostgresqlConfig> = {
+  provider: 'postgresql',
+  validate: (raw) => validateConfig(raw, 'postgresql'),
+  configRules: postgresqlConfigRules,
+  viewRules: () => [],
+  sourceSchemaOf: (model, config) => model.schema ?? config.sourceSchema,
+  render: { apply: renderApplySql, drop: renderDropSql, markdown: renderMarkdown },
 }

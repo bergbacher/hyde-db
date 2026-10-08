@@ -95,6 +95,25 @@ jobs:
         env:
           PG_IMAGE: postgres:${{ matrix.pg }}-alpine
 
+  attack-mysql:
+    name: attack suite (MySQL ${{ matrix.mysql }})
+    runs-on: ubuntu-latest # ships the Docker CLI and daemon that testcontainers needs
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '9.7']
+    steps:
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with: { node-version: 24, cache: pnpm }
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:integration:mysql
+        env:
+          MYSQL_IMAGE: mysql:${{ matrix.mysql }}
+
   e2e:
     name: end-to-end (Prisma ${{ matrix.prisma }}, Node ${{ matrix.node }})
     needs: build
@@ -129,15 +148,56 @@ jobs:
       - run: |
           node --version
           npm --version
-          E2E_TARBALL="$(ls "$RUNNER_TEMP"/tarball/*.tgz)" node --test --test-timeout=600000 test/e2e/*.test.mjs
+          E2E_TARBALL="$(ls "$RUNNER_TEMP"/tarball/*.tgz)" node --test --test-timeout=600000 test/e2e/generate.test.mjs test/e2e/require.test.mjs
         env:
           E2E_PRISMA_VERSIONS: ${{ matrix.prisma }}
           E2E_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/postgres
 
+  e2e-mysql:
+    name: end-to-end MySQL ${{ matrix.mysql }} (Prisma ${{ matrix.prisma }}, Node ${{ matrix.node }})
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        mysql: ['8.4', '9.7']
+        prisma: ['6.19.3', '7.10.0']
+        node: [20, 24]
+    services:
+      mysql:
+        image: mysql:${{ matrix.mysql }}
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: app
+        ports: ['3306:3306']
+        options: >-
+          --health-cmd "mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval 2s
+          --health-timeout 5s
+          --health-retries 30
+    steps:
+      # Nothing is installed or built here: Node 20 cannot run tsdown, and the tests use only node:test.
+      - uses: actions/checkout@v7
+        with: { persist-credentials: false }
+      - uses: actions/setup-node@v7
+        with: { node-version: '${{ matrix.node }}' }
+      - uses: actions/download-artifact@v8
+        with:
+          name: hyde-db-tarball
+          path: ${{ runner.temp }}/tarball
+      - run: |
+          node --version
+          npm --version
+          E2E_TARBALL="$(ls "$RUNNER_TEMP"/tarball/*.tgz)" node --test --test-timeout=600000 test/e2e/mysql.test.mjs
+        env:
+          E2E_PRISMA_VERSIONS: ${{ matrix.prisma }}
+          E2E_MYSQL_DATABASE_URL: mysql://root:root@127.0.0.1:3306/app
+
   ci-ok:
     name: ci-ok
     if: always()
-    needs: [lint, typecheck, build, test, attack, e2e]
+    needs: [lint, typecheck, build, test, attack, attack-mysql, e2e, e2e-mysql]
     runs-on: ubuntu-latest
     steps:
       - name: Fail unless every job succeeded

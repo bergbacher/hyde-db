@@ -1,6 +1,6 @@
 # hyde-db
 
-A Prisma generator that gives any reader, whether an AI tool or a person, read access to a Prisma-managed PostgreSQL database, limited to the columns your schema's annotations allow. <!-- Intent, D53, D170 -->
+A Prisma generator that gives any reader, whether an AI tool or a person, read access to a Prisma-managed PostgreSQL or MySQL database, limited to the columns your schema's annotations allow. The sections below describe PostgreSQL; [MySQL](#mysql) has its own section. <!-- Intent, D53, D170, D86, D107 -->
 
 You mark fields `/// @hyde.visible` or `/// @hyde.hidden`. `prisma generate` then writes three files: <!-- D54 -->
 
@@ -10,7 +10,7 @@ You mark fields `/// @hyde.visible` or `/// @hyde.hidden`. `prisma generate` the
 | `redacted-views-drop.sql` | Drops schema `redacted`, so migrations can change the columns the views use. |
 | `redacted-schema.md` | Tables, columns and joins of the views, for whoever queries them. |
 
-Hidden columns do not exist in the views, so every query that names one, such as `left(email, 1)` or `WHERE email LIKE …`, fails because the column does not exist. PostgreSQL's privileges enforce this; no result filter is involved. <!-- D1 -->
+Hidden columns do not exist in the views, so every query that names one, such as `left(email, 1)` or `WHERE email LIKE …`, fails because the column does not exist. The database's privileges enforce this; no result filter is involved. <!-- D1 -->
 
 ## Quick start
 
@@ -76,7 +76,8 @@ Then commit `prisma/redacted/` and [deploy](#deploy): the steps before the first
 
 - **Prisma:** the Prisma 6 and 7 CLIs; the end-to-end tests run Prisma 6.19.3 and 7.10.0. Prisma 8 has no generator step, so hyde-db cannot run there; whether to read Prisma 8's contract IR instead is an open question. <!-- D30, A19, A18, Q5 -->
 - **PostgreSQL:** 14 to 18. The attack suite in the CI workflow runs on PostgreSQL 14 and 18, the oldest and newest of these majors. <!-- A11, D21, D38 -->
-- **MySQL:** not in 1.0. MySQL 8.4 and 9.7 are planned for 1.1.0. Until then a datasource with `provider = "mysql"` (or any provider other than `postgresql`) fails `prisma generate` with `HYDE_UNSUPPORTED_PROVIDER`. <!-- D87, D94, D86 -->
+- **MySQL:** 8.4 and 9.7. The attack suite runs on both. MySQL 8.0, innovation releases (26.x) and MariaDB are out of scope. [MySQL](#mysql) has the details. <!-- D94, A73, D148 -->
+- **Datasource providers:** `postgresql` and `mysql`. A datasource with any other provider fails `prisma generate` with `HYDE_UNSUPPORTED_PROVIDER`: the provider is other than `postgresql` or `mysql`. <!-- D159, D107 -->
 - **Node.js:** `^20.19 || ^22.12 || >=24`. <!-- D31 -->
 - **Runtime dependencies:** none. <!-- D32 -->
 
@@ -148,7 +149,7 @@ Names are split into words. Long, unambiguous stems such as `password` or `email
 
 ## Deploy
 
-Deploying takes three parts: [before the first deploy](#before-the-first-deploy) once, [every deploy](#every-deploy), and [after the first deploy](#after-the-first-deploy) once.
+Deploying takes three parts: [before the first deploy](#before-the-first-deploy) once, [every deploy](#every-deploy), and [after the first deploy](#after-the-first-deploy) once. These steps are for PostgreSQL; the [MySQL](#mysql) section has the MySQL deploy. <!-- D107 -->
 
 ### Before the first deploy
 
@@ -371,6 +372,173 @@ For example, for a fix that runs `SET ROLE redacted_reader`, do this in one psql
 
 The probe used PostgreSQL 14.24, 16.14 and 18.6 in Docker, with a deploy user that has `LOGIN CREATEROLE CREATEDB`, is not a superuser, owns the database, its schema `public` and the source tables, and created `redacted_reader` by deploying. It did not run on any provider's service, did not test provider-specific admin roles, and did not test the fixes of rows 4, 6 and 11 (memberships, catalog privileges and default privileges).
 
+## MySQL
+
+hyde-db writes the same three files for MySQL as for PostgreSQL, from the same annotations, and the deploy runs the same three steps: drop, migrate, apply. The scripts run with the `mysql` client or with `prisma db execute`; nothing is installed at runtime. MySQL cannot roll back DDL or grants, so the apply script does not rely on a transaction: it checks first, builds the views, grants last, checks again, and revokes and aborts when that check fails. <!-- D86, D95, A74 -->
+
+The generator block is the one above, with `provider = "hyde-db"`: the datasource `provider`, `postgresql` or `mysql`, selects the dialect, and `prisma generate` passes it on. <!-- D107, A80 -->
+
+| File | What it does on MySQL |
+|---|---|
+| `redacted-views.sql` | Recreates database `redacted` with a marker view (a second column `source` records the source database) and one view per model that holds only the visible columns, creates the account `redacted_reader` locked and without a password when it is missing, and grants it `SELECT` on exactly those views. |
+| `redacted-views-drop.sql` | Revokes the reader's grants and drops database `redacted`, so migrations can change the columns the views use. |
+| `redacted-schema.md` | The views' tables, columns and joins, with names written in backticks. |
+
+<!-- D95, D100, D115, D117, D116, D165 -->
+
+### Config on MySQL
+
+A MySQL generator block, every key at its default:
+
+```prisma
+generator redacted {
+  provider   = "hyde-db"
+  output     = "./redacted"
+  strict     = "true"
+  default    = "hidden"
+  schema     = "redacted"
+  role       = "redacted_reader"
+  readerHost = "%"
+}
+```
+
+| Key | Default | Accepts | Effect |
+|---|---|---|---|
+| `schema` | `"redacted"` | `[a-z_][a-z0-9_]*`, at most 64 characters | The views database; the scripts drop and recreate it. |
+| `role` | `"redacted_reader"` | `[a-z_][a-z0-9_]*`, at most 32 characters | The user name of the reader account. |
+| `readerHost` | `"%"` | `[A-Za-z0-9._%:/-]`, 1 to 60 characters | The host part of the reader account, `'redacted_reader'@'%'` by default. |
+| `default` | `"hidden"` | `"hidden"`, `"visible"` | As on PostgreSQL. |
+| `strict` | `"true"` | `"true"`, `"false"` | As on PostgreSQL. |
+
+<!-- D97, D25, D149 -->
+
+- `role` names the reader account's user name, and `readerHost` its host. It is not a MySQL `ROLE`. <!-- D120 -->
+- On one MySQL server, give each source database, and each generator block, its own `schema` and `role`: both belong to the whole server, not to one database. The marker view records its source database, and the apply and drop scripts refuse a views database whose marker names another source database, so a second source database that uses the same `schema` is refused, but a shared `role` is not detected and lets one reader read the views of both. <!-- D164, A105, D165, D140 -->
+- The reader account must serve only as the hyde-db reader: every apply and drop first revokes all its privileges, and MySQL cannot roll that back. Do not point `role` and `readerHost` at an account that has another job. <!-- D164, D119, A74 -->
+- `hyde_db_marker` and `hyde_db_abort` are reserved table names: a model mapped to either fails `prisma generate` with `HYDE_VIEW_NAME_COLLISION`, because the first is the marker view in the views database and the second the script's temporary abort table, which would shadow the source table. <!-- D157, D167 -->
+- `sourceSchema` and `statementTimeout` do not exist on MySQL. Setting either fails `prisma generate` with `HYDE_CONFIG_KEY_UNSUPPORTED` and a hint: MySQL has no schemas, because the views read from the connection's database, and no per-account statement timeout. <!-- D97, D156, A78, A80 -->
+- A server with a non-empty `mandatory_roles` is unsupported: the apply script refuses it, because every login would inherit those roles. The printed fix is `SET PERSIST mandatory_roles = '';`. <!-- D120, D153 -->
+- The source database is not a key: it is the connection's default database, which the apply script checks when it runs. It must differ from `schema`, also in upper and lower case. <!-- A80, D117, D152 -->
+
+### Deploy on MySQL
+
+Run the drop, migrate and apply steps in this order, as under [every deploy](#every-deploy), connected to the source database as the default database. Without a default database the apply script refuses, before it changes anything. With the `mysql` client use `-D`; with `prisma db execute`, the database name belongs in the URL Prisma uses. The `prisma db execute` blocks under [every deploy](#every-deploy) work unchanged. <!-- D160, D95, D43 -->
+
+The reader account must serve only as the hyde-db reader, because every apply and drop first revokes all its privileges, and MySQL cannot roll that back. <!-- D164, D119, A74 -->
+
+Run the scripts without `--force`: the gate on the statements from the database drop on protects only after a refusal. Since a check that fails to run refuses, only a statement that changes state can slip through: a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted. Likewise, an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached to it. The same account can also swap the marker view between the marker check and its read. <!-- D164, D155, D166, A74, D169 -->
+
+With the `mysql` client, export `MYSQL_HOST`, `MYSQL_USER`, `MYSQL_DATABASE` (the source database) and `MYSQL_PWD` from your secret store (never commit it). While one of the first three is unset or empty, the shell stops each `mysql` line and runs nothing. Each block chains its lines with `&&`, so a refused step stops the rest: <!-- D43, D68, D136, D163 -->
+
+```sh
+mysql -h "${MYSQL_HOST:?export MYSQL_HOST first}" -u "${MYSQL_USER:?export MYSQL_USER first}" -D "${MYSQL_DATABASE:?export MYSQL_DATABASE first}" < prisma/redacted/redacted-views-drop.sql &&
+npx prisma migrate deploy &&
+mysql -h "${MYSQL_HOST:?export MYSQL_HOST first}" -u "${MYSQL_USER:?export MYSQL_USER first}" -D "${MYSQL_DATABASE:?export MYSQL_DATABASE first}" < prisma/redacted/redacted-views.sql
+```
+
+With `prisma db execute`, the source database is in the URL Prisma uses (the `prisma/schema.prisma` datasource on Prisma 6, `prisma.config.ts` on Prisma 7). With Prisma 7: <!-- D160, D43 -->
+
+```sh
+npx prisma db execute --file prisma/redacted/redacted-views-drop.sql &&
+npx prisma migrate deploy &&
+npx prisma db execute --file prisma/redacted/redacted-views.sql
+```
+
+With Prisma 6:
+
+```sh
+npx prisma db execute --file prisma/redacted/redacted-views-drop.sql --schema prisma/schema.prisma &&
+npx prisma migrate deploy &&
+npx prisma db execute --file prisma/redacted/redacted-views.sql --schema prisma/schema.prisma
+```
+
+The deploying user needs these privileges: <!-- A75, A77, A102, D160, D164 -->
+
+- `CREATE`, `DROP` and `CREATE VIEW` on the views database, `SELECT` on the source tables, `GRANT OPTION` on the views and `CREATE USER`. <!-- A75 -->
+- `SELECT` on the views database, because `GRANT SELECT` on a view fails unless the granting account holds it. `SHOW VIEW` is not needed: the marker check reads the marker through the view. <!-- D164, A106, D165 -->
+- `SELECT` on `mysql.*`, because the script reads the grant tables to see what the reader can reach; without it `information_schema` shows nothing. <!-- A77, D117 -->
+- `CREATE TEMPORARY TABLES` on the source database, because the script reports its refusals through a temporary table. <!-- A102, D160, D99 -->
+
+The views are created with `DEFINER = CURRENT_USER`, so they run with the deploying user's privileges. <!-- A75 -->
+
+### What the MySQL apply script does
+
+The apply script runs these steps in this order. Everything from the drop of the views database on runs only while no step has refused: a refusal is reported by a failing insert into a temporary table, so it leaves no routine and nothing left behind, and a client that runs past errors, such as `mysql --force`, cannot grant the reader access after one. Each run reports one problem and a short fix. Every check first sets its message to a "could not run" refusal and only then evaluates, so a check whose query fails refuses instead of passing silently. <!-- D117, D99, D155, D166 -->
+
+1. It pins `sql_mode` and sets `lock_wait_timeout` to 60. <!-- D117 -->
+2. It refuses a connection with no default database, and a default database equal to the views database. <!-- D117, D160, D152 -->
+3. It refuses an existing views database without the marker view `hyde_db_marker`, and one whose marker names another source database (the marker's second column `source`). It reads the marker only from a view created `SQL SECURITY DEFINER`, so a view that would run with the deploying user's rights is never selected from, and it reports a marker it cannot read, such as one whose definer account was dropped, by naming that definer. A run with `mysql --force` shows this refusal; without it the failed read is the first error. <!-- D115, D117, D165, D169 -->
+4. It refuses when the deploying user cannot read the grant tables under `mysql.*`. <!-- A77, D117 -->
+5. It resets the reader with `REVOKE ALL PRIVILEGES, GRANT OPTION`, with `IGNORE UNKNOWN USER` because the account may not exist yet, and refuses when any grant is left; it reads the reader's static global privileges from the `*_priv` columns of `mysql.user`. <!-- D117, D119, A86, D168 -->
+6. It refuses a reader that holds roles or default roles, a server with a non-empty `mandatory_roles`, proxy grants of the reader, and other accounts a reader login could match. <!-- D117, D120, A77 -->
+7. It drops and recreates the views database, with the marker view and the views (`DEFINER = CURRENT_USER`). <!-- D117, D115, A75 -->
+8. It creates the account when it is missing, locked and without a password. <!-- D117, D116 -->
+9. It grants `SELECT` on each view last. <!-- D117 -->
+10. It checks everything again and, when a check fails, revokes the view grants and aborts. <!-- D117, D119 -->
+
+### What the MySQL drop script does
+
+The drop script refuses a views database without the marker view or whose marker names another source database, revokes the reader's grants with `IGNORE UNKNOWN USER`, and drops the views database. It succeeds when the views database is already gone, and it revokes the grants either way, because grants survive the drop of the database and would attach to the next one of that name. <!-- D100, D121, D119, A74, D165 -->
+
+### Let the reader log in
+
+The apply script creates the account locked and without a password, and never changes an existing account's lock state or password; it does revoke all the account's privileges on every apply and drop, so the account must serve only as the hyde-db reader. Once, after the first deploy, an administrator sets the password and unlocks it. Export `READER_PASSWORD` from your secret store (never commit it) and run: <!-- D116, A85, D164, D119 -->
+
+```sh
+mysql -h "${MYSQL_HOST:?export MYSQL_HOST first}" -u "${MYSQL_USER:?export MYSQL_USER first}" -e "ALTER USER 'redacted_reader'@'%' IDENTIFIED BY '${READER_PASSWORD:?set READER_PASSWORD first}' ACCOUNT UNLOCK;"
+```
+
+The user and host in the statement are the `role` and `readerHost` of your generator block. The password must not contain a single quote or a backslash, which MySQL reads as an escape. Its cost: the expanded password is part of the client's command line, so it shows in `ps` output while the client runs, and a password typed into the export lands in your shell history. The shell runs nothing while `READER_PASSWORD`, `MYSQL_HOST` or `MYSQL_USER` is unset or empty. The unlock survives every re-apply. <!-- D116, D68, D104, D163 -->
+
+### What it guarantees on MySQL
+
+The guarantee is the privilege setup, scoped to table data: `redacted_reader` can read no table data outside the generated views. <!-- D101 -->
+
+- A refused deploy never grants the reader more than it had before, but it may leave the views rebuilt without the reader grant: MySQL commits each statement as it runs, so a deploy cannot be rolled back. <!-- D101, A74 -->
+- `mysql --force` protects only after a refusal: a statement that fails, such as a lock timeout, can leave the previous views granted, so run the scripts without it. An account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached. <!-- D164, D155, A74 -->
+- Access the reader already has through a path the reset does not remove stays until the printed fix is applied: roles, default roles, `mandatory_roles`, an account with its user name on a more specific host (such as `localhost`), and an anonymous account that matches its login. With `partial_revokes` on, a wildcard database grant is read literally and grants nothing. <!-- A104, A77 -->
+- The reader sees no other database names or columns: in `information_schema` it sees only its views, which is stricter than PostgreSQL, where the reader can read catalog metadata. `SHOW DATABASES` lists `information_schema` and `performance_schema` and the databases the reader has grants in. <!-- D101, A78, A103, D93 -->
+- In `performance_schema` the reader sees server status and variables, its own session and its own connection attributes; it sees no statement history and no other session's query text. <!-- A103 -->
+- MySQL has no per-account statement timeout or read-only default, only session-overridable globals. Only per-account resource limits stick. <!-- D101, A78 -->
+- Rows, the content of visible columns and load are not covered, as on PostgreSQL: expose only models whose every row the reader may see, hide free-text columns, and connect the reader to a replica. <!-- D34, D93 -->
+
+Every message the apply script can print is in [what the MySQL apply script refuses](#what-the-mysql-apply-script-refuses).
+
+### Supported services
+
+RDS and Aurora are supported, per the providers' documentation. Cloud SQL is expected to work, but the deployer's read access to the `mysql.*` grant tables is unconfirmed; without it the apply script refuses before any change with the `GRANT SELECT ON mysql.*` fix. Azure Flexible works because the deployer is always the view definer. PlanetScale is unsupported. None is tested end to end by hyde-db. <!-- D118, A79 -->
+
+### What the MySQL apply script refuses
+
+Every refusal is `hyde-db: <problem> Fix: <fix>`, at most 128 characters. When a name makes it longer, the problem is shortened and the fix kept whole. When a fix would not fit, it falls back to the reader-wide `REVOKE ALL PRIVILEGES, GRANT OPTION FROM <reader>;` where revoking the reader's grants resolves the refusal, and to a short instruction only when even that does not fit, which happens only with near-maximum `role` and `readerHost` lengths, or with a long deploying account in the `mysql.*` fix. With the default `role` and `readerHost`, and a deploying account short enough for its `GRANT`, every printed fix is a statement that works when pasted. An administrator pastes it, then you run the apply script again; repeat until it passes. The table lists the problems in the order the script checks them; the examples use the default names. <!-- D151, D161, D99, D108 -->
+
+| Refused when | Problem after `hyde-db: ` | Printed fix |
+|---|---|---|
+| the connection selected no database | `no default database; the connection must select the source database.` | add the database name to the connection URL |
+| the default database is the views database, in any case | `the default database is the views database.` | connect to the source database, not `redacted` |
+| the views database exists without the marker view | `database redacted has no hyde-db marker view.` | drop or rename it, or set "schema" to an unused name |
+| the marker view exists but cannot be read, for example because its definer was dropped | `the marker view of redacted cannot be read.` | re-create its definer `'user'@'host'` or drop database `redacted` |
+| the views database belongs to another source database | `database redacted belongs to source database app.` | set "schema" to an unused name |
+| the deploying user cannot read the grant tables | `the deploying user cannot read the MySQL grant tables.` | `GRANT SELECT ON mysql.* TO 'deployer'@'%';` |
+| the reader holds a global privilege | `the reader has a global privilege.` | `REVOKE <privilege> ON *.* FROM 'redacted_reader'@'%';` |
+| the reader holds a dynamic global privilege | `the reader has a dynamic global privilege.` | `REVOKE <privilege> ON *.* FROM 'redacted_reader'@'%';` |
+| the reader holds a grant on a database | `the reader has a grant on a database.` | ``REVOKE ALL ON `app`.* FROM 'redacted_reader'@'%';`` |
+| the reader holds a table grant other than `SELECT` on its views | `the reader has an unexpected table grant.` | ``REVOKE ALL ON `app`.`users` FROM 'redacted_reader'@'%';`` |
+| the reader holds a column grant | `the reader has a column grant.` | ``REVOKE SELECT (`email`) ON `app`.`users` FROM 'redacted_reader'@'%';`` |
+| the reader holds a routine grant | `the reader has a routine grant.` | ``REVOKE ALL ON PROCEDURE `app`.`peek` FROM 'redacted_reader'@'%';`` |
+| a role is granted to the reader | `the reader has a role.` | `REVOKE 'analyst'@'%' FROM 'redacted_reader'@'%';` |
+| the reader has a default role | `the reader has a default role.` | `ALTER USER 'redacted_reader'@'%' DEFAULT ROLE NONE;` |
+| `mandatory_roles` is not empty | `mandatory_roles is set; that is unsupported.` | `SET PERSIST mandatory_roles = '';` |
+| the reader takes part in a proxy grant | `the reader takes part in a proxy grant.` | `REVOKE PROXY ON 'boss'@'%' FROM 'redacted_reader'@'%';` |
+| another account could match a reader login, such as `redacted_reader` on `localhost` or an anonymous account | `another account could match a reader login.` | `DROP USER 'redacted_reader'@'localhost';` |
+| a check could not run, as when its query fails under `--force` | `check <id> could not run.` | run without `--force` and read the first error |
+
+<!-- D117, D120, D153, D154, D161, A77, A104, D165, D166, A105 -->
+
+The last row can come from any check, so it has no place in the order. `<id>` is the check's name, such as `marker-guard`.
+
+The grant, role, proxy and account checks run before the views database is dropped, and again after the grants. Where the second run finds a row, the script revokes the view grants and aborts: the views stay rebuilt, without the reader grant. <!-- D117, D101, A74 -->
+
 ## Diagnostics
 
 Every problem has a stable code. Any error fails `prisma generate` before it writes files, with one message that lists every problem; each error has a `fix:` line. On success, warnings and the summary line are printed. <!-- D51, D26, D29 -->
@@ -393,6 +561,7 @@ hyde-db: warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible altho
 |---|---|---|---|
 | `HYDE_CONFIG_UNKNOWN_KEY` | error | The generator block has a key hyde-db does not know. | Rename it to the suggested key, or remove it. |
 | `HYDE_CONFIG_INVALID_VALUE` | error | A config value is invalid or not a string, including an `env()` call, which arrives as the variable's name; from `build` or `analyze`, also a config that is not a plain object. | Set the value the message names. |
+| `HYDE_CONFIG_KEY_UNSUPPORTED` | error | A config key exists only on another database, such as `sourceSchema` or `statementTimeout` on MySQL. | Remove the key; the message says what to do instead. |
 | `HYDE_SCHEMA_CONFLICT` | error | `schema` equals `sourceSchema`, or a model's `@@schema` equals `schema`. | Point `schema` at a schema no model uses, or move the model. |
 | `HYDE_ANNOTATION_UNKNOWN` | error | A `@hyde.*` annotation does not exist. | Use the suggested annotation. |
 | `HYDE_ANNOTATION_MISPLACED` | error | `@hyde.visible` or `@hyde.hidden` on a model, or `@hyde.exclude` or `@hyde.default` on a field. | Move it; on a model, use `@hyde.default(…)`. |
@@ -401,15 +570,15 @@ hyde-db: warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible altho
 | `HYDE_STRICT_UNANNOTATED` | error | Strict mode and a scalar or enum field without `@hyde.visible` or `@hyde.hidden`. | Add `/// @hyde.hidden`, or `/// @hyde.visible` if the reader may see it. |
 | `HYDE_STRICT_MODEL_DEFAULT` | error | `@hyde.default` in strict mode. | Annotate each field, or set `strict = "false"`. |
 | `HYDE_SENSITIVE_IMPLICIT` | error | A sensitive-looking name would become visible through a default. | Add `@hyde.hidden`, or `@hyde.visible` if it is safe. |
-| `HYDE_VIEW_NAME_COLLISION` | error | Two models map to the same view name. | Exclude one with `@hyde.exclude`. |
-| `HYDE_UNSUPPORTED_PROVIDER` | error | The datasource provider is not `postgresql`, for example `mysql`. | Use hyde-db 1.0 only with PostgreSQL. |
+| `HYDE_VIEW_NAME_COLLISION` | error | Two models map to the same view name; on MySQL also a model mapped to `hyde_db_marker` or `hyde_db_abort`. | Exclude one with `@hyde.exclude`. |
+| `HYDE_UNSUPPORTED_PROVIDER` | error | The datasource provider is not `postgresql` or `mysql`. | Use hyde-db only with a datasource whose provider is `postgresql` or `mysql`. |
 | `HYDE_NO_OUTPUT` | error | Prisma passed no output directory. | Set `output = "./redacted"`. |
 | `HYDE_RELATION_ANNOTATED` | warning | A relation field carries `@hyde.visible` or `@hyde.hidden`, which has no effect. | Annotate the scalar foreign-key fields instead. |
 | `HYDE_SENSITIVE_EXPLICIT` | warning | A sensitive-looking name is explicitly `@hyde.visible`. | Make sure the column is safe to show. |
 | `HYDE_TIMEOUT_DISABLED` | warning | `statementTimeout` is zero, which turns the reader role's statement timeout off. | Use a positive value such as `"15s"`, or remove the key. |
 | `HYDE_LEGACY_ANNOTATION` | warning | A doc comment holds an `@ai.*` annotation from prisma-ai-views, which has no effect. | Rename it to `@hyde.*`. |
 
-<!-- D51, D25, D26, D57, D59, D60, D87 -->
+<!-- D51, D25, D26, D57, D59, D60, D156, D159 -->
 
 ## Command line
 
@@ -460,10 +629,11 @@ const { config, views, diagnostics, counts, files } = build(datamodel, { strict:
 
 - `analyze` returns `config`, `views`, `diagnostics` and `counts` (visible and hidden columns) without rendering files. <!-- D48 -->
 - `build` adds `files`, the three file contents keyed by file name, or `null` when any diagnostic is an error.
-- `config` is a `ResolvedConfig`, a union discriminated on `dialect`. In 1.0 its only member is `PostgresqlConfig`, with `dialect: 'postgresql'`. <!-- D112 -->
-- `View.sourceSchema` is `string | null`. It is never `null` on PostgreSQL; `null` is for databases without schemas. <!-- D112 -->
+- `build` and `analyze` take an optional third argument, `{ provider: 'postgresql' | 'mysql' }`, which defaults to `postgresql`; the generator passes the datasource's provider. Code written for 1.0 keeps working. A provider value that is neither returns `HYDE_UNSUPPORTED_PROVIDER` and no files. <!-- D107, D159, D142 -->
+- `config` is a `ResolvedConfig`, a union discriminated on `dialect`. Its members are `PostgresqlConfig`, with `dialect: 'postgresql'`, and `MysqlConfig`, with `dialect: 'mysql'`, which carries `readerHost` and has no `sourceSchema` or `statementTimeout`. <!-- D112, D113 -->
+- `View.sourceSchema` is `string | null`. It is never `null` on PostgreSQL; it is `null` on MySQL, where the views read unqualified names from the connection's database. <!-- D112, D113 -->
 - Union types in the public API may gain members in minor releases. Switch on `dialect` and handle `null` instead of assuming one shape. <!-- D112 -->
-- `HYDE_UNSUPPORTED_PROVIDER` and `HYDE_NO_OUTPUT` come only from `prisma generate`.
+- `HYDE_NO_OUTPUT` comes only from `prisma generate`. `HYDE_UNSUPPORTED_PROVIDER` comes from `prisma generate`, and from `build` or `analyze` when a JavaScript caller passes another provider. <!-- D159 -->
 - The package is ESM-only; CommonJS code can `require('hyde-db')` on every supported Node.js version. <!-- D5, A12, D31 -->
 
 ## Development
@@ -479,10 +649,11 @@ Needs Node.js 22.22 or later, pnpm 10 and Docker. `LEDGER.md` is the single sour
 | `pnpm test` | Unit, characterization, DMMF contract and generator tests. |
 | `pnpm test:coverage` | The same with the coverage gate: at least 95% of lines and branches in `src/`, generator entry excluded. |
 | `pnpm test:integration` | Attack suite on a real PostgreSQL in Docker (`postgres:18-alpine`, or `PG_IMAGE`). Fails, never skips, without Docker. |
-| `pnpm test:e2e` | Builds and packs the package, then runs real `prisma generate` and `prisma db execute` on Prisma 6.19.3 and 7.10.0, plus a CommonJS `require` check. Needs `E2E_DATABASE_URL`. |
+| `pnpm test:integration:mysql` | Attack suite on a real MySQL in Docker (`mysql:9.7`, or `MYSQL_IMAGE`), with the `mysql` client inside the container. Fails, never skips, without Docker. |
+| `pnpm test:e2e` | Builds and packs the package, then runs real `prisma generate` and `prisma db execute` on Prisma 6.19.3 and 7.10.0, for PostgreSQL and for MySQL, plus a CommonJS `require` check. Needs both `E2E_DATABASE_URL` and `E2E_MYSQL_DATABASE_URL`. |
 | `pnpm golden` | Rewrites the golden files under `example/redacted/` and `test/fixtures/characterization/loose/redacted/`. Run it only after an output change that a ledger decision requires. |
 
-<!-- D20, D22, D23, D6, D43 -->
+<!-- D20, D22, D23, D6, D43, D148, D103 -->
 
 Attack suite on PostgreSQL 14:
 
@@ -490,11 +661,18 @@ Attack suite on PostgreSQL 14:
 PG_IMAGE=postgres:14-alpine pnpm test:integration
 ```
 
-**Warning: the end-to-end suite runs destructive SQL.** It drops the tables `users`, `orders` and `api_keys`, the type `Plan` and the schema `redacted`, revokes `CREATE` on schema `public` from `PUBLIC`, and creates the cluster-wide role `redacted_reader`. Point `E2E_DATABASE_URL` only at a disposable database, for example:
+Attack suite on MySQL 8.4 (`MYSQL_IMAGE` defaults to `mysql:9.7`):
+
+```sh
+MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql
+```
+
+**Warning: the end-to-end suite runs destructive SQL.** It drops the tables `users`, `orders` and `api_keys`, the type `Plan` and the schema `redacted`, revokes `CREATE` on schema `public` from `PUBLIC`, and creates the cluster-wide role `redacted_reader`. On MySQL it creates and drops its own databases and the reader account on the server `E2E_MYSQL_DATABASE_URL` names. Point `E2E_DATABASE_URL` and `E2E_MYSQL_DATABASE_URL` only at disposable servers, the second with the source database in its path, for example:
 
 ```sh
 docker run -d --rm --name hyde-e2e -e POSTGRES_PASSWORD=pg -p 55432:5432 postgres:18-alpine
-E2E_DATABASE_URL=postgresql://postgres:pg@localhost:55432/postgres pnpm test:e2e
+docker run -d --rm --name hyde-e2e-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=app -p 53306:3306 mysql:9.7
+E2E_DATABASE_URL=postgresql://postgres:pg@localhost:55432/postgres E2E_MYSQL_DATABASE_URL=mysql://root:root@localhost:53306/app pnpm test:e2e
 ```
 
 `E2E_PRISMA_VERSIONS` (default `6.19.3,7.10.0`) narrows the Prisma versions; `E2E_TARBALL` points `node --test test/e2e/*.test.mjs` at an existing `.tgz` instead of the one `pnpm test:e2e` packs.

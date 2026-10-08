@@ -34,7 +34,7 @@ npm trusted publishing cannot create a package, so the first publish authenticat
 1. On npmjs.com create a granular access token with read and write access to all packages (a package that does not exist yet cannot be selected), "Bypass two-factor authentication" ticked (no one is there to type a one-time code) and the shortest expiry.
 2. Add it as the repository secret `NPM_TOKEN` (Settings, Secrets and variables, Actions).
 3. Merge the version pull request, then push the tag `v1.0.0` as in "Day to day".
-4. Watch `release.yml` publish.
+4. Watch `release.yml` publish. npm holds the first version of a new package for approval: it publishes a public placeholder `0.0.0-stage`, and the version goes live only after you approve it with 2FA on npmjs.com, in the package's Staged Packages tab (or with `npm stage approve <id>`).
 5. On npmjs.com open the package, Settings, Trusted Publisher: repository `bergbacher/hyde-db`, workflow `release.yml`.
 6. Delete the `NPM_TOKEN` secret and revoke the token, then set the package to require two-factor authentication and disallow tokens. Trusted publishing keeps working.
 

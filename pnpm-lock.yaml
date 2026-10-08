@@ -17,6 +17,9 @@ importers:
       '@changesets/cli':
         specifier: ^3.0.3
         version: 3.0.3
+      '@testcontainers/mysql':
+        specifier: ^12.2.0
+        version: 12.2.0
       '@testcontainers/postgresql':
         specifier: ^12.2.0
         version: 12.2.0
@@ -411,6 +414,9 @@ packages:
 
   '@rolldown/pluginutils@1.0.1':
     resolution: {integrity: sha512-2j9bGt5Jh8hj+vPtgzPtl72j0yRxHAyumoo6TNfAjsLB04UtpSvPbPcDcBMxz7n+9CYB0c1GxQFxYRg2jimqGw==}
+
+  '@testcontainers/mysql@12.2.0':
+    resolution: {integrity: sha512-Pni1nHgh01s/w0od+BL4ostBByfN7M9i20bm4iFT5xr4eAb6rBw2YT6wz6kfYNsx95Tj2TkCiRwkSG085VlNLQ==}
 
   '@testcontainers/postgresql@12.2.0':
     resolution: {integrity: sha512-14oNBbKdqIkWTiw8XwP6YqWnuBebiij8m4fF03WTSHvNt5FfvQpGTLwIV3p07UpDnqWRFvY50YFzbiYdB+SWuA==}
@@ -2095,6 +2101,15 @@ snapshots:
     optional: true
 
   '@rolldown/pluginutils@1.0.1': {}
+
+  '@testcontainers/mysql@12.2.0':
+    dependencies:
+      testcontainers: 12.2.0
+    transitivePeerDependencies:
+      - bare-abort-controller
+      - bare-buffer
+      - react-native-b4a
+      - supports-color
 
   '@testcontainers/postgresql@12.2.0':
     dependencies:

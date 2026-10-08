@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { BRAND, DEFAULT_OUTPUT } from '../../src/brand.ts'
 import { build } from '../../src/build.ts'
 import {
+  configKeyUnsupported,
   configNotAnObject,
   conflictingAnnotations,
   DIAGNOSTIC_CODES,
@@ -58,6 +59,7 @@ const ALL: Diagnostic[] = [
   relationAnnotated('Order.user'),
   sensitiveExplicit('User.email'),
   configNotAnObject('string'),
+  configKeyUnsupported('sourceSchema', 'mysql', 'Remove "sourceSchema".'),
   unreadableConfig(),
   unreadableConfigValue('strict'),
   timeoutDisabled('0s', 'redacted_reader'),
@@ -84,6 +86,7 @@ describe('diagnostics catalog', () => {
       'HYDE_ANNOTATION_MISPLACED',
       'HYDE_ANNOTATION_UNKNOWN',
       'HYDE_CONFIG_INVALID_VALUE',
+      'HYDE_CONFIG_KEY_UNSUPPORTED',
       'HYDE_CONFIG_UNKNOWN_KEY',
       'HYDE_LEGACY_ANNOTATION',
       'HYDE_NO_OUTPUT',
@@ -97,7 +100,7 @@ describe('diagnostics catalog', () => {
       'HYDE_UNSUPPORTED_PROVIDER',
       'HYDE_VIEW_NAME_COLLISION',
     ])
-    expect(DIAGNOSTIC_CODES).toHaveLength(17)
+    expect(DIAGNOSTIC_CODES).toHaveLength(18)
   })
 
   it('D51: relation, explicit-sensitive, disabled-timeout and legacy-annotation findings are warnings, everything else is an error', () => {
@@ -301,5 +304,16 @@ describe('formatting', () => {
   it('detects errors', () => {
     expect(hasErrors([sensitiveExplicit('a.b')])).toBe(false)
     expect(hasErrors([sensitiveExplicit('a.b'), noOutputDirectory()])).toBe(true)
+  })
+})
+
+describe('D26, D97: unsupported config key', () => {
+  it('D26: configKeyUnsupported is an error at the key, names the dialect and carries the hint', () => {
+    const d = configKeyUnsupported('sourceSchema', 'mysql', 'Remove it.')
+    expect(d.code).toBe('HYDE_CONFIG_KEY_UNSUPPORTED')
+    expect(d.severity).toBe('error')
+    expect(d.location).toBe('config.sourceSchema')
+    expect(d.message).toContain('mysql')
+    expect(d.hint).toBe('Remove it.')
   })
 })

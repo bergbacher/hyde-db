@@ -2,11 +2,12 @@
 // a location and a message; every error also carries a fix hint (D26). Unknown names get a
 // "did you mean" suggestion when a valid spelling is within edit distance 2 (D25).
 import { BRAND, DEFAULT_OUTPUT } from './brand.ts'
-import type { Diagnostic, DiagnosticCode, Severity } from './types.ts'
+import type { Diagnostic, DiagnosticCode, Provider, Severity } from './types.ts'
 
 export const SEVERITY: Readonly<Record<DiagnosticCode, Severity>> = {
   HYDE_CONFIG_UNKNOWN_KEY: 'error',
   HYDE_CONFIG_INVALID_VALUE: 'error',
+  HYDE_CONFIG_KEY_UNSUPPORTED: 'error',
   HYDE_SCHEMA_CONFLICT: 'error',
   HYDE_ANNOTATION_UNKNOWN: 'error',
   HYDE_ANNOTATION_MISPLACED: 'error',
@@ -96,6 +97,16 @@ export function unknownConfigKey(key: string, validKeys: readonly string[]): Dia
     suggestion === undefined
       ? `Remove "${key}" from the generator block. Valid keys: ${validKeys.join(', ')}.`
       : `Rename "${key}" to "${suggestion}" in the generator block.`,
+  )
+}
+
+/** A config key that exists on another dialect only (D97); the hint says how to fix it (D26). */
+export function configKeyUnsupported(key: string, dialect: Provider, hint: string): Diagnostic {
+  return make(
+    'HYDE_CONFIG_KEY_UNSUPPORTED',
+    `config.${key}`,
+    `config key "${key}" is not supported on ${dialect}`,
+    hint,
   )
 }
 
@@ -257,12 +268,15 @@ export function viewNameCollision(name: string, first: string, second: string): 
   )
 }
 
-export function unsupportedProvider(provider: string): Diagnostic {
+/** `provider` comes from JavaScript callers: only a string is quoted, anything else is named by `typeof` (D142, D159). */
+export function unsupportedProvider(provider: unknown): Diagnostic {
+  const described =
+    typeof provider === 'string' ? `is "${provider}"` : `is not a string (${typeof provider})`
   return make(
     'HYDE_UNSUPPORTED_PROVIDER',
     'datasource',
-    `only postgresql is supported (datasource provider is "${provider}")`,
-    `Use ${BRAND} only with a datasource whose provider is "postgresql".`,
+    `only postgresql and mysql are supported (datasource provider ${described})`,
+    `Use ${BRAND} only with a datasource whose provider is "postgresql" or "mysql".`,
   )
 }
 

@@ -2,13 +2,13 @@
 // not create (D11, D58), and objects outside it that its drop would take along (D141).
 import { BRAND, SCHEMA_MARKER } from '../brand.ts'
 import { quoteLiteral } from '../sql.ts'
-import type { ResolvedConfig } from '../types.ts'
+import type { PostgresqlConfig } from '../types.ts'
 
 /**
  * A DO block that aborts when the views schema exists but its comment is neither the marker
  * nor the marker followed by `.` (D11, D58), so a look-alike such as `hyde-dbx` is refused.
  */
-export function renderSchemaGuard(config: Pick<ResolvedConfig, 'schema'>): string {
+export function renderSchemaGuard(config: Pick<PostgresqlConfig, 'schema'>): string {
   const message =
     `${BRAND}: schema ${config.schema} exists but was not created by ${BRAND} ` +
     `(its comment lacks the "${SCHEMA_MARKER}" marker); refusing to drop it. ` +
@@ -37,7 +37,7 @@ export function renderSchemaGuard(config: Pick<ResolvedConfig, 'schema'>): strin
  * on the referenced object, so its time does not grow with the rest of the database. Schema names
  * are compared as pg_identify_object writes them, quoted where SQL needs it, such as "user".
  */
-export function renderDependentsGuard(config: Pick<ResolvedConfig, 'schema'>): string {
+export function renderDependentsGuard(config: Pick<PostgresqlConfig, 'schema'>): string {
   const schema = quoteLiteral(config.schema)
   const message =
     `${BRAND}: objects outside schema ${config.schema} depend on its views: %; refusing to drop them with the schema. ` +

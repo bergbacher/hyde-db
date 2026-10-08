@@ -3,7 +3,7 @@ import { analyze, viewCollisions } from '../../src/analyze.ts'
 import { CONFIG_KEYS, DEFAULT_CONFIG, validateConfig } from '../../src/config.ts'
 import { toDatamodel } from '../../src/datamodel.ts'
 import { postgresqlConfigRules } from '../../src/dialects/postgresql.ts'
-import type { PostgresqlConfig, ResolvedConfig, View } from '../../src/index.ts'
+import type { MysqlConfig, PostgresqlConfig, ResolvedConfig, View } from '../../src/index.ts'
 import { renderApplySql } from '../../src/render/apply-sql.ts'
 import { datamodel, model, scalar } from '../helpers/dmmf.ts'
 import { config, users } from '../helpers/views.ts'
@@ -11,15 +11,15 @@ import { config, users } from '../helpers/views.ts'
 describe('D112: forward-compatible public types', () => {
   it('D112: View.sourceSchema is nullable; the config is a union discriminated on dialect', () => {
     expectTypeOf<View['sourceSchema']>().toEqualTypeOf<string | null>()
-    expectTypeOf<ResolvedConfig['dialect']>().toEqualTypeOf<'postgresql'>()
-    expectTypeOf<ResolvedConfig>().toEqualTypeOf<PostgresqlConfig>()
+    expectTypeOf<ResolvedConfig['dialect']>().toEqualTypeOf<'postgresql' | 'mysql'>()
+    expectTypeOf<ResolvedConfig>().toEqualTypeOf<PostgresqlConfig | MysqlConfig>()
   })
 
   it('D112: the dialect is resolved, never a generator-block key', () => {
     expect(DEFAULT_CONFIG.dialect).toBe('postgresql')
     expect(analyze(datamodel()).config.dialect).toBe('postgresql')
     expect(CONFIG_KEYS).not.toContain('dialect')
-    const { config: resolved, diagnostics } = validateConfig({ dialect: 'mysql' })
+    const { config: resolved, diagnostics } = validateConfig({ dialect: 'mysql' }, 'postgresql')
     expect(diagnostics.map((d) => [d.code, d.location])).toEqual([
       ['HYDE_CONFIG_UNKNOWN_KEY', 'config.dialect'],
     ])
