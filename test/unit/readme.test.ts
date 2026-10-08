@@ -346,7 +346,7 @@ describe('README (a view of LEDGER.md)', () => {
     }
   })
 
-  it('D162, D54: the quick start builds without any diagnostic and shows its summary line as formatSummary prints it (D28)', () => {
+  it('D170, D54: the quick start builds without any diagnostic and shows its summary line as formatSummary prints it (D28)', () => {
     const quickStart = section('Quick start')
     expect(quickStart).toContain('provider = "hyde-db"')
     expect(quickStart).toContain('strict mode is on by default')
@@ -874,8 +874,8 @@ describe('README (a view of LEDGER.md)', () => {
     expect(outsideMigration).not.toMatch(/\bai_reader\b|@ai\.(visible|hidden)/)
   })
 
-  it('D66, D162: shows npx @hyde/db --help, never npx --no hyde-db, and the provider rule as the binary prints it', () => {
-    expect(prose).toContain('npx @hyde/db --help')
+  it('D66, D170: shows npx hyde-db --help, never npx --no hyde-db, and the provider rule as the binary prints it', () => {
+    expect(prose).toContain('npx hyde-db --help')
     expect(readme).not.toContain('npx --no hyde-db')
     expect(prose).toContain(prismaArgumentsMessage(['--help']))
     expect(prose).toContain(unknownArgumentMessage('--bogus').split('\n')[0])

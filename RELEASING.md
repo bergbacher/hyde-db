@@ -21,7 +21,7 @@ git tag v<version> <merge-commit>
 git push origin v<version>
 ```
 
-5. Watch the `Release` workflow. It publishes `@hyde/db@<version>` and keeps the `.tgz` as a workflow artifact.
+5. Watch the `Release` workflow. It publishes `hyde-db@<version>` and keeps the `.tgz` as a workflow artifact.
 
 The repository setting "Allow GitHub Actions to create and approve pull requests" must be on, or `version.yml` cannot open the pull request.
 
@@ -29,14 +29,14 @@ Make `ci-ok` the single required status check of `main` (Settings, Branches, the
 
 ## First release
 
-npm trusted publishing cannot create a package, so the first publish authenticates with a token. The package is scoped: the npm organization `hyde` must exist and the publishing npm user must be allowed to publish in it. The owner does these steps in order:
+npm trusted publishing cannot create a package, so the first publish authenticates with a token. The owner does these steps in order:
 
-1. On npmjs.com create a granular access token with publish rights to `@hyde/db` (or the `hyde` organization) and a short expiry.
+1. On npmjs.com create a granular access token with read and write access to all packages (a package that does not exist yet cannot be selected), "Bypass two-factor authentication" ticked (no one is there to type a one-time code) and the shortest expiry.
 2. Add it as the repository secret `NPM_TOKEN` (Settings, Secrets and variables, Actions).
 3. Merge the version pull request, then push the tag `v1.0.0` as in "Day to day".
 4. Watch `release.yml` publish.
 5. On npmjs.com open the package, Settings, Trusted Publisher: repository `bergbacher/hyde-db`, workflow `release.yml`.
-6. Delete the `NPM_TOKEN` secret and revoke the token. Optionally set the package to require two-factor authentication and disallow tokens.
+6. Delete the `NPM_TOKEN` secret and revoke the token, then set the package to require two-factor authentication and disallow tokens. Trusted publishing keeps working.
 
 From then on `release.yml` authenticates through OIDC and no long-lived npm token exists.
 
