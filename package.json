@@ -1,6 +1,6 @@
 {
   "name": "hyde-db",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Prisma generator that turns /// @hyde annotations into read-only PostgreSQL or MySQL views with sensitive columns removed, plus a locked-down reader role",
   "keywords": [
     "prisma",
