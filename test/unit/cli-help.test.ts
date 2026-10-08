@@ -339,7 +339,7 @@ describe('usage', () => {
     }
   })
 
-  it('D107, D162: labels the psql deploy as PostgreSQL and points MySQL users to the README section MySQL', () => {
+  it('D107, D170: labels the psql deploy as PostgreSQL and points MySQL users to the README section MySQL', () => {
     const pointer = lines.filter((l) => l.startsWith('On MySQL, see the README section MySQL'))
     expect(pointer).toHaveLength(1)
     expect(pointer[0]).toContain('mysql client or prisma db execute')
@@ -546,7 +546,7 @@ describe('usage', () => {
   })
 
   it('D56: points to the package README, or the repository when it is known', () => {
-    expect(text).toContain('Full documentation: the README in the @hyde/db npm package.')
+    expect(text).toContain('Full documentation: the README in the hyde-db npm package.')
     expect(usage(DEFAULT_CONFIG, 'https://github.com/acme/hyde-db')).toContain(
       'Full documentation: https://github.com/acme/hyde-db#readme',
     )

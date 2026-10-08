@@ -96,7 +96,7 @@ An abort is a failing insert of the message into a temporary table under strict 
 | DMMF contract | `pnpm test:coverage` | The pinned Prisma 6 and 7 schema engines (WASM) produce identical views and diagnostics for the same fixture schema. |
 | Attack suite | `pnpm test:integration` | A real PostgreSQL container (Testcontainers): the final check refuses every category of leaked access, each printed fix removes exactly that access, and a re-apply passes. Runs on PostgreSQL 14 and 18. |
 | MySQL attack suite | `pnpm test:integration:mysql` | A real MySQL container (Testcontainers, image from `MYSQL_IMAGE`): every access path is refused or neutralised, each printed fix removes exactly that access, stopping the script after each statement never gives the reader more than its view grants, and `mysql --force` after a refusal grants nothing. Runs on MySQL 8.4 and 9.7. |
-| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('@hyde/db')` works. With `provider = "mysql"` the same runs against `E2E_MYSQL_DATABASE_URL`. |
+| End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('hyde-db')` works. With `provider = "mysql"` the same runs against `E2E_MYSQL_DATABASE_URL`. |
 
 Coverage gate: at least 95% of lines and branches in `src/`, generator entry excluded. <!-- D23 -->
 

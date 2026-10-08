@@ -1,6 +1,6 @@
 # hyde-db
 
-A Prisma generator that gives any reader, whether an AI tool or a person, read access to a Prisma-managed PostgreSQL or MySQL database, limited to the columns your schema's annotations allow. The sections below describe PostgreSQL; [MySQL](#mysql) has its own section. <!-- Intent, D53, D162, D86, D107 -->
+A Prisma generator that gives any reader, whether an AI tool or a person, read access to a Prisma-managed PostgreSQL or MySQL database, limited to the columns your schema's annotations allow. The sections below describe PostgreSQL; [MySQL](#mysql) has its own section. <!-- Intent, D53, D170, D86, D107 -->
 
 You mark fields `/// @hyde.visible` or `/// @hyde.hidden`. `prisma generate` then writes three files: <!-- D54 -->
 
@@ -17,10 +17,10 @@ Hidden columns do not exist in the views, so every query that names one, such as
 Install the package:
 
 ```sh
-npm install --save-dev @hyde/db
+npm install --save-dev hyde-db
 ```
 
-Add a generator block to `prisma/schema.prisma`: <!-- D162, D54 -->
+Add a generator block to `prisma/schema.prisma`: <!-- D170, D54 -->
 
 ```prisma
 generator redacted {
@@ -585,7 +585,7 @@ hyde-db: warning HYDE_SENSITIVE_EXPLICIT at User.email: explicitly visible altho
 Run outside `prisma generate`, the `hyde-db` binary prints its usage: what it does, the generator block with every default, the annotations, the output files and the deploy commands. <!-- D66, D55 -->
 
 ```sh
-npx @hyde/db --help
+npx hyde-db --help
 ```
 
 - `help` and `-h` do the same; `--version`, `-v` and `version` print the version. <!-- D66 -->
@@ -604,9 +604,9 @@ npx @hyde/db --help
 | schema `ai`, role `ai_reader` | schema `redacted`, role `redacted_reader` |
 | `strict` off by default | `strict` on by default |
 
-<!-- D54, D162 -->
+<!-- D54, D170 -->
 
-1. Replace the package: `npm uninstall prisma-ai-views`, then `npm install --save-dev @hyde/db`.
+1. Replace the package: `npm uninstall prisma-ai-views`, then `npm install --save-dev hyde-db`.
 2. Rename every `@ai.*` annotation to `@hyde.*`. A leftover one has no effect and warns with `HYDE_LEGACY_ANNOTATION`; in strict mode its field is also reported as unannotated. <!-- D60, A37 -->
 3. Update the generator block, and the file paths in CI and deploy scripts. To keep the old non-strict behavior, set `strict = "false"`.
 4. Do the steps [before the first deploy](#before-the-first-deploy), deploy, then the steps [after the first deploy](#after-the-first-deploy) for `redacted_reader`.
@@ -622,7 +622,7 @@ DROP ROLE ai_reader;
 The package exports `build`, `analyze` and their types, nothing else. Both take the DMMF datamodel exactly as Prisma passes it to a generator (`options.dmmf.datamodel`) plus the generator config, and never throw on config input: every config problem becomes a diagnostic. <!-- D9, D142, D47 -->
 
 ```ts
-import { analyze, build } from '@hyde/db'
+import { analyze, build } from 'hyde-db'
 
 const { config, views, diagnostics, counts, files } = build(datamodel, { strict: 'true' })
 ```
@@ -634,7 +634,7 @@ const { config, views, diagnostics, counts, files } = build(datamodel, { strict:
 - `View.sourceSchema` is `string | null`. It is never `null` on PostgreSQL; it is `null` on MySQL, where the views read unqualified names from the connection's database. <!-- D112, D113 -->
 - Union types in the public API may gain members in minor releases. Switch on `dialect` and handle `null` instead of assuming one shape. <!-- D112 -->
 - `HYDE_NO_OUTPUT` comes only from `prisma generate`. `HYDE_UNSUPPORTED_PROVIDER` comes from `prisma generate`, and from `build` or `analyze` when a JavaScript caller passes another provider. <!-- D159 -->
-- The package is ESM-only; CommonJS code can `require('@hyde/db')` on every supported Node.js version. <!-- D5, A12, D31 -->
+- The package is ESM-only; CommonJS code can `require('hyde-db')` on every supported Node.js version. <!-- D5, A12, D31 -->
 
 ## Development
 

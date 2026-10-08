@@ -4,8 +4,8 @@ import { readRepoFile } from '../helpers/files.ts'
 const pkg = JSON.parse(readRepoFile('package.json')) as Record<string, unknown>
 
 describe('package.json', () => {
-  it('D162: is published as @hyde/db and installs a hyde-db bin', () => {
-    expect(pkg.name).toBe('@hyde/db')
+  it('D170: is published as hyde-db and installs a hyde-db bin', () => {
+    expect(pkg.name).toBe('hyde-db')
     expect(pkg.bin).toEqual({ 'hyde-db': './dist/generator.mjs' })
   })
 

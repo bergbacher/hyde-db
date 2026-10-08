@@ -151,7 +151,7 @@ export function usage(config: PostgresqlConfig, repository?: string): string {
     'Each error carries a fix hint, and any error fails prisma generate before writing files.',
     '',
     repository === undefined
-      ? `Full documentation: the README in the @hyde/db npm package.`
+      ? `Full documentation: the README in the ${BRAND} npm package.`
       : `Full documentation: ${repository}#readme`,
   ].join('\n')
 }
