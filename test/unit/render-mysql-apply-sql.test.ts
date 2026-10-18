@@ -75,10 +75,11 @@ describe('renderMysqlApplySql', () => {
     expect(sql).not.toMatch(/GRANT SELECT ON `redacted`\.\*/)
   })
 
-  it('D155, D119: the reset REVOKE is a plain line, every statement from the database drop on is gated', () => {
+  it('D155, D172: the reset REVOKE is prepared without the refusal gate, every statement from the database drop on is gated', () => {
     expect(sql).toMatch(
-      /^REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'redacted_reader'@'%' IGNORE UNKNOWN USER;$/m,
+      /^SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''';$/m,
     )
+    expect(sql).not.toMatch(/IGNORE UNKNOWN USER|REVOKE IF EXISTS/)
     const tail = sql.slice(at('DROP DATABASE IF EXISTS') - 200)
     expect(tail).not.toMatch(/^(DROP DATABASE|CREATE DATABASE|CREATE DEFINER|CREATE USER|GRANT)/m)
     expect(tail.match(/^SET @hyde_sql = IF\(@hyde_refused IS NULL/gm)?.length).toBe(

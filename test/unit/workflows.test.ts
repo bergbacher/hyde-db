@@ -73,18 +73,18 @@ describe('CI workflow', () => {
     expect(e2e).toContain('test/e2e/generate.test.mjs test/e2e/require.test.mjs')
   })
 
-  it('D103: the MySQL attack suite runs on MySQL 8.4 and 9.7 on a runner with Docker', () => {
+  it('D103, D171: the MySQL attack suite runs on MySQL 8.0, 8.4 and 9.7 on a runner with Docker', () => {
     const attack = job(ci, 'attack-mysql')
-    expect(attack).toContain("mysql: ['8.4', '9.7']")
+    expect(attack).toContain("mysql: ['8.0', '8.4', '9.7']")
     expect(attack).toMatch(/MYSQL_IMAGE: mysql:\$\{\{ matrix\.mysql \}\}/)
     expect(attack).toContain('runs-on: ubuntu-latest')
     expect(attack).toContain('pnpm test:integration:mysql')
     expect(attack).toContain('node-version: 24')
   })
 
-  it('D103: MySQL end-to-end runs on MySQL 8.4 and 9.7 x Prisma 6 and 7 x Node 20 and 24 with a health-checked service', () => {
+  it('D103, D171: MySQL end-to-end runs on MySQL 8.0, 8.4 and 9.7 x Prisma 6 and 7 x Node 20 and 24 with a health-checked service', () => {
     const e2e = job(ci, 'e2e-mysql')
-    expect(e2e).toContain("mysql: ['8.4', '9.7']")
+    expect(e2e).toContain("mysql: ['8.0', '8.4', '9.7']")
     expect(e2e).toContain("prisma: ['6.19.3', '7.10.0']")
     expect(e2e).toContain('node: [20, 24]')
     expect(e2e).toContain('needs: build')

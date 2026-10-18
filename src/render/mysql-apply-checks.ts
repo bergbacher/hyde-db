@@ -1,4 +1,4 @@
-// MySQL apply checks A (D117 steps 2, 4, 5; D119; A77, A86): the default database is not the views
+// MySQL apply checks A (D117 steps 2, 4, 5; D172; A77, A86): the default database is not the views
 // database, the deployer can read the grant tables, and the reader account is reset and verified.
 // Printed fixes are pasted by an administrator in the default sql_mode, so computed fixes use
 // QUOTE() and backtick doubling inside the SQL, not the script's own literal rule (D99). A computed
@@ -8,12 +8,12 @@ import type { MysqlConfig } from '../types.ts'
 import {
   abortIf,
   abortWhenFound,
-  account,
   couldNotRunMessage,
   FIX_LIMIT,
   type MysqlCheck,
   raiseRefusal,
   refusalMessage,
+  revokeReader,
 } from './mysql-guards.ts'
 
 const GRANT_TABLES = [
@@ -123,7 +123,7 @@ export const grantTableAccessCheck: MysqlCheck = {
 }
 
 /**
- * A SELECT of (problem, fix, `rank`) over every leftover grant of the reader (D117, D119). `allowed`
+ * A SELECT of (problem, fix, `rank`) over every leftover grant of the reader (D117, D172). `allowed`
  * lists the view names whose Select grant on the views database is expected (empty before the views exist).
  */
 export function leftoverGrants(config: MysqlConfig, allowed: readonly string[]): string {
@@ -158,12 +158,12 @@ export function leftoverGrants(config: MysqlConfig, allowed: readonly string[]):
   ].join('\n')
 }
 
-/** D117 step 5 (D119, A86): revokes everything from the reader, then aborts on any leftover grant. */
+/** D117 step 5 (D172, A86): revokes everything from the reader, then aborts on any leftover grant. */
 export const resetReader: MysqlCheck = {
   id: 'reset-reader',
   render(config) {
     return [
-      `REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${account(config)} IGNORE UNKNOWN USER;`,
+      ...revokeReader(config),
       ...abortWhenFound('reset-reader', `${leftoverGrants(config, [])}\nORDER BY \`rank\` LIMIT 1`),
     ]
   },
@@ -234,21 +234,17 @@ export const preChecks: readonly MysqlCheck[] = sources.map(({ id, source }) => 
 
 /**
  * D117 step 9: after the view grants, re-runs every refusal source; when one finds a row the reader's
- * grants are revoked through a prepared statement before the script aborts (D119, D155). The message
+ * grants are revoked through a prepared statement before the script aborts (D172, D155). The message
  * starts as the could-not-run refusal, so a re-check query that fails also revokes and aborts (D166).
  */
 export function renderRecheck(config: MysqlConfig, views: readonly string[]): string[] {
   const union = [leftoverGrants(config, views), ...sources.map((s) => s.source(config))].join(
     '\nUNION ALL\n',
   )
-  const revoke = `REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${account(config)} IGNORE UNKNOWN USER`
   return [
     `SET @hyde_message = ${ql(couldNotRunMessage('recheck'))};`,
     refusalMessage(`${union}\nORDER BY \`rank\` LIMIT 1`),
-    `SET @hyde_sql = IF(@hyde_message IS NULL, 'DO 0', ${ql(revoke)});`,
-    'PREPARE hyde_stmt FROM @hyde_sql;',
-    'EXECUTE hyde_stmt;',
-    'DEALLOCATE PREPARE hyde_stmt;',
+    ...revokeReader(config, '@hyde_message IS NOT NULL'),
     ...raiseRefusal(),
   ]
 }

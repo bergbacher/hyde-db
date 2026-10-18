@@ -164,7 +164,7 @@ describe('usage', () => {
     expect(line).toContain('a shared role is not detected')
   })
 
-  it('D164, D119, D155: says the reader account must serve only as the reader, and to run MySQL scripts without force', () => {
+  it('D164, D172, D155: says the reader account must serve only as the reader, and to run MySQL scripts without force', () => {
     const line = lines.find((l) => l.includes('only as the hyde-db reader')) ?? ''
     expect(line).toContain('every apply and drop first revokes all its privileges')
     const force = lines.find((l) => l.includes('without --force')) ?? ''

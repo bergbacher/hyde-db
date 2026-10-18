@@ -953,20 +953,22 @@ describe('README (a view of LEDGER.md)', () => {
     expect(versions).not.toMatch(/\b1[5-7]\b/)
   })
 
-  it('D94, D159: MySQL 8.4 and 9.7 are supported, 8.0, innovation releases and MariaDB are not, and other providers are refused', () => {
+  it('D171, D159, A111: MySQL 8.0 from 8.0.21, 8.4 and 9.7 are supported, innovation releases and MariaDB are not, and other providers are refused', () => {
     const versions = section('Supported versions')
     const mysql = versions.split('\n').find((line) => line.startsWith('- **MySQL:**')) ?? ''
-    expect(mysql).toContain('8.4 and 9.7')
-    expect(mysql).toContain('The attack suite runs on both.')
-    for (const out of ['MySQL 8.0', 'innovation releases', 'MariaDB']) expect(mysql).toContain(out)
+    expect(mysql).toContain('8.0 from 8.0.21, 8.4 and 9.7')
+    expect(mysql).toContain('The minimum is MySQL 8.0.21.')
+    expect(mysql).toContain('The attack suite runs on all three lines')
+    expect(mysql).toContain('8.0.46, not 8.0.21')
+    expect(mysql).not.toContain('8.0, innovation')
+    for (const out of ['Innovation releases', 'MariaDB']) expect(mysql).toContain(out)
     expect(versions).not.toContain('planned for 1.1.0')
     expect(versions).toContain('`HYDE_UNSUPPORTED_PROVIDER`')
     expect(versions).toContain('other than `postgresql` or `mysql`')
     const ci = readRepoFile('.github', 'workflows', 'ci.yml')
-    expect(/attack-mysql:[\s\S]*?mysql: \['(\d\.\d)', '(\d\.\d)'\]/.exec(ci)?.slice(1, 3)).toEqual([
-      '8.4',
-      '9.7',
-    ])
+    expect(
+      /attack-mysql:[\s\S]*?mysql: \['(\d\.\d)', '(\d\.\d)', '(\d\.\d)'\]/.exec(ci)?.slice(1, 4),
+    ).toEqual(['8.0', '8.4', '9.7'])
   })
 
   it('D63, D126: links RELEASING.md and says a release publishes only a commit CI passed', () => {
@@ -1167,7 +1169,7 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     expect(mysqlApply).not.toMatch(/IDENTIFIED BY/)
   })
 
-  it('D117, D115, D119, D155, D99: lists the apply steps in the order the script runs them', () => {
+  it('D117, D115, D172, D155, D99: lists the apply steps in the order the script runs them', () => {
     const steps = section('What the MySQL apply script does', '###')
     const order = [
       "SET SESSION sql_mode = 'STRICT_ALL_TABLES,NO_BACKSLASH_ESCAPES';",
@@ -1210,21 +1212,29 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
       'no routine and nothing left behind',
       '`mysql --force`',
       '`DEFINER = CURRENT_USER`',
-      '`IGNORE UNKNOWN USER`',
+      'run only when `mysql.user` holds the account',
     ]) {
       expect(steps, phrase).toContain(phrase)
     }
     expect(mysqlApply).toContain('DEFINER = CURRENT_USER')
-    expect(mysqlApply).toContain('IGNORE UNKNOWN USER')
+    expect(mysqlApply).toContain('FROM mysql.user WHERE User = ')
+    expect(mysqlApply).not.toContain('IGNORE UNKNOWN USER')
   })
 
-  it('D100, D121, D119: the drop script checks the marker, revokes the reader and drops the views database, also when it is gone', () => {
+  it('D100, D121, D172: the drop script checks the marker, revokes the reader and drops the views database, also when it is gone', () => {
     const drop = readRepoFile('example-mysql', 'redacted', 'redacted-views-drop.sql')
     expect(drop).toContain('hyde_db_marker')
-    expect(drop).toContain('IGNORE UNKNOWN USER')
+    expect(drop).toContain('FROM mysql.user WHERE User = ')
+    expect(drop).not.toContain('IGNORE UNKNOWN USER')
     expect(drop).toContain('DROP DATABASE IF EXISTS')
     const text = section('What the MySQL drop script does', '###')
-    for (const phrase of ['marker', 'revokes', 'already gone', 'IGNORE UNKNOWN USER']) {
+    for (const phrase of [
+      'marker',
+      'revokes',
+      'already gone',
+      'when `mysql.user` holds the account',
+      'the account does not exist',
+    ]) {
       expect(text, phrase).toContain(phrase)
     }
   })
@@ -1290,7 +1300,7 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     expect(mysql).toMatch(/<!--[^>]*\bA105\b[^>]*-->/)
   })
 
-  it('D164, D119, A74: the reader account serves only as the hyde-db reader, because every apply and drop revokes all its privileges, which MySQL cannot roll back', () => {
+  it('D164, D172, A74: the reader account serves only as the hyde-db reader, because every apply and drop revokes all its privileges, which MySQL cannot roll back', () => {
     for (const phrase of [
       'must serve only as the hyde-db reader',
       'every apply and drop first revokes all its privileges',
@@ -1410,7 +1420,12 @@ describe('README, MySQL section (a view of LEDGER.md)', () => {
     expect(row).toContain('`MYSQL_IMAGE`')
     expect(row).toContain('mysql:9.7')
     expect(row).toContain('Fails, never skips, without Docker.')
+    expect(row).toContain('With `MYSQL_URL` set it runs against that server instead')
     expect(development).toContain('MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql')
+    expect(development).toContain(
+      'MYSQL_URL=mysql://root@127.0.0.1:3380 pnpm test:integration:mysql',
+    )
+    expect(development).toContain('point it only at a disposable server')
     const e2e = development.split('\n').find((l) => l.startsWith('| `pnpm test:e2e` |')) ?? ''
     expect(e2e).toContain('`E2E_DATABASE_URL` and `E2E_MYSQL_DATABASE_URL`')
     expect(development).toContain(

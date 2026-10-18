@@ -1,4 +1,4 @@
-// Attack suite A, part 1: the deploy lifecycle against a real MySQL server (A74, A75, A78, A85, A86, D104, D116, D119).
+// Attack suite A, part 1: the deploy lifecycle against a real MySQL server (A74, A75, A78, A85, A86, D104, D116, D172).
 import { describe, expect, it } from 'vitest'
 import {
   createAccount,
@@ -138,7 +138,7 @@ describe('MySQL deploy lifecycle', () => {
     expect(broken.stdout).toBe('')
   })
 
-  it('D119, A86: a first deploy (account absent) passes the reset; the apply never errors 1269', async () => {
+  it('D172, A86, A109: a first deploy (account absent) passes the reset; the apply never errors 1269', async () => {
     const db = await newDb()
     expect(query(`SELECT COUNT(*) FROM mysql.user WHERE User='${db.reader}'`).stdout.trim()).toBe(
       '0',
