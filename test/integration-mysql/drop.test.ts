@@ -1,7 +1,8 @@
-// Attack suite A, part 3: the drop script (A74, D100, D115, D119, D121).
+// Attack suite A, part 3: the drop script (A74, D100, D115, D121, D172).
 import { describe, expect, it } from 'vitest'
 import {
   count,
+  createAccount,
   deploy,
   query,
   readerGrants,
@@ -78,7 +79,7 @@ describe('MySQL drop script', () => {
     expect(readerGrants(db)).toEqual([])
   })
 
-  it('D119: drop succeeds when the reader account does not exist', async () => {
+  it('D172, A109: drop succeeds when the reader account does not exist, without IGNORE UNKNOWN USER', async () => {
     const db = await newDb()
     expect(deploy(db).status).toBe(0)
     expect(query(`DROP USER '${db.reader}'@'${db.host}'`).status).toBe(0)
@@ -88,6 +89,28 @@ describe('MySQL drop script', () => {
     const never = await newDb()
     const fresh = dropScript(never)
     expect(fresh.status, fresh.stderr).toBe(0)
+  })
+
+  it('D172: when the account lookup fails under --force, the REVOKE still runs instead of being skipped', async () => {
+    const db = await newDb()
+    expect(deploy(db).status).toBe(0)
+    expect(readerGrants(db)).toEqual(viewGrants(db))
+    // A deployer that can revoke (CREATE USER) and drop the views database but cannot read mysql.user.
+    const deployer = createAccount(db, {
+      password: 'pw-deployer',
+      grants: [
+        'CREATE USER ON *.*',
+        `SELECT, DROP ON \`${db.views}\`.*`,
+        `CREATE TEMPORARY TABLES ON \`${db.name}\`.*`,
+      ],
+    })
+    const result = runScript(db, db.files['redacted-views-drop.sql'], {
+      as: { user: deployer.user, password: 'pw-deployer' },
+      force: true,
+    })
+    expect(result.stderr).toMatch(/ERROR 1142 .*'user'/)
+    expect(readerGrants(db)).toEqual([])
+    expect(schemaExists(db.views)).toBe(false)
   })
 
   it('D100: after a drop a deploy rebuilds everything and the reader is granted again', async () => {

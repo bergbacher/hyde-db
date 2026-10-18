@@ -206,7 +206,7 @@ const INJECTIONS: readonly Injection[] = [
     },
   },
   {
-    name: 'the reader has a role (D119)',
+    name: 'the reader has a role (D172)',
     expect: /the reader has a role/,
     needsReader: true,
     bases: ALL_BASES,
@@ -217,7 +217,7 @@ const INJECTIONS: readonly Injection[] = [
     },
   },
   {
-    name: 'the reader takes part in a proxy grant (D119)',
+    name: 'the reader takes part in a proxy grant (D172)',
     expect: /the reader takes part in a proxy grant/,
     needsReader: true,
     bases: ALL_BASES,
@@ -228,7 +228,7 @@ const INJECTIONS: readonly Injection[] = [
     },
   },
   {
-    name: 'another account could match a reader login (D119)',
+    name: 'another account could match a reader login (D172)',
     expect: /another account could match a reader login/,
     bases: ALL_BASES,
     inject: (db) => {

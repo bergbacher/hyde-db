@@ -28,10 +28,17 @@ afterEach(async () => {
 })
 
 describe('MySQL integration harness', () => {
-  it('D22: a MySQL server of the requested image answers', () => {
-    expect(query('SELECT @@version').stdout.startsWith(server().image.split(':')[1] ?? '')).toBe(
-      true,
-    )
+  it('D22, D171: a MySQL server of the requested image, or a supported MYSQL_URL server, answers', () => {
+    const version = query('SELECT @@version').stdout.trim()
+    const s = server()
+    if (s.kind === 'container') expect(version.startsWith(s.image.split(':')[1] ?? '')).toBe(true)
+    else {
+      // D171: 8.0 from 8.0.21, 8.4 and 9.7; a MYSQL_URL server below the minimum is not a supported target.
+      const [major = 0, minor = 0, patch = 0] = (/^(\d+)\.(\d+)\.(\d+)/.exec(version) ?? [])
+        .slice(1)
+        .map(Number)
+      expect(major * 10_000 + minor * 100 + patch, version).toBeGreaterThanOrEqual(80_021)
+    }
   })
 
   it('D43: the generated apply script runs under the mysql client inside the container', async () => {
@@ -159,21 +166,24 @@ describe('MySQL integration harness', () => {
     expect(splitStatements("SELECT 'it''s;'; SELECT 1")).toEqual(["SELECT 'it''s;'", 'SELECT 1'])
   })
 
+  // The client the harness runs: docker for a container, the mysql client for MYSQL_URL (D173).
+  const client = (): string => (server().kind === 'container' ? 'docker' : 'mysql')
+
   it.each([
-    ['exits 125 (docker daemon error)', 'exit 125', /exit status 125/],
+    ['exits 125 (docker daemon error, or no mysql client status)', 'exit 125', /exit status 125/],
     [
-      'reports an error response from the daemon',
-      "echo 'Error response from daemon: gone' >&2; exit 1",
-      /Error response from daemon: gone/,
+      'reports a daemon error response, or a client-side connection error',
+      "echo 'Error response from daemon: gone' >&2; echo 'ERROR 2003 (HY000): gone' >&2; exit 1",
+      /could not run mysql: .*gone/s,
     ],
     ['is killed by a signal', 'kill -KILL $$', /signal SIGKILL/],
   ])(
-    'D22: a docker anomaly throws instead of returning a result (docker %s)',
+    'D22, D173: a client anomaly throws instead of returning a result (it %s)',
     async (_name, body, message) => {
       const db = await newDb()
-      const dir = mkdtempSync(join(tmpdir(), 'hyde-fake-docker-'))
+      const dir = mkdtempSync(join(tmpdir(), 'hyde-fake-client-'))
       try {
-        writeFileSync(join(dir, 'docker'), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
+        writeFileSync(join(dir, client()), `#!/bin/sh\n${body}\n`, { mode: 0o755 })
         vi.stubEnv('PATH', dir)
         expect(() => runScript(db, 'SELECT 1')).toThrow(message)
       } finally {
@@ -183,11 +193,15 @@ describe('MySQL integration harness', () => {
     },
   )
 
-  it('D22: a missing docker CLI fails loudly with an actionable message', async () => {
+  it('D22, D173: a missing docker CLI, or mysql client for MYSQL_URL, fails loudly with an actionable message', async () => {
     const db = await newDb()
-    vi.stubEnv('PATH', '/nonexistent-hyde-db-no-docker')
+    vi.stubEnv('PATH', '/nonexistent-hyde-db-no-client')
     try {
-      expect(() => runScript(db, 'SELECT 1')).toThrow(/need the docker CLI on PATH/)
+      expect(() => runScript(db, 'SELECT 1')).toThrow(
+        server().kind === 'container'
+          ? /need the docker CLI on PATH/
+          : /need the mysql client on PATH/,
+      )
     } finally {
       vi.unstubAllEnvs()
     }

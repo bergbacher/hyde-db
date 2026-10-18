@@ -75,11 +75,20 @@ describe('mysql apply checks A', () => {
     expect((fallback ?? '').length).toBeLessThanOrEqual(FIX_LIMIT)
   })
 
-  it('D119: the reset names the account and carries IGNORE UNKNOWN USER', () => {
+  it('D172: the reset prepares the REVOKE of the account, or DO 0 when mysql.user has no such account', () => {
     const sql = resetReader.render(config).join('\n')
-    expect(sql).toContain(
-      "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'redacted_reader'@'%' IGNORE UNKNOWN USER;",
-    )
+    expect(
+      sql.startsWith(
+        [
+          "SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''';",
+          "SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);",
+          'PREPARE hyde_stmt FROM @hyde_sql;',
+          'EXECUTE hyde_stmt;',
+          'DEALLOCATE PREPARE hyde_stmt;',
+        ].join('\n'),
+      ),
+    ).toBe(true)
+    expect(sql).not.toContain('IGNORE UNKNOWN USER')
   })
 
   it('D117: the verify covers static and dynamic global privileges and the db, tables_priv, columns_priv and procs_priv tables', () => {
@@ -165,7 +174,7 @@ describe('mysql apply checks A', () => {
     )
   })
 
-  it('D119, A86: an account holding only GRANT OPTION (USAGE with IS_GRANTABLE) is a leftover and prints REVOKE GRANT OPTION', () => {
+  it('D172, A86: an account holding only GRANT OPTION (USAGE with IS_GRANTABLE) is a leftover and prints REVOKE GRANT OPTION', () => {
     const sql = leftoverGrants(config, [])
     expect(sql).toContain("IF(Grant_priv = 'Y', 'GRANT OPTION', NULL)")
   })
@@ -231,12 +240,16 @@ describe('mysql apply checks A', () => {
     }
   })
 
-  it('D117 step 9: the re-check revokes through a prepared REVOKE … IGNORE UNKNOWN USER before aborting, and allows only the view grants', () => {
+  it('D117 step 9, D172: the re-check revokes through a prepared REVOKE of an existing account before aborting, and allows only the view grants', () => {
     const sql = renderRecheck(config, ['users']).join('\n')
     expect(sql).toContain('PREPARE')
     expect(sql).toContain(
-      "'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%'' IGNORE UNKNOWN USER'",
+      "SET @hyde_sql = IF(@hyde_message IS NOT NULL, 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''', 'DO 0');",
     )
+    expect(sql).toContain(
+      "SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);",
+    )
+    expect(sql).not.toContain('IGNORE UNKNOWN USER')
     expect(sql.indexOf('PREPARE')).toBeLessThan(sql.lastIndexOf('INSERT INTO'))
     expect(sql).toContain("Table_name IN ('users')")
     for (const t of ['mysql.role_edges', 'mysql.proxies_priv', 'mandatory_roles', 'mysql.user'])
@@ -247,7 +260,10 @@ describe('mysql apply checks A', () => {
     const lines = renderRecheck(config, ['users'])
     expect(lines[0]).toBe(`SET @hyde_message = '${couldNotRunMessage('recheck')}';`)
     expect(lines[1]).toMatch(/^SET @hyde_message = \(SELECT CONCAT\(/)
-    expect(lines[2]).toMatch(/^SET @hyde_sql = IF\(@hyde_message IS NULL, 'DO 0'/)
+    expect(lines[2]).toMatch(/^SET @hyde_sql = IF\(@hyde_message IS NOT NULL, 'REVOKE /)
+    expect(lines[3]).toMatch(
+      /^SET @hyde_sql = IF\(@hyde_sql <> 'DO 0' AND NOT EXISTS \(SELECT 1 FROM mysql\.user /,
+    )
     expect(lines.slice(-2)).toEqual(raiseRefusal())
   })
 

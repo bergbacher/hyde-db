@@ -44,7 +44,11 @@ FROM DUAL
 WHERE (SELECT COUNT(*) FROM information_schema.TABLES WHERE TABLE_SCHEMA = 'mysql' AND TABLE_NAME IN ('user', 'global_grants', 'db', 'tables_priv', 'columns_priv', 'procs_priv', 'proxies_priv', 'default_roles', 'role_edges')) < 9) f LIMIT 1);
 SET @hyde_refused = COALESCE(@hyde_refused, @hyde_message);
 INSERT INTO `hyde_db_abort` (`problem`) SELECT @hyde_message FROM DUAL WHERE @hyde_message IS NOT NULL;
-REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'redacted_reader'@'%' IGNORE UNKNOWN USER;
+SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''';
+SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);
+PREPARE hyde_stmt FROM @hyde_sql;
+EXECUTE hyde_stmt;
+DEALLOCATE PREPARE hyde_stmt;
 SET @hyde_message = 'hyde-db: check reset-reader could not run. Fix: run without --force and read the first error';
 SET @hyde_message = (SELECT CONCAT('hyde-db: ', LEFT(f.problem, GREATEST(0, 113 - CHAR_LENGTH(f.fix))), ' Fix: ', f.fix) FROM (SELECT 'the reader has a global privilege.' AS problem, IF(CHAR_LENGTH(CONCAT('REVOKE ', privs, ' ON *.* FROM ', CONCAT(QUOTE('redacted_reader'), '@', QUOTE('%')), ';')) > 113, IF(CHAR_LENGTH(CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM ', CONCAT(QUOTE('redacted_reader'), '@', QUOTE('%')), ';')) > 113, 'revoke the reader''s global privileges', CONCAT('REVOKE ALL PRIVILEGES, GRANT OPTION FROM ', CONCAT(QUOTE('redacted_reader'), '@', QUOTE('%')), ';')), CONCAT('REVOKE ', privs, ' ON *.* FROM ', CONCAT(QUOTE('redacted_reader'), '@', QUOTE('%')), ';')) AS fix, 1 AS `rank`
   FROM (SELECT CONCAT_WS(', ', IF(Select_priv = 'Y', 'SELECT', NULL), IF(Insert_priv = 'Y', 'INSERT', NULL), IF(Update_priv = 'Y', 'UPDATE', NULL), IF(Delete_priv = 'Y', 'DELETE', NULL), IF(Create_priv = 'Y', 'CREATE', NULL), IF(Drop_priv = 'Y', 'DROP', NULL), IF(Reload_priv = 'Y', 'RELOAD', NULL), IF(Shutdown_priv = 'Y', 'SHUTDOWN', NULL), IF(Process_priv = 'Y', 'PROCESS', NULL), IF(File_priv = 'Y', 'FILE', NULL), IF(Grant_priv = 'Y', 'GRANT OPTION', NULL), IF(References_priv = 'Y', 'REFERENCES', NULL), IF(Index_priv = 'Y', 'INDEX', NULL), IF(Alter_priv = 'Y', 'ALTER', NULL), IF(Show_db_priv = 'Y', 'SHOW DATABASES', NULL), IF(Super_priv = 'Y', 'SUPER', NULL), IF(Create_tmp_table_priv = 'Y', 'CREATE TEMPORARY TABLES', NULL), IF(Lock_tables_priv = 'Y', 'LOCK TABLES', NULL), IF(Execute_priv = 'Y', 'EXECUTE', NULL), IF(Repl_slave_priv = 'Y', 'REPLICATION SLAVE', NULL), IF(Repl_client_priv = 'Y', 'REPLICATION CLIENT', NULL), IF(Create_view_priv = 'Y', 'CREATE VIEW', NULL), IF(Show_view_priv = 'Y', 'SHOW VIEW', NULL), IF(Create_routine_priv = 'Y', 'CREATE ROUTINE', NULL), IF(Alter_routine_priv = 'Y', 'ALTER ROUTINE', NULL), IF(Create_user_priv = 'Y', 'CREATE USER', NULL), IF(Event_priv = 'Y', 'EVENT', NULL), IF(Trigger_priv = 'Y', 'TRIGGER', NULL), IF(Create_tablespace_priv = 'Y', 'CREATE TABLESPACE', NULL), IF(Create_role_priv = 'Y', 'CREATE ROLE', NULL), IF(Drop_role_priv = 'Y', 'DROP ROLE', NULL)) AS privs
@@ -162,7 +166,8 @@ UNION ALL
 SELECT 'another account could match a reader login.' AS problem, IF(CHAR_LENGTH(CONCAT('DROP USER ', CONCAT(QUOTE(User), '@', QUOTE(Host)), ';')) > 113, 'drop the other accounts of that user name', CONCAT('DROP USER ', CONCAT(QUOTE(User), '@', QUOTE(Host)), ';')) AS fix, 11 AS `rank`
   FROM mysql.user WHERE (User = 'redacted_reader' OR User = '') AND NOT (User = 'redacted_reader' AND Host = '%')
 ORDER BY `rank` LIMIT 1) f LIMIT 1);
-SET @hyde_sql = IF(@hyde_message IS NULL, 'DO 0', 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%'' IGNORE UNKNOWN USER');
+SET @hyde_sql = IF(@hyde_message IS NOT NULL, 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''', 'DO 0');
+SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);
 PREPARE hyde_stmt FROM @hyde_sql;
 EXECUTE hyde_stmt;
 DEALLOCATE PREPARE hyde_stmt;

@@ -34,7 +34,7 @@ The source splits into one I/O module and a pure core.
 | `src/dialects/postgresql.ts` | The PostgreSQL `Dialect`: its config, its schema-conflict analysis rules and its three renderers. |
 | `src/dialects/mysql.ts` | The MySQL `Dialect`: its config, the marker-view name collision rule (the only generate-time rule) and its three renderers. <!-- D117, D115 --> |
 | `src/render/mysql-guards.ts` | MySQL pieces both scripts share: the prelude (`sql_mode`, `lock_wait_timeout`, the refusal flag, the missing-default-database report, the abort table), the abort through a failing temporary-table insert, `gated` statements and the marker guard. <!-- D99, D155, D160, D115 --> |
-| `src/render/mysql-apply-checks.ts` | MySQL apply checks: default database is not the views database, grant-table access, reader reset and verify, pre-checks (roles, `mandatory_roles`, proxies, other accounts) and the re-check; fixes that outgrow the limit fall back to a shorter one. <!-- D117, D119, D161 --> |
+| `src/render/mysql-apply-checks.ts` | MySQL apply checks: default database is not the views database, grant-table access, reader reset and verify, pre-checks (roles, `mandatory_roles`, proxies, other accounts) and the re-check; fixes that outgrow the limit fall back to a shorter one. <!-- D117, D172, D161 --> |
 | `src/render/mysql-apply-sql.ts` | Renders the MySQL `redacted-views.sql` in the order of the apply pipeline. <!-- D117 --> |
 | `src/render/mysql-drop-sql.ts` | Renders the MySQL `redacted-views-drop.sql`: marker guard, revoke, gated `DROP DATABASE IF EXISTS`. <!-- D100, D121 --> |
 | `src/render/mysql-markdown.ts` | Renders the MySQL `redacted-schema.md`. |
@@ -65,9 +65,9 @@ Every file in `test/integration/` targets one or more of those rows: it sets up 
 MySQL commits DDL and grants as they run (it cannot roll them back), so `src/render/mysql-apply-sql.ts` emits a script that is safe by ordering: check, build the views, grant last, re-check, and revoke and abort on failure. <!-- D95, A74 -->
 
 1. The prelude pins `sql_mode` and `lock_wait_timeout`, clears the refusal flag, reports a missing default database and creates the abort table. <!-- D117, D160 -->
-2. Checks refuse before anything changes: the default database is the views database, the views database exists without the marker view or with a marker that names another source database, the deployer cannot read the grant tables, the reader's reset leaves a grant, and the pre-checks find roles, a non-empty `mandatory_roles`, proxies or other accounts a login could match. <!-- D117, D119, D120, D165 -->
+2. Checks refuse before anything changes: the default database is the views database, the views database exists without the marker view or with a marker that names another source database, the deployer cannot read the grant tables, the reader's reset leaves a grant, and the pre-checks find roles, a non-empty `mandatory_roles`, proxies or other accounts a login could match. <!-- D117, D172, D120, D165 -->
 3. The views database is dropped and recreated, with the marker view and the views, the reader account is created only when missing, and the reader is granted `SELECT` on each view last. <!-- D115, D116, D117 -->
-4. The re-check runs every refusal again; on a finding it revokes the reader's grants and aborts. <!-- D117, D119 -->
+4. The re-check runs every refusal again; on a finding it revokes the reader's grants and aborts. <!-- D117, D172 -->
 
 The marker view records the source database (`DATABASE()` when the apply runs) in a second column `source`; the apply and drop scripts read it through the view and refuse a views database whose marker names another source database. <!-- D165, A105, A106 --> Every check first sets the abort message to a "could not run" refusal for that check and only then evaluates it, so a check whose query fails under `--force` refuses instead of passing silently. <!-- D166 --> The leftover-grant check reads the reader's static global privileges from the `*_priv` columns of `mysql.user`, not from `information_schema.USER_PRIVILEGES`, and the re-check's exception for the expected view grants compares `Db` exactly and `Table_name` exactly, or case-insensitively only when `lower_case_table_names` is not 0. <!-- D168 -->
 
@@ -77,17 +77,17 @@ An abort is a failing insert of the message into a temporary table under strict 
 
 ### Adding a MySQL check
 
-1. A refusal that must hold both before the changes and after the grants is a new entry `{ id, source }` in the private `sources` array of `src/render/mysql-apply-checks.ts`, where `source` is a SELECT of `problem`, `fix` and `rank`. It then runs as a pre-check (`preChecks`) and again in `renderRecheck`. <!-- D117, D119 -->
+1. A refusal that must hold both before the changes and after the grants is a new entry `{ id, source }` in the private `sources` array of `src/render/mysql-apply-checks.ts`, where `source` is a SELECT of `problem`, `fix` and `rank`. It then runs as a pre-check (`preChecks`) and again in `renderRecheck`. <!-- D117, D172 -->
 2. A refusal that runs once is a standalone `MysqlCheck` (`id` and `render(config)`), built on `abortWhenFound` or `abortIf` from `src/render/mysql-guards.ts`. Insert it, in the order of the apply pipeline above, into the render list in `renderMysqlApplySql` in `src/render/mysql-apply-sql.ts`. <!-- D117 -->
 3. Keep the printed fix within the fix limit, with a shorter fallback when a computed fix can outgrow it. <!-- D151, D161 -->
 4. Run `pnpm golden` and review the diff of `example-mysql/redacted`; golden files change only after a ledger-backed output change. <!-- D6 -->
 5. Add a unit test in `test/unit/render-mysql-apply-checks.test.ts` and an attack test in `test/integration-mysql/` that sets up the offending access, asserts the message and fix, pastes the fix and re-applies.
-6. Run `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql` and `MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`.
+6. Run `MYSQL_IMAGE=mysql:8.0 pnpm test:integration:mysql`, `MYSQL_IMAGE=mysql:8.4 pnpm test:integration:mysql` and `MYSQL_IMAGE=mysql:9.7 pnpm test:integration:mysql`, or set `MYSQL_URL` to a disposable running server of each line.
 7. The controller records the decision in `LEDGER.md`.
 
 ## Test layers
 
-<!-- D20, D6, D22, D23, D43, D94, D103 -->
+<!-- D20, D6, D22, D23, D43, D171, D103 -->
 
 | Layer | Command | What it proves |
 |---|---|---|
@@ -95,11 +95,11 @@ An abort is a failing insert of the message into a temporary table under strict 
 | Characterization | `pnpm test:coverage` | The generator reproduces the base output for the example schema byte-for-byte. Golden files change only with `pnpm golden` after a ledger-backed output change. |
 | DMMF contract | `pnpm test:coverage` | The pinned Prisma 6 and 7 schema engines (WASM) produce identical views and diagnostics for the same fixture schema. |
 | Attack suite | `pnpm test:integration` | A real PostgreSQL container (Testcontainers): the final check refuses every category of leaked access, each printed fix removes exactly that access, and a re-apply passes. Runs on PostgreSQL 14 and 18. |
-| MySQL attack suite | `pnpm test:integration:mysql` | A real MySQL container (Testcontainers, image from `MYSQL_IMAGE`): every access path is refused or neutralised, each printed fix removes exactly that access, stopping the script after each statement never gives the reader more than its view grants, and `mysql --force` after a refusal grants nothing. Runs on MySQL 8.4 and 9.7. |
+| MySQL attack suite | `pnpm test:integration:mysql` | A real MySQL container (Testcontainers, image from `MYSQL_IMAGE`): every access path is refused or neutralised, each printed fix removes exactly that access, stopping the script after each statement never gives the reader more than its view grants, and `mysql --force` after a refusal grants nothing. Runs on MySQL 8.0, 8.4 and 9.7. |
 | End-to-end | `pnpm test:e2e` | The packed tarball runs under `prisma generate` for Prisma 6 and 7, output matches golden files, a bad schema exits non-zero, `prisma db execute --file` applies the script, and `require('hyde-db')` works. With `provider = "mysql"` the same runs against `E2E_MYSQL_DATABASE_URL`. |
 
 Coverage gate: at least 95% of lines and branches in `src/`, generator entry excluded. <!-- D23 -->
 
 ---
 
-View on LEDGER.md, 2026-10-07
+View on LEDGER.md, 2026-10-18

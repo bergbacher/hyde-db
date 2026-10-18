@@ -202,7 +202,7 @@ describe('A105, D165: a views database belongs to one source database', () => {
       `hyde-db: the marker view of ${db.views} cannot be read. Fix: re-create its definer ${first.user}@% or drop database ${db.views}`,
     )
     expect(fix).toBe(`re-create its definer ${first.user}@% or drop database ${db.views}`)
-    // The reader reset is not gated (D119), so a --force run revokes the reader's grants; the views stay.
+    // The reader reset is not gated (D172), so a --force run revokes the reader's grants; the views stay.
     expect(schemaExists(db.views)).toBe(true)
     expect(query(`CREATE USER '${first.user}'@'%'`).status).toBe(0)
     const again = runScript(db, db.files['redacted-views.sql'], { as: second })

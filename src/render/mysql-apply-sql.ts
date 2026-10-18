@@ -1,6 +1,6 @@
 // Renders the MySQL apply script in the order of D117 (D95): checks first, the views database
 // rebuilt behind the refusal flag (D155), the reader granted SELECT last, a final re-check that
-// revokes and aborts (D119). MySQL commits DDL and grants as it runs (A74), so ordering is the safety.
+// revokes and aborts (D172). MySQL commits DDL and grants as it runs (A74), so ordering is the safety.
 import { BRAND } from '../brand.ts'
 import { quoteMysqlIdent as qi } from '../sql.ts'
 import type { MysqlConfig, View } from '../types.ts'

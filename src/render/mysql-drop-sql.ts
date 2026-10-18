@@ -1,10 +1,10 @@
 // Renders the MySQL redacted-views-drop.sql: refuses a views database without the marker view,
-// revokes the reader account, then drops the views database (D100, D115, D119, D121). The drop is
+// revokes the reader account, then drops the views database (D100, D115, D172, D121). The drop is
 // gated on the refusal flag (D155) so it never runs after a refusal, even under `mysql --force`.
 import { BRAND } from '../brand.ts'
 import { quoteMysqlIdent as qi } from '../sql.ts'
 import type { MysqlConfig } from '../types.ts'
-import { account, gated, markerGuard, renderPrelude, renderTeardown } from './mysql-guards.ts'
+import { gated, markerGuard, renderPrelude, renderTeardown, revokeReader } from './mysql-guards.ts'
 
 export function renderMysqlDropSql({ config }: { readonly config: MysqlConfig }): string {
   return [
@@ -12,8 +12,8 @@ export function renderMysqlDropSql({ config }: { readonly config: MysqlConfig })
     '-- migrations can drop/alter columns that the redacted views depend on.',
     ...renderPrelude(),
     ...markerGuard.render(config),
-    // A missing account is fine (D119); a missing views database is fine (D121).
-    `REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${account(config)} IGNORE UNKNOWN USER;`,
+    // A missing account is fine (D172); a missing views database is fine (D121).
+    ...revokeReader(config),
     ...gated(`DROP DATABASE IF EXISTS ${qi(config.schema)};`),
     ...renderTeardown(),
     '',

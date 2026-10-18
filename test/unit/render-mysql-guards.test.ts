@@ -17,9 +17,11 @@ import {
   refusalMessage,
   renderPrelude,
   renderTeardown,
+  revokeReader,
   SOURCE_FIX,
   UNREADABLE_FIX,
 } from '../../src/render/mysql-guards.ts'
+import { readRepoFile } from '../helpers/files.ts'
 
 const config = {
   dialect: 'mysql',
@@ -224,5 +226,27 @@ describe('mysql script guards', () => {
 
   it('D99: the teardown drops the abort table', () => {
     expect(renderTeardown().join('\n')).toBe('DROP TEMPORARY TABLE IF EXISTS `hyde_db_abort`;')
+  })
+  it('D172, A109: revokeReader sets the REVOKE first, keeps it only when mysql.user has the account, and prepares it', () => {
+    expect(revokeReader(config)).toEqual([
+      "SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''';",
+      "SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);",
+      'PREPARE hyde_stmt FROM @hyde_sql;',
+      'EXECUTE hyde_stmt;',
+      'DEALLOCATE PREPARE hyde_stmt;',
+    ])
+    expect(revokeReader(config, '@x IS NOT NULL')[0]).toBe(
+      "SET @hyde_sql = IF(@x IS NOT NULL, 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''', 'DO 0');",
+    )
+  })
+
+  it('D171, A109, A110: the MySQL scripts use no REVOKE form newer than MySQL 8.0.21 (IGNORE UNKNOWN USER, IF EXISTS)', () => {
+    for (const file of ['redacted-views.sql', 'redacted-views-drop.sql']) {
+      const sql = readRepoFile('example-mysql', 'redacted', file)
+      expect(sql, file).not.toMatch(/IGNORE\s+UNKNOWN\s+USER/i)
+      expect(sql, file).not.toMatch(/REVOKE\s+IF\s+EXISTS/i)
+      // Every REVOKE the scripts execute is prepared from a variable (D172), never a bare statement.
+      expect(sql, file).not.toMatch(/^REVOKE /m)
+    }
   })
 })

@@ -22,7 +22,7 @@ Never include real data, passwords or connection strings.
 
 ## Supported versions
 
-hyde-db runs on the Prisma, PostgreSQL, MySQL and Node.js versions listed in the README's [supported versions](README.md#supported-versions). Security fixes ship in a new release of the package; only the latest release is supported. MySQL support covers the long-term-support lines MySQL 8.4 and 9.7; MySQL 8.0, innovation releases such as 26.x and MariaDB are not supported. <!-- D133, D94 -->
+hyde-db runs on the Prisma, PostgreSQL, MySQL and Node.js versions listed in the README's [supported versions](README.md#supported-versions). Security fixes ship in a new release of the package; only the latest release is supported. MySQL support covers MySQL 8.0 from 8.0.21 and the long-term-support lines MySQL 8.4 and 9.7; innovation releases such as 26.x and MariaDB are not supported. <!-- D133, D171 -->
 
 ## What hyde-db guarantees
 
@@ -36,7 +36,7 @@ On MySQL the same guarantee reads: the reader account can read no table data out
 
 MySQL commits DDL and grants as the script runs, so an apply cannot be rolled back. The script instead orders its steps: check, build the views, grant last, re-check, and on a failed re-check revoke the reader's grants and abort. A refused deploy never grants the reader more than before, but it may leave the views rebuilt without the reader grant. Each abort reports one problem and a fix. Statements from the database drop on run only while no check has refused, so a client that runs past errors (`mysql --force`) still cannot grant the reader access after a refusal. That protection starts only after a refusal, so run the scripts without `--force`: see the MySQL non-guarantees. <!-- D101, A74, D95, D99, D155, D164 -->
 
-The MySQL attack suite runs on MySQL 8.4 and 9.7; it covers each path beyond the reader's direct grants (global privileges, wildcard database names, roles, accounts on a more specific host or anonymous accounts, PROXY, routines with `EXECUTE`, PROCESS, REPLICATION SLAVE, FILE, CREATE USER and ROLE_ADMIN), proving each one neutralised by the reset or refused with a working pasted fix, proves that stopping the script after each statement never gives the reader more than its view grants, and pastes the printed fixes. <!-- D103, D154, A77, D94 -->
+The MySQL attack suite runs on MySQL 8.0 (8.0.46), 8.4 and 9.7; it covers each path beyond the reader's direct grants (global privileges, wildcard database names, roles, accounts on a more specific host or anonymous accounts, PROXY, routines with `EXECUTE`, PROCESS, REPLICATION SLAVE, FILE, CREATE USER and ROLE_ADMIN), proving each one neutralised by the reset or refused with a working pasted fix, proves that stopping the script after each statement never gives the reader more than its view grants, and pastes the printed fixes. <!-- D103, D154, A77, D171 -->
 
 ### How the PostgreSQL guarantee is enforced
 
@@ -71,7 +71,7 @@ The table above describes PostgreSQL. On MySQL:
 - The reader sees server status and variables, and its own session, in `performance_schema`. `SHOW DATABASES` lists `information_schema`, `performance_schema` and the databases it has grants in, so it sees no other database names beyond those and the views database. <!-- A103 -->
 - After a refused apply the reader keeps any access it already had through granted roles, default roles, `mandatory_roles`, an account with the same user name on a more specific host such as `localhost`, or an anonymous account that matches its login, until the printed fix runs. The apply script resets only the reader's direct grants. <!-- D101, A104 -->
 - On one MySQL server, give each source database, and each generator block, its own `schema` and `role`: both belong to the whole server, not to one database. The marker view records its source database, so a second source database that uses the same `schema` is refused, but a shared `role` is not detected and lets one reader read the views of both. <!-- D164, A105, D165, D140 -->
-- The reader account must serve only as the hyde-db reader: every apply and drop first revokes all its privileges, and MySQL cannot roll that back. <!-- D164, D119, A74 -->
+- The reader account must serve only as the hyde-db reader: every apply and drop first revokes all its privileges, and MySQL cannot roll that back. <!-- D164, D172, A74 -->
 - Run the scripts without `--force`. The gate on the statements from the database drop on protects only after a refusal. A check that fails to run refuses, but a statement that fails, such as a lock timeout on `DROP DATABASE`, can leave the previous views granted. <!-- D164, D155, D166, A74 -->
 - As a limit of the same kind, an account with `CREATE VIEW` or `DROP` on the views database can replace a view, and the reader grant stays attached to it. The same account can also swap the marker view between the marker check and its read. <!-- D164, A74, D169 -->
 - A server with a non-empty `mandatory_roles` is unsupported: apply refuses it, because every login would inherit those roles. <!-- D120 -->
@@ -111,4 +111,4 @@ Run each step once. These steps are for PostgreSQL; MySQL has no counterpart to 
 
 ---
 
-View on LEDGER.md, 2026-10-06
+View on LEDGER.md, 2026-10-18

@@ -1,10 +1,12 @@
 // Attack suite B (A77, D103, D117, D154): every path by which a reader could keep access beyond its
 // view grants is either neutralised by the step-5 reset (the reader's grants equal the view grants
 // after apply) or refused (apply aborts with a hyde-db message whose printed fix, pasted as the
-// administrator, makes the re-apply pass). The class of each row was probed on mysql:8.4 and 9.7.
+// administrator, makes the re-apply pass). The class of each row was probed on mysql:8.4 and 9.7, and holds on 8.0.46 (A111).
 import { spawn, spawnSync } from 'node:child_process'
+import { rmSync } from 'node:fs'
 import { afterEach, describe, expect, it } from 'vitest'
 import {
+  clientCommand,
   createAccount,
   createTestDb,
   deploy,
@@ -64,7 +66,12 @@ const viewGrants = (db: TestDb) => [
 const PW = 'pw-reader'
 const asReader = (db: TestDb) => ({ user: db.reader, password: PW })
 const roleOf = (db: TestDb) => `x_${db.reader}`
-const OUT_DIR = '/var/lib/mysql-files/'
+/** The FILE row's `secure_file_priv` directory: the image's, or the MYSQL_URL server's own (D173). */
+const CONTAINER_OUT_DIR = '/var/lib/mysql-files/'
+const outDir = (): string =>
+  server().kind === 'container'
+    ? CONTAINER_OUT_DIR
+    : query('SELECT @@secure_file_priv').stdout.trim()
 
 type Outcome = 'neutralised' | 'refused'
 interface PathCase {
@@ -104,10 +111,14 @@ function createSourceRole(db: TestDb): string {
   db.extras.push({ user: roleOf(db), host: '%' })
   return `CREATE ROLE '${roleOf(db)}'@'%'; GRANT SELECT ON \`${db.name}\`.* TO '${roleOf(db)}'@'%';`
 }
+/** Removes the control's outfile: inside the container, or on this machine for a MYSQL_URL server (a remote server keeps it). */
 const removeOutfile = (db: TestDb) => () => {
-  spawnSync('docker', ['exec', server().containerId, 'rm', '-f', `${OUT_DIR}${db.reader}.out`])
+  const s = server()
+  if (s.kind === 'container')
+    spawnSync('docker', ['exec', s.containerId, 'rm', '-f', `${CONTAINER_OUT_DIR}${db.reader}.out`])
+  else rmSync(`${outDir()}${db.reader}.out`, { force: true })
 }
-const outfile = (db: TestDb) => `SELECT 1 INTO OUTFILE '${OUT_DIR}${db.reader}.out'`
+const outfile = (db: TestDb) => `SELECT 1 INTO OUTFILE '${outDir()}${db.reader}.out'`
 const attackUser = (db: TestDb) => `hyde_attack_${db.reader}`
 
 const PATHS: readonly PathCase[] = [
@@ -138,8 +149,10 @@ const PATHS: readonly PathCase[] = [
     outcome: 'neutralised',
     setup: (db) => `GRANT FILE ON *.* TO ${acct(db)}`,
     pre: () => {
+      // A directory, so FILE writes are possible and confined (not NULL, not '' for anywhere).
       const dir = query('SELECT @@secure_file_priv').stdout.trim()
-      expect(dir).toBe(OUT_DIR)
+      if (server().kind === 'container') expect(dir).toBe(CONTAINER_OUT_DIR)
+      else expect(dir).toMatch(/^\/.*\/$/)
     },
     attack: outfile,
     afterControl: (db) => [removeOutfile(db)],
@@ -449,13 +462,12 @@ describe('A103, A78, D101: what a deployed reader sees', () => {
     const db = await newDb()
     expect(deploy(db).status).toBe(0)
     unlockReader(db, PW)
-    const { containerId, rootPassword } = server()
     const secret = `secret_literal_${db.name}`
-    const admin = spawn(
-      'docker',
-      ['exec', '-i', '-e', `MYSQL_PWD=${rootPassword}`, containerId, 'mysql', '-uroot', '-N', '-B'],
-      { stdio: ['pipe', 'ignore', 'ignore'] },
-    )
+    const client = clientCommand(undefined, ['-N', '-B'])
+    const admin = spawn(client.command, client.args, {
+      stdio: ['pipe', 'ignore', 'ignore'],
+      env: client.env,
+    })
     try {
       admin.stdin.write(`SELECT SLEEP(20), '${secret}';\n`)
       admin.stdin.end()

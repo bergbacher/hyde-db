@@ -1,5 +1,6 @@
 // MySQL integration helpers: a fresh source database, views database and reader account per test
-// (all server-wide names, so unique), and the `mysql` client inside the database container (D43).
+// (all server-wide names, so unique), and the `mysql` client inside the database container (D43)
+// or, with MYSQL_URL, the `mysql` client on PATH connected to that server (D173).
 import { spawnSync } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { afterEach, expect, inject } from 'vitest'
@@ -7,12 +8,9 @@ import { build } from '../../../src/index.ts'
 import type { OutputFiles } from '../../../src/types.ts'
 import { readRepoFile } from '../../helpers/files.ts'
 import { parseSchema } from '../../helpers/prisma.ts'
+import type { MysqlServer } from './server.ts'
 
-export interface MysqlServer {
-  readonly containerId: string
-  readonly rootPassword: string
-  readonly image: string
-}
+export type { MysqlServer } from './server.ts'
 
 export interface TestDb {
   /** The source database; unique per test. */
@@ -47,40 +45,85 @@ export function server(): MysqlServer {
 /** docker exec's own failure statuses: daemon error (125), command not invokable (126), command not found (127). */
 const DOCKER_EXEC_FAILURES: ReadonlySet<number> = new Set([125, 126, 127])
 const DOCKER_DAEMON_ERROR = /^(Error response from daemon|Cannot connect to the Docker daemon)/
+/** The mysql client's own exit statuses: 0 success, 1 an error (from the server or the client). */
+const CLIENT_STATUSES: ReadonlySet<number> = new Set([0, 1])
+/** Client-side errors (CR_*, 2000-2999): the statement never reached the server, such as ERROR 2003 can't connect. */
+const CLIENT_ERROR = /^ERROR 2\d{3} /m
+
+/** The administrator account of the suite's server. */
+function admin(): Account {
+  const s = server()
+  return s.kind === 'container'
+    ? { user: 'root', password: s.rootPassword }
+    : { user: s.user, password: s.password }
+}
 
 /**
- * Runs `mysql` inside the container with `sql` on stdin. A returned ClientResult always means the
- * mysql client itself ran (a script error is a non-zero status of the client); every way in which
- * docker or the container failed throws, so an attack test cannot pass on a result that never
- * reached the database (D22, D43).
+ * The command that runs the `mysql` client as `account` with `args` (D43, D173): `docker exec` into
+ * the container, or the `mysql` client on PATH over TCP to the MYSQL_URL server. `--no-defaults`
+ * keeps option files on the test machine out of the run.
+ */
+export function clientCommand(
+  account: Account | undefined,
+  args: readonly string[],
+): { command: string; args: string[]; env: NodeJS.ProcessEnv } {
+  const s = server()
+  const as = account ?? admin()
+  if (s.kind === 'container') {
+    return {
+      command: 'docker',
+      args: [
+        'exec',
+        '-i',
+        '-e',
+        `MYSQL_PWD=${as.password ?? ''}`,
+        s.containerId,
+        'mysql',
+        `-u${as.user}`,
+        ...args,
+      ],
+      env: process.env,
+    }
+  }
+  return {
+    command: 'mysql',
+    args: [
+      '--no-defaults',
+      '--protocol=TCP',
+      `-h${s.host}`,
+      `-P${s.port}`,
+      `-u${as.user}`,
+      ...args,
+    ],
+    env: { ...process.env, MYSQL_PWD: as.password ?? '' },
+  }
+}
+
+/**
+ * Runs the `mysql` client with `sql` on stdin. A returned ClientResult always means the mysql
+ * client itself ran and reached the server (a script error is a non-zero status of the client);
+ * every way in which docker, the container or the connection failed throws, so an attack test
+ * cannot pass on a result that never reached the database (D22, D43, D173).
  */
 function mysql(
   sql: string,
   options: { as?: Account; database?: string; force?: boolean },
 ): ClientResult {
-  const { containerId, rootPassword } = server()
-  const account = options.as ?? { user: 'root', password: rootPassword }
-  const result = spawnSync(
-    'docker',
-    [
-      'exec',
-      '-i',
-      '-e',
-      `MYSQL_PWD=${account.password ?? ''}`,
-      containerId,
-      'mysql',
-      `-u${account.user}`,
-      ...(options.force ? ['--force'] : []),
-      ...(options.database === undefined ? [] : [`-D${options.database}`]),
-      '-N',
-      '-B',
-    ],
-    { input: sql, encoding: 'utf8', timeout: 90_000 },
-  )
+  const kind = server().kind
+  const via = kind === 'container' ? 'docker exec' : 'the mysql client'
+  const { command, args, env } = clientCommand(options.as, [
+    ...(options.force ? ['--force'] : []),
+    ...(options.database === undefined ? [] : [`-D${options.database}`]),
+    '-N',
+    '-B',
+  ])
+  const result = spawnSync(command, args, { input: sql, encoding: 'utf8', timeout: 90_000, env })
   if (result.error) {
     if ('code' in result.error && result.error.code === 'ENOENT') {
       throw new Error(
-        'integration tests need the docker CLI on PATH (mysql runs inside the database container, D43): install Docker or put the docker CLI on PATH',
+        kind === 'container'
+          ? 'integration tests need the docker CLI on PATH (mysql runs inside the database container, D43): install Docker or put the docker CLI on PATH'
+          : 'integration tests need the mysql client on PATH to reach MYSQL_URL (D173): install a MySQL client or put its bin directory on PATH',
         { cause: result.error },
       )
     }
@@ -88,16 +131,24 @@ function mysql(
   }
   if (result.status === null) {
     throw new Error(
-      `docker exec could not run mysql: it ended without an exit status (signal ${result.signal})`,
+      `${via} could not run mysql: it ended without an exit status (signal ${result.signal})`,
     )
   }
-  if (DOCKER_EXEC_FAILURES.has(result.status)) {
+  if (
+    kind === 'container'
+      ? DOCKER_EXEC_FAILURES.has(result.status)
+      : !CLIENT_STATUSES.has(result.status)
+  ) {
     throw new Error(
-      `docker exec could not run mysql (exit status ${result.status}): ${result.stderr.trim()}`,
+      `${via} could not run mysql (exit status ${result.status}): ${result.stderr.trim()}`,
     )
   }
-  if (DOCKER_DAEMON_ERROR.test(result.stderr)) {
-    throw new Error(`docker exec could not run mysql: ${result.stderr.trim()}`)
+  if (
+    kind === 'container'
+      ? DOCKER_DAEMON_ERROR.test(result.stderr)
+      : CLIENT_ERROR.test(result.stderr)
+  ) {
+    throw new Error(`${via} could not run mysql: ${result.stderr.trim()}`)
   }
   return { status: result.status, stdout: result.stdout, stderr: result.stderr }
 }

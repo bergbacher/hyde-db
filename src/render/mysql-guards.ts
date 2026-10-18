@@ -32,6 +32,28 @@ export function account(config: Pick<MysqlConfig, 'role' | 'readerHost'>): strin
 }
 
 /**
+ * Revokes every privilege of the reader account when it exists (D172): the account is looked up in
+ * `mysql.user` and the REVOKE or `DO 0` is prepared, because a missing account fails a plain REVOKE
+ * (ERROR 1269) and `IGNORE UNKNOWN USER` needs MySQL 8.0.30 (A109). The REVOKE is set first, so a
+ * lookup that fails under `mysql --force` runs it instead of skipping it. `when`, a SQL condition,
+ * must also hold for the REVOKE to run.
+ */
+export function revokeReader(
+  config: Pick<MysqlConfig, 'role' | 'readerHost'>,
+  when?: string,
+): string[] {
+  const revoke = ql(`REVOKE ALL PRIVILEGES, GRANT OPTION FROM ${account(config)}`)
+  const exists = `EXISTS (SELECT 1 FROM mysql.user WHERE User = ${ql(config.role)} AND Host = ${ql(config.readerHost)})`
+  return [
+    `SET @hyde_sql = ${when === undefined ? revoke : `IF(${when}, ${revoke}, 'DO 0')`};`,
+    `SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT ${exists}, 'DO 0', @hyde_sql);`,
+    'PREPARE hyde_stmt FROM @hyde_sql;',
+    'EXECUTE hyde_stmt;',
+    'DEALLOCATE PREPARE hyde_stmt;',
+  ]
+}
+
+/**
  * Session settings, the refusal flag, the missing-default-database report and the abort table
  * (D117 step 1, D160). The report is a failing SET of `sql_warnings` to the message, so it needs
  * no abort table; when a database is selected the SET restores the current value.

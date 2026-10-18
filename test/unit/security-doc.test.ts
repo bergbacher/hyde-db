@@ -224,11 +224,13 @@ describe('SECURITY.md on MySQL (a view of LEDGER.md)', () => {
     expect(mysqlLimits).toContain('Cloud SQL')
   })
 
-  it('D94: names the supported MySQL lines and the unsupported ones', () => {
+  it('D171: names the supported MySQL lines and the unsupported ones', () => {
     const supported = section(prose, 'Supported versions')
-    expect(supported).toContain('MySQL 8.4 and 9.7')
+    expect(supported).toContain(
+      'MySQL 8.0 from 8.0.21 and the long-term-support lines MySQL 8.4 and 9.7',
+    )
     expect(supported).toContain('MariaDB')
-    expect(supported).toContain('MySQL 8.0')
+    expect(supported).not.toContain('MySQL 8.0, innovation')
   })
 
   it('D164, A105, D165: says one source database and one generator block each need their own schema and role on a MySQL server', () => {
@@ -241,7 +243,7 @@ describe('SECURITY.md on MySQL (a view of LEDGER.md)', () => {
     )
   })
 
-  it('D164, D119, A74: says the reader account must serve only as the hyde-db reader, and why', () => {
+  it('D164, D172, A74: says the reader account must serve only as the hyde-db reader, and why', () => {
     expect(mysqlLimits).toContain('must serve only as the hyde-db reader')
     expect(mysqlLimits).toContain('every apply and drop first revokes all its privileges')
     expect(mysqlLimits).toContain('MySQL cannot roll that back')
@@ -275,7 +277,7 @@ describe('SECURITY.md on MySQL (a view of LEDGER.md)', () => {
       'A104',
       'D118',
       'D120',
-      'D94',
+      'D171',
       'D164',
       'A105',
       'D154',

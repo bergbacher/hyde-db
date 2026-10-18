@@ -12,11 +12,17 @@ const config = {
 } as const
 
 describe('renderMysqlDropSql', () => {
-  it('D100, D121, D119: guard, then revoke with IGNORE UNKNOWN USER, then a gated DROP DATABASE IF EXISTS', () => {
+  it('D100, D121, D172: guard, then the revoke prepared after an account lookup, then a gated DROP DATABASE IF EXISTS', () => {
     const sql = renderMysqlDropSql({ config })
     const guard = sql.indexOf('hyde_db_marker')
     const revoke = sql.indexOf(
-      "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'redacted_reader'@'%' IGNORE UNKNOWN USER;",
+      [
+        "SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''redacted_reader''@''%''';",
+        "SET @hyde_sql = IF(@hyde_sql <> 'DO 0' AND NOT EXISTS (SELECT 1 FROM mysql.user WHERE User = 'redacted_reader' AND Host = '%'), 'DO 0', @hyde_sql);",
+        'PREPARE hyde_stmt FROM @hyde_sql;',
+        'EXECUTE hyde_stmt;',
+        'DEALLOCATE PREPARE hyde_stmt;',
+      ].join('\n'),
     )
     const drop = sql.indexOf('DROP DATABASE IF EXISTS `redacted`')
     expect(guard).toBeGreaterThan(-1)
@@ -62,16 +68,17 @@ describe('renderMysqlDropSql', () => {
     )
   })
 
-  it('D104, D119: a quote in the role or host is doubled in the REVOKE', () => {
+  it('D104, D172: a quote in the role or host is doubled in the prepared REVOKE and in the lookup', () => {
     const sql = renderMysqlDropSql({ config: { ...config, role: "o'r", readerHost: "h'%" } })
     expect(sql).toContain(
-      "REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'o''r'@'h''%' IGNORE UNKNOWN USER;",
+      "SET @hyde_sql = 'REVOKE ALL PRIVILEGES, GRANT OPTION FROM ''o''''r''@''h''''%''';",
     )
+    expect(sql).toContain("WHERE User = 'o''r' AND Host = 'h''%')")
   })
 
-  it('D119, D155: the REVOKE is a bare statement, not wrapped in a gated prepare', () => {
-    expect(renderMysqlDropSql({ config })).toMatch(
-      /^REVOKE ALL PRIVILEGES, GRANT OPTION FROM .* IGNORE UNKNOWN USER;$/m,
-    )
+  it('D172, D155: the REVOKE is not gated on the refusal flag, and no REVOKE carries IGNORE UNKNOWN USER or IF EXISTS', () => {
+    const sql = renderMysqlDropSql({ config })
+    expect(sql).not.toMatch(/IF\(@hyde_refused IS NULL, 'REVOKE/)
+    expect(sql).not.toMatch(/IGNORE UNKNOWN USER|REVOKE IF EXISTS/)
   })
 })
